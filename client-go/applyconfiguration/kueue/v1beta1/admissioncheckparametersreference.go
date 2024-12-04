@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ limitations under the License.
 
 package v1beta1
 
-// AdmissionCheckParametersReferenceApplyConfiguration represents an declarative configuration of the AdmissionCheckParametersReference type for use
+// AdmissionCheckParametersReferenceApplyConfiguration represents a declarative configuration of the AdmissionCheckParametersReference type for use
 // with apply.
 type AdmissionCheckParametersReferenceApplyConfiguration struct {
 	APIGroup *string `json:"apiGroup,omitempty"`
@@ -25,7 +25,7 @@ type AdmissionCheckParametersReferenceApplyConfiguration struct {
 	Name     *string `json:"name,omitempty"`
 }
 
-// AdmissionCheckParametersReferenceApplyConfiguration constructs an declarative configuration of the AdmissionCheckParametersReference type for use with
+// AdmissionCheckParametersReferenceApplyConfiguration constructs a declarative configuration of the AdmissionCheckParametersReference type for use with
 // apply.
 func AdmissionCheckParametersReference() *AdmissionCheckParametersReferenceApplyConfiguration {
 	return &AdmissionCheckParametersReferenceApplyConfiguration{}

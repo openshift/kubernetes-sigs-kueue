@@ -25,16 +25,13 @@ type CheckState string
 const (
 	// CheckStateRetry means that the check cannot pass at this moment, back off (possibly
 	// allowing other to try, unblock quota) and retry.
-	// A workload having at least one check in the state,
-	// will be evicted if admitted will not be considered
-	// for admission.
+	// A workload having at least one check in this state will be evicted if admitted and
+	// will not be considered for admission while the check is in this state.
 	CheckStateRetry CheckState = "Retry"
 
 	// CheckStateRejected means that the check will not pass in the near future. It is not worth
 	// to retry.
-	// NOTE: The admission behaviour is currently the same as for retry,
-	// we can consider marking the workload as "Finished" with a failure
-	// description.
+	// A workload having at least one check in this state will be evicted if admitted and deactivated.
 	CheckStateRejected CheckState = "Rejected"
 
 	// CheckStatePending means that the check still hasn't been performed and the state can be
@@ -49,30 +46,38 @@ const (
 
 // AdmissionCheckSpec defines the desired state of AdmissionCheck
 type AdmissionCheckSpec struct {
-	// controllerName is name of the controller which will actually perform
-	// the checks. This is the name with which controller identifies with,
-	// not necessarily a K8S Pod or Deployment name. Cannot be empty.
+	// controllerName identifies the controller that processes the AdmissionCheck,
+	// not necessarily a Kubernetes Pod or Deployment name. Cannot be empty.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="field is immutable"
 	ControllerName string `json:"controllerName"`
 
-	// RetryDelayMinutes specifies how long to keep the workload suspended
-	// after a failed check (after it transitioned to False).
-	// After that the check state goes to "Unknown".
-	// The default is 15 min.
+	// RetryDelayMinutes specifies how long to keep the workload suspended after
+	// a failed check (after it transitioned to False). When the delay period has passed, the check
+	// state goes to "Unknown". The default is 15 min.
 	// +optional
 	// +kubebuilder:default=15
+	// Deprecated: retryDelayMinutes has already been deprecated since v0.8 and will be removed in v1beta2.
 	RetryDelayMinutes *int64 `json:"retryDelayMinutes,omitempty"`
 
-	// Parameters identifies the resource providing additional check parameters.
+	// Parameters identifies a configuration with additional parameters for the
+	// check.
 	// +optional
 	Parameters *AdmissionCheckParametersReference `json:"parameters,omitempty"`
 }
 
 type AdmissionCheckParametersReference struct {
 	// ApiGroup is the group for the resource being referenced.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
 	APIGroup string `json:"apiGroup"`
 	// Kind is the type of the resource being referenced.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern="^(?i)[a-z]([-a-z0-9]*[a-z0-9])?$"
 	Kind string `json:"kind"`
 	// Name is the name of the resource being referenced.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 	Name string `json:"name"`
 }
 
@@ -92,14 +97,23 @@ const (
 	// AdmissionCheckActive indicates that the controller of the admission check is
 	// ready to evaluate the checks states
 	AdmissionCheckActive string = "Active"
+
+	// AdmissionChecksSingleInstanceInClusterQueue indicates if the AdmissionCheck should be the only
+	// one managed by the same controller (as determined by the controllerName field) in a ClusterQueue.
+	// Having multiple AdmissionChecks managed by the same controller where at least one has this condition
+	// set to true will cause the ClusterQueue to be marked as Inactive.
+	AdmissionChecksSingleInstanceInClusterQueue string = "SingleInstanceInClusterQueue"
+
+	// FlavorIndependentAdmissionCheck indicates if the AdmissionCheck cannot be applied at ResourceFlavor level.
+	FlavorIndependentAdmissionCheck string = "FlavorIndependent"
 )
 
-//+genclient
-//+genclient:nonNamespaced
-//+kubebuilder:object:root=true
-//+kubebuilder:storageversion
-//+kubebuilder:subresource:status
-//+kubebuilder:resource:scope=Cluster
+// +genclient
+// +genclient:nonNamespaced
+// +kubebuilder:object:root=true
+// +kubebuilder:storageversion
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
 
 // AdmissionCheck is the Schema for the admissionchecks API
 type AdmissionCheck struct {
@@ -110,7 +124,7 @@ type AdmissionCheck struct {
 	Status AdmissionCheckStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // AdmissionCheckList contains a list of AdmissionCheck
 type AdmissionCheckList struct {

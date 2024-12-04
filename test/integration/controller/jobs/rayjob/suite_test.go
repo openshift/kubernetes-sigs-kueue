@@ -37,17 +37,15 @@ import (
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/scheduler"
 	"sigs.k8s.io/kueue/test/integration/framework"
-	//+kubebuilder:scaffold:imports
 )
 
 var (
-	cfg         *rest.Config
-	k8sClient   client.Client
-	ctx         context.Context
-	fwk         *framework.Framework
-	crdPath     = filepath.Join("..", "..", "..", "..", "..", "config", "components", "crd", "bases")
-	rayCrdPath  = filepath.Join("..", "..", "..", "..", "..", "dep-crds", "ray-operator")
-	webhookPath = filepath.Join("..", "..", "..", "..", "..", "config", "components", "webhook")
+	cfg        *rest.Config
+	k8sClient  client.Client
+	ctx        context.Context
+	fwk        *framework.Framework
+	crdPath    = filepath.Join("..", "..", "..", "..", "..", "config", "components", "crd", "bases")
+	rayCrdPath = filepath.Join("..", "..", "..", "..", "..", "dep-crds", "ray-operator")
 )
 
 func TestAPIs(t *testing.T) {
@@ -58,8 +56,22 @@ func TestAPIs(t *testing.T) {
 	)
 }
 
+var _ = ginkgo.BeforeSuite(func() {
+	fwk = &framework.Framework{
+		CRDPath:     crdPath,
+		DepCRDPaths: []string{rayCrdPath},
+	}
+
+	cfg = fwk.Init()
+	ctx, k8sClient = fwk.SetupClient(cfg)
+})
+
+var _ = ginkgo.AfterSuite(func() {
+	fwk.StopManager(ctx)
+})
+
 func managerSetup(opts ...jobframework.Option) framework.ManagerSetup {
-	return func(mgr manager.Manager, ctx context.Context) {
+	return func(ctx context.Context, mgr manager.Manager) {
 		reconciler := rayjob.NewReconciler(
 			mgr.GetClient(),
 			mgr.GetEventRecorderFor(constants.JobControllerName),
@@ -74,14 +86,17 @@ func managerSetup(opts ...jobframework.Option) framework.ManagerSetup {
 }
 
 func managerAndSchedulerSetup(opts ...jobframework.Option) framework.ManagerSetup {
-	return func(mgr manager.Manager, ctx context.Context) {
+	return func(ctx context.Context, mgr manager.Manager) {
 		err := indexer.Setup(ctx, mgr.GetFieldIndexer())
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		cCache := cache.New(mgr.GetClient())
 		queues := queue.NewManager(mgr.GetClient(), cCache)
 
-		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, &config.Configuration{})
+		configuration := &config.Configuration{}
+		mgr.GetScheme().Default(configuration)
+
+		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, configuration)
 		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "controller", failedCtrl)
 
 		err = rayjob.SetupIndexes(ctx, mgr.GetFieldIndexer())

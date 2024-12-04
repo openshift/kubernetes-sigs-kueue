@@ -25,7 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	autoscaling "k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/apis/autoscaling.x-k8s.io/v1beta1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -41,16 +42,9 @@ const (
 
 func getClientBuilder() (*fake.ClientBuilder, context.Context) {
 	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-	if err := kueue.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
-
-	if err := autoscaling.AddToScheme(scheme); err != nil {
-		panic(err)
-	}
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(kueue.AddToScheme(scheme))
+	utilruntime.Must(autoscaling.AddToScheme(scheme))
 
 	ctx := context.Background()
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Namespace{
@@ -294,7 +288,7 @@ func TestIndexAdmissionChecks(t *testing.T) {
 		"bad ref group": {
 			checks: []*kueue.AdmissionCheck{
 				utiltesting.MakeAdmissionCheck("check1").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters("core", ConfigKind, "config1").
 					Obj(),
 			},
@@ -303,7 +297,7 @@ func TestIndexAdmissionChecks(t *testing.T) {
 		"bad ref kind": {
 			checks: []*kueue.AdmissionCheck{
 				utiltesting.MakeAdmissionCheck("check1").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, "kind", "config1").
 					Obj(),
 			},
@@ -312,7 +306,7 @@ func TestIndexAdmissionChecks(t *testing.T) {
 		"empty name": {
 			checks: []*kueue.AdmissionCheck{
 				utiltesting.MakeAdmissionCheck("check1").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, ConfigKind, "").
 					Obj(),
 			},
@@ -321,7 +315,7 @@ func TestIndexAdmissionChecks(t *testing.T) {
 		"match": {
 			checks: []*kueue.AdmissionCheck{
 				utiltesting.MakeAdmissionCheck("check1").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
 					Obj(),
 			},
@@ -331,15 +325,15 @@ func TestIndexAdmissionChecks(t *testing.T) {
 		"multiple checks, partial match": {
 			checks: []*kueue.AdmissionCheck{
 				utiltesting.MakeAdmissionCheck("check1").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
 					Obj(),
 				utiltesting.MakeAdmissionCheck("check2").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
 					Obj(),
 				utiltesting.MakeAdmissionCheck("check3").
-					ControllerName(ControllerName).
+					ControllerName(kueue.ProvisioningRequestControllerName).
 					Parameters(kueue.GroupVersion.Group, ConfigKind, "config2").
 					Obj(),
 			},

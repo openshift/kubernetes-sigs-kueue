@@ -39,7 +39,7 @@ Changes since `v0.2.1`:
   - `ClusterQueue`:
     - Immutability of `spec.queueingStrategy`.
     - Refactor `quota.min` and `quota.max` into `nominalQuota` and `borrowingLimit`.
-    - Swap hieararchy between `resources` and `flavors`.
+    - Swap hierarchy between `resources` and `flavors`.
     - Group flavors and resources into `spec.resourceGroups` to make
       co-dependent resources explicit.
     - Move `admission` from `spec` to `status`.
@@ -60,7 +60,7 @@ Changes since `v0.2.1`:
 - Multiplatform support for `linux/amd64` and `linux/arm64`.
 - Validating webhook for `batch/v1.Job` validates kueue-specific labels and
   annotations.
-- Sequential admission of jobs https://kueue.sigs.k8s.io/docs/tasks/setup_sequential_admission/
+- Sequential admission of jobs https://kueue.sigs.k8s.io/docs/tasks/setup_wait_for_pods_ready/
 - Preemption within ClusterQueue and cohort https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/#preemption
 - Support for LimitRanges when calculating jobs usage.
 - Library for integrating job-like CRDs (controller and webhooks) https://sigs.k8s.io/kueue/pkg/controller/jobframework

@@ -71,6 +71,16 @@ func (j *JobWrapper) Clone() *JobWrapper {
 	return &JobWrapper{Job: *j.DeepCopy()}
 }
 
+func (j *JobWrapper) BackoffLimit(limit int32) *JobWrapper {
+	j.Spec.BackoffLimit = ptr.To(limit)
+	return j
+}
+
+func (j *JobWrapper) TerminationGracePeriod(seconds int64) *JobWrapper {
+	j.Spec.Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
+	return j
+}
+
 // Suspend updates the suspend status of the job
 func (j *JobWrapper) Suspend(s bool) *JobWrapper {
 	j.Spec.Suspend = ptr.To(s)
@@ -127,12 +137,6 @@ func (j *JobWrapper) Label(key, value string) *JobWrapper {
 // QueueNameAnnotation updates the queue name of the job by annotation (deprecated)
 func (j *JobWrapper) QueueNameAnnotation(queue string) *JobWrapper {
 	return j.SetAnnotation(constants.QueueAnnotation, queue)
-}
-
-// ParentWorkload sets the parent-workload annotation
-func (j *JobWrapper) ParentWorkload(parentWorkload string) *JobWrapper {
-	j.Annotations[constants.ParentWorkloadAnnotation] = parentWorkload
-	return j
 }
 
 func (j *JobWrapper) SetAnnotation(key, content string) *JobWrapper {
@@ -196,6 +200,11 @@ func (j *JobWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersi
 	return j
 }
 
+func (j *JobWrapper) Containers(containers ...corev1.Container) *JobWrapper {
+	j.Spec.Template.Spec.Containers = containers
+	return j
+}
+
 // UID updates the uid of the job.
 func (j *JobWrapper) UID(uid string) *JobWrapper {
 	j.ObjectMeta.UID = types.UID(uid)
@@ -217,5 +226,31 @@ func (j *JobWrapper) Active(c int32) *JobWrapper {
 // Condition adds a condition
 func (j *JobWrapper) Condition(c batchv1.JobCondition) *JobWrapper {
 	j.Status.Conditions = append(j.Status.Conditions, c)
+	return j
+}
+
+// Generation sets the generation
+func (j *JobWrapper) Generation(g int64) *JobWrapper {
+	j.ObjectMeta.Generation = g
+	return j
+}
+
+func SetContainerDefaults(c *corev1.Container) {
+	if c.TerminationMessagePath == "" {
+		c.TerminationMessagePath = "/dev/termination-log"
+	}
+
+	if c.TerminationMessagePolicy == "" {
+		c.TerminationMessagePolicy = corev1.TerminationMessageReadFile
+	}
+
+	if c.ImagePullPolicy == "" {
+		c.ImagePullPolicy = corev1.PullIfNotPresent
+	}
+}
+
+// ManagedBy adds a managedby.
+func (j *JobWrapper) ManagedBy(c string) *JobWrapper {
+	j.Spec.ManagedBy = &c
 	return j
 }

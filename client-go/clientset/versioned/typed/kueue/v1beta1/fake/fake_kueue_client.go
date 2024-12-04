@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,6 +37,14 @@ func (c *FakeKueueV1beta1) ClusterQueues() v1beta1.ClusterQueueInterface {
 
 func (c *FakeKueueV1beta1) LocalQueues(namespace string) v1beta1.LocalQueueInterface {
 	return &FakeLocalQueues{c, namespace}
+}
+
+func (c *FakeKueueV1beta1) MultiKueueClusters() v1beta1.MultiKueueClusterInterface {
+	return &FakeMultiKueueClusters{c}
+}
+
+func (c *FakeKueueV1beta1) MultiKueueConfigs() v1beta1.MultiKueueConfigInterface {
+	return &FakeMultiKueueConfigs{c}
 }
 
 func (c *FakeKueueV1beta1) ProvisioningRequestConfigs() v1beta1.ProvisioningRequestConfigInterface {

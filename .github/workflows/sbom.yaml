@@ -1,0 +1,41 @@
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  test_bom_action:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    name: Install bom and generate SBOM
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set tag name
+        shell: bash
+        run: |
+          TAG=${{ github.event.inputs.tag }}
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Install bom
+        uses: kubernetes-sigs/release-actions/setup-bom@a69972745f85aab4ba5d6c681e2a0e7f73eaff2b # v0.3.0
+      - name: Generate SBOM
+        shell: bash
+        run: |
+          bom generate --format=json -o /tmp/kueue-$TAG.spdx.json .
+         
+      - name: Upload SBOM
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload $TAG /tmp/kueue-$TAG.spdx.json

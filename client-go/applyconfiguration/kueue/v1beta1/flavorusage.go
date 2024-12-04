@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import (
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// FlavorUsageApplyConfiguration represents an declarative configuration of the FlavorUsage type for use
+// FlavorUsageApplyConfiguration represents a declarative configuration of the FlavorUsage type for use
 // with apply.
 type FlavorUsageApplyConfiguration struct {
 	Name      *v1beta1.ResourceFlavorReference  `json:"name,omitempty"`
 	Resources []ResourceUsageApplyConfiguration `json:"resources,omitempty"`
 }
 
-// FlavorUsageApplyConfiguration constructs an declarative configuration of the FlavorUsage type for use with
+// FlavorUsageApplyConfiguration constructs a declarative configuration of the FlavorUsage type for use with
 // apply.
 func FlavorUsage() *FlavorUsageApplyConfiguration {
 	return &FlavorUsageApplyConfiguration{}

@@ -25,11 +25,55 @@ import (
 // LocalQueueSpec defines the desired state of LocalQueue
 type LocalQueueSpec struct {
 	// clusterQueue is a reference to a clusterQueue that backs this localQueue.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="field is immutable"
 	ClusterQueue ClusterQueueReference `json:"clusterQueue,omitempty"`
+
+	// stopPolicy - if set to a value different from None, the LocalQueue is considered Inactive,
+	// no new reservation being made.
+	//
+	// Depending on its value, its associated workloads will:
+	//
+	// - None - Workloads are admitted
+	// - HoldAndDrain - Admitted workloads are evicted and Reserving workloads will cancel the reservation.
+	// - Hold - Admitted workloads will run to completion and Reserving workloads will cancel the reservation.
+	//
+	// +optional
+	// +kubebuilder:validation:Enum=None;Hold;HoldAndDrain
+	// +kubebuilder:default="None"
+	StopPolicy *StopPolicy `json:"stopPolicy,omitempty"`
 }
 
 // ClusterQueueReference is the name of the ClusterQueue.
+// +kubebuilder:validation:MaxLength=253
+// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
 type ClusterQueueReference string
+
+type LocalQueueFlavorStatus struct {
+	// name of the flavor.
+	// +required
+	// +kubebuilder:validation:Required
+	Name ResourceFlavorReference `json:"name"`
+
+	// resources used in the flavor.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Resources []corev1.ResourceName `json:"resources,omitempty"`
+
+	// nodeLabels are labels that associate the ResourceFlavor with Nodes that
+	// have the same labels.
+	// +mapType=atomic
+	// +kubebuilder:validation:MaxProperties=8
+	// +optional
+	NodeLabels map[string]string `json:"nodeLabels,omitempty"`
+
+	// nodeTaints are taints that the nodes associated with this ResourceFlavor
+	// have.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	NodeTaints []corev1.Taint `json:"nodeTaints,omitempty"`
+}
 
 // LocalQueueStatus defines the observed state of LocalQueue
 type LocalQueueStatus struct {
@@ -71,6 +115,13 @@ type LocalQueueStatus struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	FlavorUsage []LocalQueueFlavorUsage `json:"flavorUsage"`
+
+	// flavors lists all currently available ResourceFlavors in specified ClusterQueue.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Flavors []LocalQueueFlavorStatus `json:"flavors,omitempty"`
 }
 
 const (
@@ -98,14 +149,14 @@ type LocalQueueResourceUsage struct {
 	Total resource.Quantity `json:"total,omitempty"`
 }
 
-//+genclient
-//+kubebuilder:object:root=true
-//+kubebuilder:storageversion
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="ClusterQueue",JSONPath=".spec.clusterQueue",type=string,description="Backing ClusterQueue"
-//+kubebuilder:printcolumn:name="Pending Workloads",JSONPath=".status.pendingWorkloads",type=integer,description="Number of pending workloads"
-//+kubebuilder:printcolumn:name="Admitted Workloads",JSONPath=".status.admittedWorkloads",type=integer,description="Number of admitted workloads that haven't finished yet."
-//+kubebuilder:resource:shortName={queue,queues}
+// +genclient
+// +kubebuilder:object:root=true
+// +kubebuilder:storageversion
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="ClusterQueue",JSONPath=".spec.clusterQueue",type=string,description="Backing ClusterQueue"
+// +kubebuilder:printcolumn:name="Pending Workloads",JSONPath=".status.pendingWorkloads",type=integer,description="Number of pending workloads"
+// +kubebuilder:printcolumn:name="Admitted Workloads",JSONPath=".status.admittedWorkloads",type=integer,description="Number of admitted workloads that haven't finished yet."
+// +kubebuilder:resource:shortName={queue,queues,lq}
 
 // LocalQueue is the Schema for the localQueues API
 type LocalQueue struct {

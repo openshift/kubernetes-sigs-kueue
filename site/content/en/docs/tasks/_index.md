@@ -19,13 +19,14 @@ quotas and queues.
 
 As a batch administrator, you can learn how to:
 
-- [Setup role-based access control](/docs/tasks/rbac)
+- [Setup role-based access control](manage/rbac)
   to Kueue objects.
-- [Administer cluster quotas](/docs/tasks/administer_cluster_quotas) with ClusterQueues and LocalQueues.
-- Setup [Sequential Admission with Ready Pods](/docs/tasks/setup_sequential_admission).
+- [Administer cluster quotas](manage/administer_cluster_quotas) with ClusterQueues and LocalQueues.
+- Setup [All-or-nothing with ready Pods](manage/setup_wait_for_pods_ready).
 - As a batch administrator, you can learn how to
-  [monitor pending workloads](/docs/tasks/monitor_pending_workloads).
-- As a batch administrator, you can learn how to [run a Kueue managed Jobs with a custom WorkloadPriority](/docs/tasks/run_job_with_workload_priority).
+  [monitor pending workloads](manage/monitor_pending_workloads).
+- As a batch administrator, you can learn how to [run a Kueue managed Jobs with a custom WorkloadPriority](manage/run_job_with_workload_priority).
+- As a batch administrator, you can learn how to [setup a MultiKueue environment](manage/setup_multikueue).
 
 ### Batch user
 
@@ -33,19 +34,36 @@ A _batch user_ runs [workloads](/docs/concepts/workload). A typical
 batch user is a researcher, AI/ML engineer, data scientist, among others.
 
 As a batch user, you can learn how to:
-- [Run a Kueue managed batch/Job](/docs/tasks/run_jobs).
-- [Run a Kueue managed Flux MiniCluster](/docs/tasks/run_flux_minicluster).
-- [Run a Kueue managed Kubeflow Job](/docs/tasks/run_kubeflow_jobs).
+- [Run a Kueue managed batch/Job](run/jobs).
+- [Run a Kueue managed Flux MiniCluster](run/flux_miniclusters).
+- [Run a Kueue managed Kubeflow Job](run/kubeflow).
   Kueue supports MPIJob v2beta1, PyTorchJob, TFJob, XGBoostJob, PaddleJob, and MXJob.
-- [Run a Kueue managed KubeRay RayJob](/docs/tasks/run_rayjobs).
-- [Submit Kueue jobs from Python](/docs/tasks/run_python_jobs).
-- [Run a Kueue managed plain Pod](/docs/tasks/run_plain_pods).
+- [Run a Kueue managed KubeRay RayJob](run/rayjobs).
+- [Run a Kueue managed KubeRay RayCluster](run/rayclusters).
+- [Submit Kueue jobs from Python](run/python_jobs).
+- [Run a Kueue managed plain Pod](run/plain_pods).
+- [Run a Kueue managed JobSet](run/jobsets).
+- [Submit jobs to MultiKueue](run/multikueue).
+
+### Serving user
+
+A _serving user_ runs [workloads](/docs/concepts/workload). 
+A serving user runs serving workloads, for example, to expose a trained AI/ML model for inference.
+
+As a serving user, you can learn how to:
+- [Run a Kueue managed Deployment](run/deployment).
+- [Run a Kueue managed StatefulSet](run/statefulset).
 
 ### Platform developer
 
 A _platform developer_ integrates Kueue with other software and/or contributes to Kueue.
 
 As a platform developer, you can learn how to:
-- [Integrate a custom Job with Kueue](/docs/tasks/integrate_a_custom_job).
-- [Submit Kueue jobs from Python](/docs/tasks/run_python_jobs).
-- [Enable pprof endpoints](/docs/tasks/enabling_pprof_endpoints).
+- [Integrate a custom Job with Kueue](dev/integrate_a_custom_job).
+- [Enable pprof endpoints](dev/enabling_pprof_endpoints).
+- [Develop a custom AdmissionCheck Controller](dev/develop-acc).
+
+## Troubleshooting
+
+Sometimes things go wrong.
+You can follow the [Troubleshooting guides](troubleshooting) to understand the state of the system.

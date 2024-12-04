@@ -107,7 +107,7 @@ If the file doesn't exist, default value is kueue-system.</p>
 </td>
 <td>
    <p>ManageJobsWithoutQueueName controls whether or not Kueue reconciles
-batch/v1.Jobs that don't set the annotation kueue.x-k8s.io/queue-name.
+jobs that don't set the annotation kueue.x-k8s.io/queue-name.
 If set to true, then those jobs will be suspended and never started unless
 they are assigned a queue and eventually admitted. This also applies to
 jobs created before starting the kueue controller.
@@ -126,10 +126,10 @@ unsuspended, they will start immediately.</p>
 <a href="#WaitForPodsReady"><code>WaitForPodsReady</code></a>
 </td>
 <td>
-   <p>WaitForPodsReady is configuration to provide simple all-or-nothing
-scheduling semantics for jobs to ensure they get resources assigned.
-This is achieved by blocking the start of new jobs until the previously
-started job has all pods running (ready).</p>
+   <p>WaitForPodsReady is configuration to provide a time-based all-or-nothing
+scheduling semantics for Jobs, by ensuring all pods are ready (running
+and passing the readiness probe) within the specified time. If the timeout
+is exceeded, then the workload is evicted.</p>
 </td>
 </tr>
 <tr><td><code>clientConnection</code> <B>[Required]</B><br/>
@@ -153,7 +153,31 @@ integrations (including K8S job).</p>
 </td>
 <td>
    <p>QueueVisibility is configuration to expose the information about the top
-pending workloads.</p>
+pending workloads.
+Deprecated: This field will be removed on v1beta2, use VisibilityOnDemand
+(https://kueue.sigs.k8s.io/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/)
+instead.</p>
+</td>
+</tr>
+<tr><td><code>multiKueue</code> <B>[Required]</B><br/>
+<a href="#MultiKueue"><code>MultiKueue</code></a>
+</td>
+<td>
+   <p>MultiKueue controls the behaviour of the MultiKueue AdmissionCheck Controller.</p>
+</td>
+</tr>
+<tr><td><code>fairSharing</code> <B>[Required]</B><br/>
+<a href="#FairSharing"><code>FairSharing</code></a>
+</td>
+<td>
+   <p>FairSharing controls the fair sharing semantics across the cluster.</p>
+</td>
+</tr>
+<tr><td><code>resources</code> <B>[Required]</B><br/>
+<a href="#Resources"><code>Resources</code></a>
+</td>
+<td>
+   <p>Resources provides additional configuration options for handling the resources.</p>
 </td>
 </tr>
 </tbody>
@@ -388,6 +412,54 @@ must be named tls.key and tls.crt, respectively.</p>
 </tbody>
 </table>
 
+## `FairSharing`     {#FairSharing}
+    
+
+**Appears in:**
+
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>enable</code> <B>[Required]</B><br/>
+<code>bool</code>
+</td>
+<td>
+   <p>enable indicates whether to enable fair sharing for all cohorts.
+Defaults to false.</p>
+</td>
+</tr>
+<tr><td><code>preemptionStrategies</code> <B>[Required]</B><br/>
+<a href="#PreemptionStrategy"><code>[]PreemptionStrategy</code></a>
+</td>
+<td>
+   <p>preemptionStrategies indicates which constraints should a preemption satisfy.
+The preemption algorithm will only use the next strategy in the list if the
+incoming workload (preemptor) doesn't fit after using the previous strategies.
+Possible values are:</p>
+<ul>
+<li>LessThanOrEqualToFinalShare: Only preempt a workload if the share of the preemptor CQ
+with the preemptor workload is less than or equal to the share of the preemptee CQ
+without the workload to be preempted.
+This strategy might favor preemption of smaller workloads in the preemptee CQ,
+regardless of priority or start time, in an effort to keep the share of the CQ
+as high as possible.</li>
+<li>LessThanInitialShare: Only preempt a workload if the share of the preemptor CQ
+with the incoming workload is strictly less than the share of the preemptee CQ.
+This strategy doesn't depend on the share usage of the workload being preempted.
+As a result, the strategy chooses to preempt workloads with the lowest priority and
+newest start time first.
+The default strategy is [&quot;LessThanOrEqualToFinalShare&quot;, &quot;LessThanInitialShare&quot;].</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+
 ## `Integrations`     {#Integrations}
     
 
@@ -411,6 +483,7 @@ Possible options:</p>
 <li>&quot;batch/job&quot;</li>
 <li>&quot;kubeflow.org/mpijob&quot;</li>
 <li>&quot;ray.io/rayjob&quot;</li>
+<li>&quot;ray.io/raycluster&quot;</li>
 <li>&quot;jobset.x-k8s.io/jobset&quot;</li>
 <li>&quot;kubeflow.org/mxjob&quot;</li>
 <li>&quot;kubeflow.org/paddlejob&quot;</li>
@@ -418,7 +491,17 @@ Possible options:</p>
 <li>&quot;kubeflow.org/tfjob&quot;</li>
 <li>&quot;kubeflow.org/xgboostjob&quot;</li>
 <li>&quot;pod&quot;</li>
+<li>&quot;deployment&quot; (requires enabling pod integration)</li>
+<li>&quot;statefulset&quot; (requires enabling pod integration)</li>
 </ul>
+</td>
+</tr>
+<tr><td><code>externalFrameworks</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>List of GroupVersionKinds that are managed for Kueue by external controllers;
+the expected format is <code>Kind.version.group.com</code>.</p>
 </td>
 </tr>
 <tr><td><code>podOptions</code> <B>[Required]</B><br/>
@@ -426,6 +509,21 @@ Possible options:</p>
 </td>
 <td>
    <p>PodOptions defines kueue controller behaviour for pod objects</p>
+</td>
+</tr>
+<tr><td><code>labelKeysToCopy</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>labelKeysToCopy is a list of label keys that should be copied from the job into the
+workload object. It is not required for the job to have all the labels from this
+list. If a job does not have some label with the given key from this list, the
+constructed workload object will be created without this label. In the case
+of creating a workload from a composable job (pod group), if multiple objects
+have labels with some key from the list, the values of these labels must
+match or otherwise the workload creation would fail. The labels are copied only
+during the workload creation and are not updated even if the labels of the
+underlying job are changed.</p>
 </td>
 </tr>
 </tbody>
@@ -472,6 +570,50 @@ Defaults to kueue-webhook-server-cert.</p>
 </tbody>
 </table>
 
+## `MultiKueue`     {#MultiKueue}
+    
+
+**Appears in:**
+
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>gcInterval</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta"><code>k8s.io/apimachinery/pkg/apis/meta/v1.Duration</code></a>
+</td>
+<td>
+   <p>GCInterval defines the time interval between two consecutive garbage collection runs.
+Defaults to 1min. If 0, the garbage collection is disabled.</p>
+</td>
+</tr>
+<tr><td><code>origin</code><br/>
+<code>string</code>
+</td>
+<td>
+   <p>Origin defines a label value used to track the creator of workloads in the worker
+clusters.
+This is used by multikueue in components like its garbage collector to identify
+remote objects that ware created by this multikueue manager cluster and delete
+them if their local counterpart no longer exists.</p>
+</td>
+</tr>
+<tr><td><code>workerLostTimeout</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#duration-v1-meta"><code>k8s.io/apimachinery/pkg/apis/meta/v1.Duration</code></a>
+</td>
+<td>
+   <p>WorkerLostTimeout defines the time a local workload's multikueue admission check state is kept Ready
+if the connection with its reserving worker cluster is lost.</p>
+<p>Defaults to 15 minutes.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
 ## `PodIntegrationOptions`     {#PodIntegrationOptions}
     
 
@@ -502,6 +644,18 @@ Defaults to kueue-webhook-server-cert.</p>
 </tr>
 </tbody>
 </table>
+
+## `PreemptionStrategy`     {#PreemptionStrategy}
+    
+(Alias of `string`)
+
+**Appears in:**
+
+- [FairSharing](#FairSharing)
+
+
+
+
 
 ## `QueueVisibility`     {#QueueVisibility}
     
@@ -537,7 +691,136 @@ Defaults to 5.</p>
 </tbody>
 </table>
 
-## `WaitForPodsReady`     {#WaitForPodsReady}
+## `RequeuingStrategy`     {#RequeuingStrategy}
+    
+
+**Appears in:**
+
+- [WaitForPodsReady](#WaitForPodsReady)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>timestamp</code><br/>
+<a href="#RequeuingTimestamp"><code>RequeuingTimestamp</code></a>
+</td>
+<td>
+   <p>Timestamp defines the timestamp used for re-queuing a Workload
+that was evicted due to Pod readiness. The possible values are:</p>
+<ul>
+<li><code>Eviction</code> (default) indicates from Workload <code>Evicted</code> condition with <code>PodsReadyTimeout</code> reason.</li>
+<li><code>Creation</code> indicates from Workload .metadata.creationTimestamp.</li>
+</ul>
+</td>
+</tr>
+<tr><td><code>backoffLimitCount</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffLimitCount defines the maximum number of re-queuing retries.
+Once the number is reached, the workload is deactivated (<code>.spec.activate</code>=<code>false</code>).
+When it is null, the workloads will repeatedly and endless re-queueing.</p>
+<p>Every backoff duration is about &quot;b*2^(n-1)+Rand&quot; where:</p>
+<ul>
+<li>&quot;b&quot; represents the base set by &quot;BackoffBaseSeconds&quot; parameter,</li>
+<li>&quot;n&quot; represents the &quot;workloadStatus.requeueState.count&quot;,</li>
+<li>&quot;Rand&quot; represents the random jitter.
+During this time, the workload is taken as an inadmissible and
+other workloads will have a chance to be admitted.
+By default, the consecutive requeue delays are around: (60s, 120s, 240s, ...).</li>
+</ul>
+<p>Defaults to null.</p>
+</td>
+</tr>
+<tr><td><code>backoffBaseSeconds</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffBaseSeconds defines the base for the exponential backoff for
+re-queuing an evicted workload.</p>
+<p>Defaults to 60.</p>
+</td>
+</tr>
+<tr><td><code>backoffMaxSeconds</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffMaxSeconds defines the maximum backoff time to re-queue an evicted workload.</p>
+<p>Defaults to 3600.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `RequeuingTimestamp`     {#RequeuingTimestamp}
+    
+(Alias of `string`)
+
+**Appears in:**
+
+- [RequeuingStrategy](#RequeuingStrategy)
+
+
+
+
+
+## `ResourceTransformation`     {#ResourceTransformation}
+    
+
+**Appears in:**
+
+- [Resources](#Resources)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>input</code> <B>[Required]</B><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#resourcename-v1-core"><code>k8s.io/api/core/v1.ResourceName</code></a>
+</td>
+<td>
+   <p>Input is the name of the input resource.</p>
+</td>
+</tr>
+<tr><td><code>strategy</code> <B>[Required]</B><br/>
+<a href="#ResourceTransformationStrategy"><code>ResourceTransformationStrategy</code></a>
+</td>
+<td>
+   <p>Strategy specifies if the input resource should be replaced or retained.
+Defaults to Retain</p>
+</td>
+</tr>
+<tr><td><code>outputs</code> <B>[Required]</B><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#resourcelist-v1-core"><code>k8s.io/api/core/v1.ResourceList</code></a>
+</td>
+<td>
+   <p>Outputs specifies the output resources and quantities per unit of input resource.
+An empty Outputs combined with a <code>Replace</code> Strategy causes the Input resource to be ignored by Kueue.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `ResourceTransformationStrategy`     {#ResourceTransformationStrategy}
+    
+(Alias of `string`)
+
+**Appears in:**
+
+- [ResourceTransformation](#ResourceTransformation)
+
+
+
+
+
+## `Resources`     {#Resources}
     
 
 **Appears in:**
@@ -550,15 +833,46 @@ Defaults to 5.</p>
 <tbody>
     
   
+<tr><td><code>excludeResourcePrefixes</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>ExcludedResourcePrefixes defines which resources should be ignored by Kueue</p>
+</td>
+</tr>
+<tr><td><code>transformations</code> <B>[Required]</B><br/>
+<a href="#ResourceTransformation"><code>[]ResourceTransformation</code></a>
+</td>
+<td>
+   <p>Transformations defines how to transform PodSpec resources into Workload resource requests.
+This is intended to be a map with Input as the key (enforced by validation code)</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `WaitForPodsReady`     {#WaitForPodsReady}
+    
+
+**Appears in:**
+
+
+
+<p>WaitForPodsReady defines configuration for the Wait For Pods Ready feature,
+which is used to ensure that all Pods are ready within the specified time.</p>
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
 <tr><td><code>enable</code> <B>[Required]</B><br/>
 <code>bool</code>
 </td>
 <td>
-   <p>Enable when true, indicates that each admitted workload
-blocks the admission of all other workloads from all queues until it is in the
-<code>PodsReady</code> condition. If false, all workloads start as soon as they are
-admitted and do not block admission of other workloads. The PodsReady
-condition is only added if this setting is enabled. It defaults to false.</p>
+   <p>Enable indicates whether to enable wait for pods ready feature.
+Defaults to false.</p>
 </td>
 </tr>
 <tr><td><code>timeout</code><br/>
@@ -566,17 +880,25 @@ condition is only added if this setting is enabled. It defaults to false.</p>
 </td>
 <td>
    <p>Timeout defines the time for an admitted workload to reach the
-PodsReady=true condition. When the timeout is reached, the workload admission
-is cancelled and requeued in the same cluster queue. Defaults to 5min.</p>
+PodsReady=true condition. When the timeout is exceeded, the workload
+evicted and requeued in the same cluster queue.
+Defaults to 5min.</p>
 </td>
 </tr>
 <tr><td><code>blockAdmission</code> <B>[Required]</B><br/>
 <code>bool</code>
 </td>
 <td>
-   <p>BlockAdmission when true, cluster queue will block admissions for all subsequent jobs
-until the jobs reach the PodsReady=true condition. It defaults to false if Enable is false
-and defaults to true otherwise.</p>
+   <p>BlockAdmission when true, cluster queue will block admissions for all
+subsequent jobs until the jobs reach the PodsReady=true condition.
+This setting is only honored when <code>Enable</code> is set to true.</p>
+</td>
+</tr>
+<tr><td><code>requeuingStrategy</code><br/>
+<a href="#RequeuingStrategy"><code>RequeuingStrategy</code></a>
+</td>
+<td>
+   <p>RequeuingStrategy defines the strategy for requeuing a Workload.</p>
 </td>
 </tr>
 </tbody>

@@ -19,17 +19,25 @@ package jobframework_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	kubeflow "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
+	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
+	testingclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	_ "sigs.k8s.io/kueue/pkg/controller/jobs"
+	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
+	"sigs.k8s.io/kueue/pkg/util/kubeversion"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	testingjob "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
 	testingmpijob "sigs.k8s.io/kueue/pkg/util/testingjobs/mpijob"
+
+	_ "sigs.k8s.io/kueue/pkg/controller/jobs"
 
 	. "sigs.k8s.io/kueue/pkg/controller/jobframework"
 )
@@ -44,14 +52,6 @@ func TestIsParentJobManaged(t *testing.T) {
 		wantManaged bool
 		wantErr     error
 	}{
-		"child job doesn't have ownerReference": {
-			parentJob: testingmpijob.MakeMPIJob(parentJobName, jobNamespace).
-				UID(parentJobName).
-				Obj(),
-			job: testingjob.MakeJob(childJobName, jobNamespace).
-				Obj(),
-			wantErr: ErrChildJobOwnerNotFound,
-		},
 		"child job has ownerReference with unknown workload owner": {
 			parentJob: testingjob.MakeJob(parentJobName, jobNamespace).
 				UID(parentJobName).
@@ -63,7 +63,7 @@ func TestIsParentJobManaged(t *testing.T) {
 		},
 		"child job has ownerReference with known non-existing workload owner": {
 			job: testingjob.MakeJob(childJobName, jobNamespace).
-				OwnerReference(parentJobName, kubeflow.SchemeGroupVersionKind).
+				OwnerReference(parentJobName, kfmpi.SchemeGroupVersionKind).
 				Obj(),
 			wantErr: ErrWorkloadOwnerNotFound,
 		},
@@ -73,7 +73,7 @@ func TestIsParentJobManaged(t *testing.T) {
 				Queue("test-q").
 				Obj(),
 			job: testingjob.MakeJob(childJobName, jobNamespace).
-				OwnerReference(parentJobName, kubeflow.SchemeGroupVersionKind).
+				OwnerReference(parentJobName, kfmpi.SchemeGroupVersionKind).
 				Obj(),
 			wantManaged: true,
 		},
@@ -82,13 +82,14 @@ func TestIsParentJobManaged(t *testing.T) {
 				UID(parentJobName).
 				Obj(),
 			job: testingjob.MakeJob(childJobName, jobNamespace).
-				OwnerReference(parentJobName, kubeflow.SchemeGroupVersionKind).
+				OwnerReference(parentJobName, kfmpi.SchemeGroupVersionKind).
 				Obj(),
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			builder := utiltesting.NewClientBuilder(kubeflow.AddToScheme)
+			t.Cleanup(EnableIntegrationsForTest(t, "kubeflow.org/mpijob"))
+			builder := utiltesting.NewClientBuilder(kfmpi.AddToScheme)
 			if tc.parentJob != nil {
 				builder = builder.WithObjects(tc.parentJob)
 			}
@@ -100,6 +101,70 @@ func TestIsParentJobManaged(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.wantErr, gotErr, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Errorf("Unexpected error (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestProcessOptions(t *testing.T) {
+	fakeClock := testingclock.NewFakeClock(time.Now())
+	cases := map[string]struct {
+		inputOpts []Option
+		wantOpts  Options
+	}{
+		"all options are passed": {
+			inputOpts: []Option{
+				WithManageJobsWithoutQueueName(true),
+				WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true}),
+				WithKubeServerVersion(&kubeversion.ServerVersionFetcher{}),
+				WithIntegrationOptions(corev1.SchemeGroupVersion.WithKind("Pod").String(), &configapi.PodIntegrationOptions{
+					PodSelector: &metav1.LabelSelector{},
+				}),
+				WithLabelKeysToCopy([]string{"toCopyKey"}),
+				WithClock(t, fakeClock),
+			},
+			wantOpts: Options{
+				ManageJobsWithoutQueueName: true,
+				WaitForPodsReady:           true,
+				KubeServerVersion:          &kubeversion.ServerVersionFetcher{},
+				IntegrationOptions: map[string]any{
+					corev1.SchemeGroupVersion.WithKind("Pod").String(): &configapi.PodIntegrationOptions{
+						PodSelector: &metav1.LabelSelector{},
+					},
+				},
+				LabelKeysToCopy: []string{"toCopyKey"},
+				Clock:           fakeClock,
+			},
+		},
+		"a single option is passed": {
+			inputOpts: []Option{
+				WithManageJobsWithoutQueueName(true),
+			},
+			wantOpts: Options{
+				ManageJobsWithoutQueueName: true,
+				WaitForPodsReady:           false,
+				KubeServerVersion:          nil,
+				IntegrationOptions:         nil,
+				Clock:                      clock.RealClock{},
+			},
+		},
+		"no options are passed": {
+			wantOpts: Options{
+				ManageJobsWithoutQueueName: false,
+				WaitForPodsReady:           false,
+				KubeServerVersion:          nil,
+				IntegrationOptions:         nil,
+				LabelKeysToCopy:            nil,
+				Clock:                      clock.RealClock{},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gotOpts := ProcessOptions(tc.inputOpts...)
+			if diff := cmp.Diff(tc.wantOpts, gotOpts,
+				cmpopts.IgnoreUnexported(kubeversion.ServerVersionFetcher{}, testingclock.FakePassiveClock{}, testingclock.FakeClock{})); len(diff) != 0 {
+				t.Errorf("Unexpected error from ProcessOptions (-want,+got):\n%s", diff)
 			}
 		})
 	}

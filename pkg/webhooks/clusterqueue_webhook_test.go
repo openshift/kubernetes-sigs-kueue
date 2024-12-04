@@ -24,8 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/features"
 	testingutil "sigs.k8s.io/kueue/pkg/util/testing"
 )
 
@@ -34,9 +36,10 @@ func TestValidateClusterQueue(t *testing.T) {
 	resourceGroupsPath := specPath.Child("resourceGroups")
 
 	testcases := []struct {
-		name         string
-		clusterQueue *kueue.ClusterQueue
-		wantErr      field.ErrorList
+		name                string
+		clusterQueue        *kueue.ClusterQueue
+		wantErr             field.ErrorList
+		disableLendingLimit bool
 	}{
 		{
 			name: "built-in resources with qualified names",
@@ -54,15 +57,30 @@ func TestValidateClusterQueue(t *testing.T) {
 			},
 		},
 		{
-			name:         "in cohort",
-			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").Cohort("prod").Obj(),
+			name: "admissionChecks defined",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				AdmissionChecks("ac1").
+				Obj(),
 		},
 		{
-			name:         "invalid cohort",
-			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").Cohort("@prod").Obj(),
+			name: "admissionCheckStrategy defined",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				AdmissionCheckStrategy(
+					*testingutil.MakeAdmissionCheckStrategyRule("ac1", "flavor1").Obj(),
+				).Obj(),
+		},
+		{
+			name: "both admissionChecks and admissionCheckStrategy is defined",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				AdmissionChecks("ac1").
+				AdmissionCheckStrategy().Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(specPath.Child("cohort"), "@prod", ""),
+				field.Invalid(specPath, "spec", "Either AdmissionChecks or AdmissionCheckStrategy can be set, but not both"),
 			},
+		},
+		{
+			name:         "in cohort",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").Cohort("prod").Obj(),
 		},
 		{
 			name: "extended resources with qualified names",
@@ -75,15 +93,6 @@ func TestValidateClusterQueue(t *testing.T) {
 			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
 				ResourceGroup(*testingutil.MakeFlavorQuotas("x86").Obj()).
 				Obj(),
-		},
-		{
-			name: "flavor with unqualified names",
-			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
-				ResourceGroup(*testingutil.MakeFlavorQuotas("invalid_name").Obj()).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("name"), "invalid_name", ""),
-			},
 		},
 		{
 			name: "flavor quota with negative value",
@@ -107,6 +116,7 @@ func TestValidateClusterQueue(t *testing.T) {
 			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
 				ResourceGroup(
 					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "0").Obj()).
+				Cohort("cohort").
 				Obj(),
 		},
 		{
@@ -114,10 +124,59 @@ func TestValidateClusterQueue(t *testing.T) {
 			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
 				ResourceGroup(
 					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "-1").Obj()).
+				Cohort("cohort").
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources").Index(0).Child("borrowingLimit"), "-1", ""),
 			},
+		},
+		{
+			name: "flavor quota with lendingLimit 0",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "", "0").Obj()).
+				Cohort("cohort").
+				Obj(),
+		},
+		{
+			name: "flavor quota with negative lendingLimit",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "", "-1").Obj()).
+				Cohort("cohort").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources").Index(0).Child("lendingLimit"), "-1", ""),
+			},
+		},
+		{
+			name: "flavor quota with lendingLimit and empty cohort",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "", "1").Obj()).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources").Index(0).Child("lendingLimit"), "1", limitIsEmptyErrorMsg),
+			},
+		},
+		{
+			name: "flavor quota with lendingLimit greater than nominalQuota",
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "", "2").Obj()).
+				Cohort("cohort").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources").Index(0).Child("lendingLimit"), "2", lendingLimitErrorMsg),
+			},
+		},
+		{
+			name:                "flavor quota with lendingLimit and empty cohort, but feature disabled",
+			disableLendingLimit: true,
+			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testingutil.MakeFlavorQuotas("x86").Resource("cpu", "1", "", "1").Obj()).
+				Obj(),
 		},
 		{
 			name: "empty queueing strategy is supported",
@@ -201,78 +260,6 @@ func TestValidateClusterQueue(t *testing.T) {
 			},
 		},
 		{
-			name: "missing resources in a flavor",
-			clusterQueue: &kueue.ClusterQueue{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cluster-queue",
-				},
-				Spec: kueue.ClusterQueueSpec{
-					ResourceGroups: []kueue.ResourceGroup{
-						{
-							CoveredResources: []corev1.ResourceName{"cpu", "memory"},
-							Flavors: []kueue.FlavorQuotas{
-								*testingutil.MakeFlavorQuotas("alpha").
-									Resource("cpu", "0").
-									Obj(),
-							},
-						},
-					},
-				},
-			},
-			wantErr: field.ErrorList{
-				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources"), nil, ""),
-			},
-		},
-		{
-			name: "missing resources in a flavor",
-			clusterQueue: &kueue.ClusterQueue{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cluster-queue",
-				},
-				Spec: kueue.ClusterQueueSpec{
-					ResourceGroups: []kueue.ResourceGroup{
-						{
-							CoveredResources: []corev1.ResourceName{"cpu"},
-							Flavors: []kueue.FlavorQuotas{
-								*testingutil.MakeFlavorQuotas("alpha").
-									Resource("cpu", "0").
-									Resource("memory", "0").
-									Obj(),
-							},
-						},
-					},
-				},
-			},
-			wantErr: field.ErrorList{
-				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources"), nil, ""),
-			},
-		},
-		{
-			name: "missing resources in a flavor and mismatch",
-			clusterQueue: &kueue.ClusterQueue{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cluster-queue",
-				},
-				Spec: kueue.ClusterQueueSpec{
-					ResourceGroups: []kueue.ResourceGroup{
-						{
-							CoveredResources: []corev1.ResourceName{"blah"},
-							Flavors: []kueue.FlavorQuotas{
-								*testingutil.MakeFlavorQuotas("alpha").
-									Resource("cpu", "0").
-									Resource("memory", "0").
-									Obj(),
-							},
-						},
-					},
-				},
-			},
-			wantErr: field.ErrorList{
-				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources"), nil, ""),
-				field.Invalid(resourceGroupsPath.Index(0).Child("flavors").Index(0).Child("resources").Index(0).Child("name"), nil, ""),
-			},
-		},
-		{
 			name: "resource in more than one resource group",
 			clusterQueue: testingutil.MakeClusterQueue("cluster-queue").
 				ResourceGroup(
@@ -306,10 +293,43 @@ func TestValidateClusterQueue(t *testing.T) {
 				field.Duplicate(resourceGroupsPath.Index(1).Child("flavors").Index(0).Child("name"), nil),
 			},
 		},
+		{
+			name: "valid preemption with borrowWithinCohort",
+			clusterQueue: &kueue.ClusterQueue{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cluster-queue",
+				},
+				Spec: kueue.ClusterQueueSpec{
+					Preemption: &kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+						BorrowWithinCohort: &kueue.BorrowWithinCohort{
+							Policy:               kueue.BorrowWithinCohortPolicyLowerPriority,
+							MaxPriorityThreshold: ptr.To[int32](10),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "existing cluster queue created with older Kueue version that has a nil borrowWithinCohort field",
+			clusterQueue: &kueue.ClusterQueue{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cluster-queue",
+				},
+				Spec: kueue.ClusterQueueSpec{
+					Preemption: &kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyNever,
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.disableLendingLimit {
+				features.SetFeatureGateDuringTest(t, features.LendingLimit, false)
+			}
 			gotErr := ValidateClusterQueue(tc.clusterQueue)
 			if diff := cmp.Diff(tc.wantErr, gotErr, cmpopts.IgnoreFields(field.Error{}, "Detail", "BadValue")); diff != "" {
 				t.Errorf("ValidateResources() mismatch (-want +got):\n%s", diff)
@@ -326,12 +346,10 @@ func TestValidateClusterQueueUpdate(t *testing.T) {
 		wantErr         field.ErrorList
 	}{
 		{
-			name:            "queueingStrategy cannot be updated",
+			name:            "queueingStrategy can be updated",
 			newClusterQueue: testingutil.MakeClusterQueue("cluster-queue").QueueingStrategy("BestEffortFIFO").Obj(),
 			oldClusterQueue: testingutil.MakeClusterQueue("cluster-queue").QueueingStrategy("StrictFIFO").Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(field.NewPath("spec", "queueingStrategy"), nil, ""),
-			},
+			wantErr:         nil,
 		},
 		{
 			name:            "same queueingStrategy",
@@ -343,7 +361,7 @@ func TestValidateClusterQueueUpdate(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotErr := ValidateClusterQueueUpdate(tc.newClusterQueue, tc.oldClusterQueue)
+			gotErr := ValidateClusterQueueUpdate(tc.newClusterQueue)
 			if diff := cmp.Diff(tc.wantErr, gotErr, cmpopts.IgnoreFields(field.Error{}, "Detail", "BadValue")); diff != "" {
 				t.Errorf("ValidateResources() mismatch (-want +got):\n%s", diff)
 			}

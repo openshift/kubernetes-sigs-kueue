@@ -24,6 +24,8 @@ resources:
 - localqueue_viewer_role.yaml
 - resourceflavor_editor_role.yaml
 - resourceflavor_viewer_role.yaml
+- pending_workloads_cq_viewer_role.yaml
+- pending_workloads_lq_viewer_role.yaml
 - workload_editor_role.yaml
 - workload_viewer_role.yaml
 
@@ -36,6 +38,8 @@ resources:
 - mpijob_viewer_role.yaml
 - mxjob_editor_role.yaml
 - mxjob_viewer_role.yaml
+- raycluster_editor_role.yaml
+- raycluster_viewer_role.yaml
 - rayjob_editor_role.yaml
 - rayjob_viewer_role.yaml
 - pytorchjob_editor_role.yaml

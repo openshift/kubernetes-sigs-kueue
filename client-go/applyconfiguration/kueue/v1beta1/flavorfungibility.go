@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import (
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// FlavorFungibilityApplyConfiguration represents an declarative configuration of the FlavorFungibility type for use
+// FlavorFungibilityApplyConfiguration represents a declarative configuration of the FlavorFungibility type for use
 // with apply.
 type FlavorFungibilityApplyConfiguration struct {
 	WhenCanBorrow  *v1beta1.FlavorFungibilityPolicy `json:"whenCanBorrow,omitempty"`
 	WhenCanPreempt *v1beta1.FlavorFungibilityPolicy `json:"whenCanPreempt,omitempty"`
 }
 
-// FlavorFungibilityApplyConfiguration constructs an declarative configuration of the FlavorFungibility type for use with
+// FlavorFungibilityApplyConfiguration constructs a declarative configuration of the FlavorFungibility type for use with
 // apply.
 func FlavorFungibility() *FlavorFungibilityApplyConfiguration {
 	return &FlavorFungibilityApplyConfiguration{}

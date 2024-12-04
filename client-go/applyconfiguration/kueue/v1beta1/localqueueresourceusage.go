@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,14 +22,14 @@ import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 )
 
-// LocalQueueResourceUsageApplyConfiguration represents an declarative configuration of the LocalQueueResourceUsage type for use
+// LocalQueueResourceUsageApplyConfiguration represents a declarative configuration of the LocalQueueResourceUsage type for use
 // with apply.
 type LocalQueueResourceUsageApplyConfiguration struct {
 	Name  *v1.ResourceName   `json:"name,omitempty"`
 	Total *resource.Quantity `json:"total,omitempty"`
 }
 
-// LocalQueueResourceUsageApplyConfiguration constructs an declarative configuration of the LocalQueueResourceUsage type for use with
+// LocalQueueResourceUsageApplyConfiguration constructs a declarative configuration of the LocalQueueResourceUsage type for use with
 // apply.
 func LocalQueueResourceUsage() *LocalQueueResourceUsageApplyConfiguration {
 	return &LocalQueueResourceUsageApplyConfiguration{}
