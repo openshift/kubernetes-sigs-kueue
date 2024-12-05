@@ -12,16 +12,13 @@ approvers:
   - "@ahg-g"
   - "@alculquicondor"
 
-see-also:
-  - "/keps/168-2-pending-workloads-visibility"
+stage: beta
 
-stage: deprecated
-
-latest-milestone: "v0.9"
+latest-milestone: "v0.5"
 
 milestone:
-  alpha: "v0.5"
-  deprecated: "v0.9"
+  beta: "v0.5"
+  stable: "v0.8"
 
 disable-supported: true
 

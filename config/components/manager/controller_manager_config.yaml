@@ -13,25 +13,16 @@ leaderElection:
 controller:
   groupKindConcurrency:
     Job.batch: 5
-    Pod: 5
-    Workload.kueue.x-k8s.io: 5
     LocalQueue.kueue.x-k8s.io: 1
-    Cohort.kueue.x-k8s.io: 1
     ClusterQueue.kueue.x-k8s.io: 1
     ResourceFlavor.kueue.x-k8s.io: 1
+    Workload.kueue.x-k8s.io: 1
 clientConnection:
   qps: 50
   burst: 100
-#pprofBindAddress: :8083
+#pprofBindAddress: :8082
 #waitForPodsReady:
-#  enable: false
-#  timeout: 5m
-#  blockAdmission: false
-#  requeuingStrategy:
-#    timestamp: Eviction
-#    backoffLimitCount: null # null indicates infinite requeuing
-#    backoffBaseSeconds: 60
-#    backoffMaxSeconds: 3600
+#  enable: true
 #manageJobsWithoutQueueName: true
 #internalCertManagement:
 #  enable: false
@@ -42,32 +33,16 @@ integrations:
   - "batch/job"
   - "kubeflow.org/mpijob"
   - "ray.io/rayjob"
-  - "ray.io/raycluster"
   - "jobset.x-k8s.io/jobset"
   - "kubeflow.org/mxjob"
   - "kubeflow.org/paddlejob"
   - "kubeflow.org/pytorchjob"
   - "kubeflow.org/tfjob"
   - "kubeflow.org/xgboostjob"
-#  - "pod"
-#  - "deployment" # requires enabling pod integration
-#  - "statefulset" # requires enabling pod integration
-#  externalFrameworks:
-#  - "Foo.v1.example.com"
-#  podOptions:
-#    namespaceSelector:
-#      matchExpressions:
-#        - key: kubernetes.io/metadata.name
-#          operator: NotIn
-#          values: [ kube-system, kueue-system ]
-#fairSharing:
-#  enable: true
-#  preemptionStrategies: [LessThanOrEqualToFinalShare, LessThanInitialShare]
-#resources:
-#  excludeResourcePrefixes: []
-#  transformations:
-#  - input: nvidia.com/mig-4g.5gb
-#    strategy: Replace | Retain
-#    outputs:
-#      example.com/accelerator-memory: 5Gi
-#      example.com/accelerator-gpc: 4
+# - "pod"
+# podOptions:
+#   namespaceSelector:
+#     matchExpressions:
+#       - key: kubernetes.io/metadata.name
+#         operator: NotIn
+#         values: [ kube-system, kueue-system ]

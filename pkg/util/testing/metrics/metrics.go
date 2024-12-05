@@ -26,12 +26,13 @@ import (
 	"sigs.k8s.io/kueue/pkg/util/slices"
 )
 
-type MetricDataPoint struct {
+type GaugeDataPoint struct {
 	Labels map[string]string
 	Value  float64
 }
 
-func (a *MetricDataPoint) Less(b *MetricDataPoint) bool {
+func (a *GaugeDataPoint) Less(b *GaugeDataPoint) bool {
+
 	keys := maps.Keys(a.Labels)
 	sort.Strings(keys)
 	for _, k := range keys {
@@ -57,15 +58,16 @@ func (a *MetricDataPoint) Less(b *MetricDataPoint) bool {
 		return false
 	}
 	return a.Value < b.Value
+
 }
 
-func CollectFilteredGaugeVec(v prometheus.Collector, labels map[string]string) []MetricDataPoint {
+func CollectFilteredGaugeVec(v *prometheus.GaugeVec, labels map[string]string) []GaugeDataPoint {
 	if v == nil {
 		return nil
 	}
 
 	ch := make(chan prometheus.Metric)
-	ret := []MetricDataPoint{}
+	ret := []GaugeDataPoint{}
 
 	go func() {
 		v.Collect(ch)
@@ -77,14 +79,9 @@ func CollectFilteredGaugeVec(v prometheus.Collector, labels map[string]string) [
 		if m.Write(&dtoMetric) == nil {
 			metricLabelsMap := slices.ToMap(dtoMetric.Label, func(i int) (string, string) { return *dtoMetric.Label[i].Name, *dtoMetric.Label[i].Value })
 			if maps.Contains(metricLabelsMap, labels) {
-				dp := MetricDataPoint{
+				dp := GaugeDataPoint{
 					Labels: metricLabelsMap,
-				}
-				if dtoMetric.Gauge != nil {
-					dp.Value = *dtoMetric.Gauge.Value
-				}
-				if dtoMetric.Counter != nil {
-					dp.Value = *dtoMetric.Counter.Value
+					Value:  *dtoMetric.Gauge.Value,
 				}
 				ret = append(ret, dp)
 			}

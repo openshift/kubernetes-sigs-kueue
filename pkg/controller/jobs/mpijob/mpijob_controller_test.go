@@ -21,7 +21,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
+	common "github.com/kubeflow/common/pkg/apis/common/v1"
+	kubeflow "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
@@ -37,30 +38,30 @@ import (
 
 func TestCalcPriorityClassName(t *testing.T) {
 	testcases := map[string]struct {
-		job                   kfmpi.MPIJob
+		job                   kubeflow.MPIJob
 		wantPriorityClassName string
 	}{
 		"none priority class name specified": {
-			job:                   kfmpi.MPIJob{},
+			job:                   kubeflow.MPIJob{},
 			wantPriorityClassName: "",
 		},
 		"priority specified at runPolicy and replicas; use priority in runPolicy": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					RunPolicy: kfmpi.RunPolicy{
-						SchedulingPolicy: &kfmpi.SchedulingPolicy{
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					RunPolicy: kubeflow.RunPolicy{
+						SchedulingPolicy: &kubeflow.SchedulingPolicy{
 							PriorityClass: "scheduling-priority",
 						},
 					},
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "launcher-priority",
 								},
 							},
 						},
-						kfmpi.MPIReplicaTypeWorker: {
+						kubeflow.MPIReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "worker-priority",
@@ -73,13 +74,13 @@ func TestCalcPriorityClassName(t *testing.T) {
 			wantPriorityClassName: "scheduling-priority",
 		},
 		"runPolicy present, but without priority; fallback to launcher": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					RunPolicy: kfmpi.RunPolicy{
-						SchedulingPolicy: &kfmpi.SchedulingPolicy{},
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					RunPolicy: kubeflow.RunPolicy{
+						SchedulingPolicy: &kubeflow.SchedulingPolicy{},
 					},
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "launcher-priority",
@@ -92,17 +93,17 @@ func TestCalcPriorityClassName(t *testing.T) {
 			wantPriorityClassName: "launcher-priority",
 		},
 		"specified on launcher takes precedence over worker": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "launcher-priority",
 								},
 							},
 						},
-						kfmpi.MPIReplicaTypeWorker: {
+						kubeflow.MPIReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "worker-priority",
@@ -115,15 +116,15 @@ func TestCalcPriorityClassName(t *testing.T) {
 			wantPriorityClassName: "launcher-priority",
 		},
 		"launcher present, but without priority; fallback to worker": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{},
 							},
 						},
-						kfmpi.MPIReplicaTypeWorker: {
+						kubeflow.MPIReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "worker-priority",
@@ -136,11 +137,11 @@ func TestCalcPriorityClassName(t *testing.T) {
 			wantPriorityClassName: "worker-priority",
 		},
 		"specified on worker only": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {},
-						kfmpi.MPIReplicaTypeWorker: {
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {},
+						kubeflow.MPIReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									PriorityClassName: "worker-priority",
@@ -153,11 +154,11 @@ func TestCalcPriorityClassName(t *testing.T) {
 			wantPriorityClassName: "worker-priority",
 		},
 		"worker present, but without priority; fallback to empty": {
-			job: kfmpi.MPIJob{
-				Spec: kfmpi.MPIJobSpec{
-					MPIReplicaSpecs: map[kfmpi.MPIReplicaType]*kfmpi.ReplicaSpec{
-						kfmpi.MPIReplicaTypeLauncher: {},
-						kfmpi.MPIReplicaTypeWorker: {
+			job: kubeflow.MPIJob{
+				Spec: kubeflow.MPIJobSpec{
+					MPIReplicaSpecs: map[kubeflow.MPIReplicaType]*common.ReplicaSpec{
+						kubeflow.MPIReplicaTypeLauncher: {},
+						kubeflow.MPIReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{},
 							},
@@ -183,7 +184,7 @@ func TestCalcPriorityClassName(t *testing.T) {
 var (
 	jobCmpOpts = []cmp.Option{
 		cmpopts.EquateEmpty(),
-		cmpopts.IgnoreFields(kfmpi.MPIJob{}, "TypeMeta", "ObjectMeta"),
+		cmpopts.IgnoreFields(kubeflow.MPIJob{}, "TypeMeta", "ObjectMeta"),
 	}
 	workloadCmpOpts = []cmp.Option{
 		cmpopts.EquateEmpty(),
@@ -201,9 +202,9 @@ func TestReconciler(t *testing.T) {
 		PriorityValue(200)
 	cases := map[string]struct {
 		reconcilerOptions []jobframework.Option
-		job               *kfmpi.MPIJob
+		job               *kubeflow.MPIJob
 		priorityClasses   []client.Object
-		wantJob           *kfmpi.MPIJob
+		wantJob           *kubeflow.MPIJob
 		wantWorkloads     []kueue.Workload
 		wantErr           error
 	}{
@@ -211,8 +212,8 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
 			},
-			job:     testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).Obj(),
-			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).Obj(),
+			job:     testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).Obj(),
+			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("mpijob", "ns").
 					PodSets(
@@ -226,11 +227,11 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
 			},
-			job: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).WorkloadPriorityClass("test-wpc").Obj(),
+			job: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).WorkloadPriorityClass("test-wpc").Obj(),
 			priorityClasses: []client.Object{
 				baseWPCWrapper.Obj(),
 			},
-			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).WorkloadPriorityClass("test-wpc").Obj(),
+			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).WorkloadPriorityClass("test-wpc").Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("mpijob", "ns").
 					PodSets(
@@ -245,11 +246,11 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
 			},
-			job: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).PriorityClass("test-pc").Obj(),
+			job: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).PriorityClass("test-pc").Obj(),
 			priorityClasses: []client.Object{
 				basePCWrapper.Obj(),
 			},
-			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).PriorityClass("test-pc").Obj(),
+			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).PriorityClass("test-pc").Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("mpijob", "ns").
 					PodSets(
@@ -264,12 +265,12 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
 			},
-			job: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).
+			job: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).
 				WorkloadPriorityClass("test-wpc").PriorityClass("test-pc").Obj(),
 			priorityClasses: []client.Object{
 				basePCWrapper.Obj(), baseWPCWrapper.Obj(),
 			},
-			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").GenericLauncherAndWorker().Parallelism(2).
+			wantJob: testingmpijob.MakeMPIJob("mpijob", "ns").Parallelism(2).
 				WorkloadPriorityClass("test-wpc").PriorityClass("test-pc").Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("mpijob", "ns").
@@ -286,7 +287,7 @@ func TestReconciler(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx, _ := utiltesting.ContextWithLog(t)
-			clientBuilder := utiltesting.NewClientBuilder(kfmpi.AddToScheme)
+			clientBuilder := utiltesting.NewClientBuilder(kubeflow.AddToScheme)
 			if err := SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder)); err != nil {
 				t.Fatalf("Could not setup indexes: %v", err)
 			}
@@ -303,7 +304,7 @@ func TestReconciler(t *testing.T) {
 				t.Errorf("Reconcile returned error (-want,+got):\n%s", diff)
 			}
 
-			var gotMpiJob kfmpi.MPIJob
+			var gotMpiJob kubeflow.MPIJob
 			if err := kClient.Get(ctx, jobKey, &gotMpiJob); err != nil {
 				t.Fatalf("Could not get Job after reconcile: %v", err)
 			}
@@ -319,4 +320,5 @@ func TestReconciler(t *testing.T) {
 			}
 		})
 	}
+
 }

@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2022 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import (
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// ResourceFlavorApplyConfiguration represents a declarative configuration of the ResourceFlavor type for use
+// ResourceFlavorApplyConfiguration represents an declarative configuration of the ResourceFlavor type for use
 // with apply.
 type ResourceFlavorApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
@@ -31,7 +31,7 @@ type ResourceFlavorApplyConfiguration struct {
 	Spec                             *ResourceFlavorSpecApplyConfiguration `json:"spec,omitempty"`
 }
 
-// ResourceFlavor constructs a declarative configuration of the ResourceFlavor type for use with
+// ResourceFlavor constructs an declarative configuration of the ResourceFlavor type for use with
 // apply.
 func ResourceFlavor(name string) *ResourceFlavorApplyConfiguration {
 	b := &ResourceFlavorApplyConfiguration{}
@@ -205,10 +205,4 @@ func (b *ResourceFlavorApplyConfiguration) ensureObjectMetaApplyConfigurationExi
 func (b *ResourceFlavorApplyConfiguration) WithSpec(value *ResourceFlavorSpecApplyConfiguration) *ResourceFlavorApplyConfiguration {
 	b.Spec = value
 	return b
-}
-
-// GetName retrieves the value of the Name field in the declarative configuration.
-func (b *ResourceFlavorApplyConfiguration) GetName() *string {
-	b.ensureObjectMetaApplyConfigurationExists()
-	return b.Name
 }

@@ -87,7 +87,9 @@ func getDefaultPriorityClass(ctx context.Context, client client.Client) (*schedu
 	// In case more than one global default priority class is added as a result of a race condition,
 	// we pick the one with the lowest priority value.
 	var defaultPC *schedulingv1.PriorityClass
-	for _, item := range pcs.Items {
+	for _, pci := range pcs.Items {
+		item := pci
+
 		if item.GlobalDefault {
 			if defaultPC == nil || defaultPC.Value > item.Value {
 				defaultPC = &item

@@ -22,16 +22,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
-	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	testingmxjob "sigs.k8s.io/kueue/pkg/util/testingjobs/mxjob"
@@ -57,22 +55,22 @@ func TestPriorityClass(t *testing.T) {
 					},
 					MXReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.MXJobReplicaTypeScheduler: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "scheduler-priority",
 								},
 							},
 						},
 						kftraining.MXJobReplicaTypeServer: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "server-priority",
 								},
 							},
 						},
 						kftraining.MXJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -91,8 +89,8 @@ func TestPriorityClass(t *testing.T) {
 					},
 					MXReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.MXJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -108,22 +106,22 @@ func TestPriorityClass(t *testing.T) {
 					JobMode: kftraining.MXTrain,
 					MXReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.MXJobReplicaTypeScheduler: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "scheduler-priority",
 								},
 							},
 						},
 						kftraining.MXJobReplicaTypeTunerServer: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "server-priority",
 								},
 							},
 						},
 						kftraining.MXJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -139,18 +137,18 @@ func TestPriorityClass(t *testing.T) {
 					JobMode: kftraining.MXTune,
 					MXReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.MXJobReplicaTypeTunerTracker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{},
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{},
 							},
 						},
 						kftraining.MXJobReplicaTypeTunerServer: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{},
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{},
 							},
 						},
 						kftraining.MXJobReplicaTypeTuner: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "tuner-priority",
 								},
 							},
@@ -166,8 +164,8 @@ func TestPriorityClass(t *testing.T) {
 					JobMode: kftraining.MXTrain,
 					MXReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.MXJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -185,8 +183,8 @@ func TestPriorityClass(t *testing.T) {
 						kftraining.MXJobReplicaTypeScheduler: {},
 						kftraining.MXJobReplicaTypeServer:    {},
 						kftraining.MXJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{},
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{},
 							},
 						},
 					},
@@ -302,8 +300,8 @@ var (
 	}
 	workloadCmpOpts = cmp.Options{
 		cmpopts.EquateEmpty(),
-		cmpopts.IgnoreFields(kueue.Workload{}, "TypeMeta"),
-		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "Name", "Labels", "ResourceVersion", "OwnerReferences", "Finalizers"), cmpopts.IgnoreFields(kueue.WorkloadSpec{}, "Priority"),
+		cmpopts.IgnoreFields(kueue.Workload{}, "TypeMeta", "ObjectMeta"),
+		cmpopts.IgnoreFields(kueue.WorkloadSpec{}, "Priority"),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 		cmpopts.IgnoreFields(kueue.PodSet{}, "Template"),
 	}
@@ -313,7 +311,6 @@ func TestReconciler(t *testing.T) {
 	cases := map[string]struct {
 		reconcilerOptions []jobframework.Option
 		job               *kftraining.MXJob
-		flavors           []kueue.ResourceFlavor
 		workloads         []kueue.Workload
 		wantJob           *kftraining.MXJob
 		wantWorkloads     []kueue.Workload
@@ -335,32 +332,6 @@ func TestReconciler(t *testing.T) {
 					Obj(),
 			},
 		},
-		"workload is created with a ProvReq annotation": {
-			reconcilerOptions: []jobframework.Option{
-				jobframework.WithManageJobsWithoutQueueName(true),
-			},
-			job: testingmxjob.MakeMXJob("mxjob", "ns").
-				Annotations(map[string]string{
-					controllerconsts.ProvReqAnnotationPrefix + "test-annotation": "test-val",
-					"invalid-provreq-prefix/test-annotation-2":                   "test-val-2",
-				}).
-				Obj(),
-			wantJob: testingmxjob.MakeMXJob("mxjob", "ns").
-				Annotations(map[string]string{
-					controllerconsts.ProvReqAnnotationPrefix + "test-annotation": "test-val",
-					"invalid-provreq-prefix/test-annotation-2":                   "test-val-2",
-				}).Obj(),
-			wantWorkloads: []kueue.Workload{
-				*utiltesting.MakeWorkload("mxjob", "ns").
-					Annotations(map[string]string{controllerconsts.ProvReqAnnotationPrefix + "test-annotation": "test-val"}).
-					PodSets(
-						*utiltesting.MakePodSet("scheduler", 1).Obj(),
-						*utiltesting.MakePodSet("server", 1).Obj(),
-						*utiltesting.MakePodSet("worker", 1).Obj(),
-					).
-					Obj(),
-			},
-		},
 		"workload isn't created due to manageJobsWithoutQueueName=false": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(false),
@@ -376,9 +347,9 @@ func TestReconciler(t *testing.T) {
 				Queue("foo").
 				Suspend(false).
 				Parallelism(10, 5).
-				Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "2").
-				Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "5").
+				Request(kftraining.MXJobReplicaTypeScheduler, v1.ResourceCPU, "1").
+				Request(kftraining.MXJobReplicaTypeServer, v1.ResourceCPU, "2").
+				Request(kftraining.MXJobReplicaTypeWorker, v1.ResourceCPU, "5").
 				NodeSelector("provisioning", "spot").
 				Active(kftraining.MXJobReplicaTypeScheduler, 1).
 				Active(kftraining.MXJobReplicaTypeServer, 5).
@@ -387,34 +358,14 @@ func TestReconciler(t *testing.T) {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("a", "ns").
 					PodSets(
-						*utiltesting.MakePodSet("scheduler", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("server", 5).Request(corev1.ResourceCPU, "2").Obj(),
-						*utiltesting.MakePodSet("worker", 10).Request(corev1.ResourceCPU, "5").Obj(),
+						*utiltesting.MakePodSet("scheduler", 1).Request(v1.ResourceCPU, "1").Obj(),
+						*utiltesting.MakePodSet("server", 5).Request(v1.ResourceCPU, "2").Obj(),
+						*utiltesting.MakePodSet("worker", 10).Request(v1.ResourceCPU, "5").Obj(),
 					).
 					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "scheduler",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](1),
-							},
-							kueue.PodSetAssignment{
-								Name: "server",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](2),
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](5),
-							},
-						).
+						AssignmentPodCount(1).
+						AssignmentPodCount(5).
+						AssignmentPodCount(10).
 						Obj()).
 					Admitted(true).
 					Condition(metav1.Condition{
@@ -429,9 +380,9 @@ func TestReconciler(t *testing.T) {
 				Queue("foo").
 				Suspend(true).
 				Parallelism(10, 5).
-				Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "2").
-				Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "5").
+				Request(kftraining.MXJobReplicaTypeScheduler, v1.ResourceCPU, "1").
+				Request(kftraining.MXJobReplicaTypeServer, v1.ResourceCPU, "2").
+				Request(kftraining.MXJobReplicaTypeWorker, v1.ResourceCPU, "5").
 				Active(kftraining.MXJobReplicaTypeScheduler, 1).
 				Active(kftraining.MXJobReplicaTypeServer, 5).
 				Active(kftraining.MXJobReplicaTypeWorker, 10).
@@ -439,34 +390,14 @@ func TestReconciler(t *testing.T) {
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("a", "ns").
 					PodSets(
-						*utiltesting.MakePodSet("scheduler", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("server", 5).Request(corev1.ResourceCPU, "2").Obj(),
-						*utiltesting.MakePodSet("worker", 10).Request(corev1.ResourceCPU, "5").Obj(),
+						*utiltesting.MakePodSet("scheduler", 1).Request(v1.ResourceCPU, "1").Obj(),
+						*utiltesting.MakePodSet("server", 5).Request(v1.ResourceCPU, "2").Obj(),
+						*utiltesting.MakePodSet("worker", 10).Request(v1.ResourceCPU, "5").Obj(),
 					).
 					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "scheduler",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](1),
-							},
-							kueue.PodSetAssignment{
-								Name: "server",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](2),
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](5),
-							},
-						).
+						AssignmentPodCount(1).
+						AssignmentPodCount(5).
+						AssignmentPodCount(10).
 						Obj()).
 					Admitted(true).
 					Condition(metav1.Condition{
@@ -476,109 +407,6 @@ func TestReconciler(t *testing.T) {
 					Obj(),
 			},
 		},
-		"when workload is admitted, job gets node selectors": {
-			flavors: []kueue.ResourceFlavor{
-				*utiltesting.MakeResourceFlavor("default").Obj(),
-				*utiltesting.MakeResourceFlavor("on-demand").NodeLabel("provisioning", "on-demand").Obj(),
-				*utiltesting.MakeResourceFlavor("spot").NodeLabel("provisioning", "spot").Obj(),
-			},
-			job: testingmxjob.MakeMXJob("mxjob", "ns").
-				Image("").
-				Queue("foo").
-				Suspend(true).
-				Parallelism(1, 1).
-				Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "1").
-				Obj(),
-			workloads: []kueue.Workload{
-				*utiltesting.MakeWorkload("a", "ns").
-					PodSets(
-						*utiltesting.MakePodSet("scheduler", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("server", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("worker", 1).Request(corev1.ResourceCPU, "1").Obj(),
-					).
-					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "scheduler",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "on-demand",
-								},
-							},
-							kueue.PodSetAssignment{
-								Name: "server",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "spot",
-								},
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-							},
-						).
-						Obj()).
-					Admitted(true).
-					Obj(),
-			},
-			wantJob: testingmxjob.MakeMXJob("mxjob", "ns").
-				Image("").
-				Queue("foo").
-				Suspend(false).
-				Parallelism(1, 1).
-				Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "1").
-				Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "1").
-				RoleNodeSelector(kftraining.MXJobReplicaTypeScheduler, "provisioning", "on-demand").
-				RoleNodeSelector(kftraining.MXJobReplicaTypeServer, "provisioning", "spot").
-				Obj(),
-			wantWorkloads: []kueue.Workload{
-				*utiltesting.MakeWorkload("a", "ns").
-					PodSets(
-						*utiltesting.MakePodSet("scheduler", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("server", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("worker", 1).Request(corev1.ResourceCPU, "1").Obj(),
-					).
-					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "scheduler",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "on-demand",
-								},
-							},
-							kueue.PodSetAssignment{
-								Name: "server",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "spot",
-								},
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-							},
-						).
-						Obj()).
-					Admitted(true).
-					Obj(),
-			},
-		},
-		"workload shouldn't be recreated for the completed mx job": {
-			job: testingmxjob.MakeMXJob("mxjob", "ns").
-				Queue("foo").
-				StatusConditions(kftraining.JobCondition{Type: kftraining.JobSucceeded, Status: corev1.ConditionTrue}).
-				Obj(),
-			workloads: []kueue.Workload{},
-			wantJob: testingmxjob.MakeMXJob("mxjob", "ns").
-				Queue("foo").
-				StatusConditions(kftraining.JobCondition{Type: kftraining.JobSucceeded, Status: corev1.ConditionTrue}).
-				Obj(),
-			wantWorkloads: []kueue.Workload{},
-		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -587,9 +415,7 @@ func TestReconciler(t *testing.T) {
 			if err := SetupIndexes(ctx, utiltesting.AsIndexer(kcBuilder)); err != nil {
 				t.Fatalf("Failed to setup indexes: %v", err)
 			}
-			kcBuilder = kcBuilder.
-				WithObjects(tc.job).
-				WithLists(&kueue.ResourceFlavorList{Items: tc.flavors})
+			kcBuilder = kcBuilder.WithObjects(tc.job)
 			for i := range tc.workloads {
 				kcBuilder = kcBuilder.WithStatusSubresource(&tc.workloads[i])
 			}
@@ -603,7 +429,7 @@ func TestReconciler(t *testing.T) {
 					t.Fatalf("Could not create Workload: %v", err)
 				}
 			}
-			recorder := record.NewBroadcaster().NewRecorder(kClient.Scheme(), corev1.EventSource{Component: "test"})
+			recorder := record.NewBroadcaster().NewRecorder(kClient.Scheme(), v1.EventSource{Component: "test"})
 			reconciler := NewReconciler(kClient, recorder, tc.reconcilerOptions...)
 
 			jobKey := client.ObjectKeyFromObject(tc.job)

@@ -26,24 +26,27 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 )
 
+var AdmissionTaintKey = "kueue.x-k8s.io/kueue-admission"
+
 const (
 	ControllerName = "kueue-podtaintstolerations"
-	FrameworkName  = "core/pod"
 )
 
 var (
-	AdmissionTaintKey = "kueue.x-k8s.io/kueue-admission"
-	GVK               = corev1.SchemeGroupVersion.WithKind("Pod")
-	NewReconciler     = jobframework.NewGenericReconciler(func() jobframework.GenericJob { return &Pod{} }, nil)
+	GVK = corev1.SchemeGroupVersion.WithKind("Pod")
+
+	FrameworkName = "core/pod"
 )
+
+var NewReconciler = jobframework.NewGenericReconciler(func() jobframework.GenericJob { return &Pod{} }, nil)
+
+type Pod corev1.Pod
 
 var (
 	_ jobframework.GenericJob           = (*Pod)(nil)
 	_ jobframework.JobWithCustomStop    = (*Pod)(nil)
 	_ jobframework.JobWithPriorityClass = (*Pod)(nil)
 )
-
-type Pod corev1.Pod
 
 func (j *Pod) Object() client.Object {
 	return (*corev1.Pod)(j)
@@ -70,7 +73,7 @@ func (p *Pod) Suspend() {
 	// Not used, see Stop()
 }
 
-func (p *Pod) Stop(ctx context.Context, c client.Client, _ []jobframework.PodSetInfo) error {
+func (p *Pod) Stop(ctx context.Context, c client.Client, podSetsInfo []jobframework.PodSetInfo) error {
 	if err := client.IgnoreNotFound(c.Delete(ctx, p.Object())); err != nil {
 		return err
 	}
@@ -142,7 +145,7 @@ func (j *Pod) RunWithPodSetsInfo(podSetsInfo []jobframework.PodSetInfo) {
 	}
 }
 
-func (p *Pod) RestorePodSetsInfo(_ []jobframework.PodSetInfo) {
+func (p *Pod) RestorePodSetsInfo(podSetsInfo []jobframework.PodSetInfo) {
 	// Existing Pod tolerations cannot be removed.
 	// Restoring is not needed anyways b/c suspending == deleting for Pods.
 }

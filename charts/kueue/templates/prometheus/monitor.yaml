@@ -4,7 +4,7 @@ kind: ServiceMonitor
 metadata:
   name: {{ include "kueue.fullname" . }}-controller-manager-metrics-monitor
   labels:
-  {{- include "kueue.labels" . | nindent 4 }}
+    control-plane: controller-manager
   namespace: '{{ .Release.Namespace }}'
 spec:
   endpoints:
@@ -16,5 +16,5 @@ spec:
       insecureSkipVerify: true
   selector:
     matchLabels:
-    {{- include "kueue.labels" . | nindent 6 }}
+      control-plane: controller-manager
 {{- end }}

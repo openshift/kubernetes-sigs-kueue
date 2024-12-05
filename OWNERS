@@ -1,5 +1,17 @@
 # See the OWNERS docs at https://go.k8s.io/owners
 
 approvers:
-- kannon92
-- mrunalp
+- alculquicondor
+- tenzen-y
+
+reviewers:
+- alculquicondor
+- denkensk
+- kerthcet
+- mimowo
+- tenzen-y
+- trasc
+
+emeritus_approvers:
+- ahg-g
+- denkensk
