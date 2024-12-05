@@ -1,3 +1,19 @@
+/*
+Copyright 2024 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package kubeversion
 
 import (
@@ -11,10 +27,6 @@ import (
 )
 
 const fetchServerVersionInterval = time.Minute * 10
-
-var (
-	KubeVersion1_27 = versionutil.MustParseSemantic("1.27.0")
-)
 
 type ServerVersionFetcher struct {
 	dc            discovery.DiscoveryInterface
@@ -79,21 +91,26 @@ func (s *ServerVersionFetcher) Start(ctx context.Context) error {
 
 // FetchServerVersion gets API server version
 func (s *ServerVersionFetcher) FetchServerVersion() error {
-	clusterVersionInfo, err := s.dc.ServerVersion()
+	v, err := FetchServerVersion(s.dc)
 	if err != nil {
 		return err
 	}
 	s.rwm.Lock()
 	defer s.rwm.Unlock()
-	serverVersion, err := versionutil.ParseSemantic(clusterVersionInfo.String())
-	if err == nil {
-		s.serverVersion = serverVersion
-	}
-	return err
+	s.serverVersion = v
+	return nil
 }
 
 func (s *ServerVersionFetcher) GetServerVersion() versionutil.Version {
 	s.rwm.RLock()
 	defer s.rwm.RUnlock()
 	return *s.serverVersion
+}
+
+func FetchServerVersion(d discovery.DiscoveryInterface) (*versionutil.Version, error) {
+	clusterVersionInfo, err := d.ServerVersion()
+	if err != nil {
+		return nil, err
+	}
+	return versionutil.ParseSemantic(clusterVersionInfo.String())
 }

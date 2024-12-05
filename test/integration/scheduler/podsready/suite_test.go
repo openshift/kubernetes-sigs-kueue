@@ -18,12 +18,11 @@ package podsready
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -38,7 +37,6 @@ import (
 	"sigs.k8s.io/kueue/pkg/scheduler"
 	"sigs.k8s.io/kueue/pkg/webhooks"
 	"sigs.k8s.io/kueue/test/integration/framework"
-	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -56,31 +54,63 @@ func TestSchedulerWithWaitForPodsReady(t *testing.T) {
 	)
 }
 
-func managerAndSchedulerSetupWithTimeoutAdmission(mgr manager.Manager, ctx context.Context, value time.Duration, blockAdmission bool) {
-	cfg := config.Configuration{
-		WaitForPodsReady: &config.WaitForPodsReady{
-			Enable:         true,
-			BlockAdmission: &blockAdmission,
-			Timeout:        &metav1.Duration{Duration: value},
-		},
+var _ = ginkgo.BeforeSuite(func() {
+	fwk = &framework.Framework{
+		CRDPath:     filepath.Join("..", "..", "..", "..", "config", "components", "crd", "bases"),
+		WebhookPath: filepath.Join("..", "..", "..", "..", "config", "components", "webhook"),
 	}
+	cfg = fwk.Init()
+	ctx, k8sClient = fwk.SetupClient(cfg)
+})
 
-	err := indexer.Setup(ctx, mgr.GetFieldIndexer())
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+var _ = ginkgo.AfterSuite(func() {
+	fwk.Teardown()
+})
 
-	cCache := cache.New(mgr.GetClient(), cache.WithPodsReadyTracking(cfg.WaitForPodsReady.Enable && cfg.WaitForPodsReady.BlockAdmission != nil && *cfg.WaitForPodsReady.BlockAdmission))
-	queues := queue.NewManager(mgr.GetClient(), cCache)
+func managerAndSchedulerSetup(configuration *config.Configuration) framework.ManagerSetup {
+	if configuration == nil {
+		configuration = &config.Configuration{}
+	}
+	return func(ctx context.Context, mgr manager.Manager) {
+		var (
+			cacheOpts  []cache.Option
+			queuesOpts []queue.Option
+			schedOpts  []scheduler.Option
+		)
 
-	failedCtrl, err := core.SetupControllers(mgr, queues, cCache, &cfg)
-	gomega.Expect(err).ToNot(gomega.HaveOccurred(), "controller", failedCtrl)
+		mgr.GetScheme().Default(configuration)
 
-	failedWebhook, err := webhooks.Setup(mgr)
-	gomega.Expect(err).ToNot(gomega.HaveOccurred(), "webhook", failedWebhook)
+		err := indexer.Setup(ctx, mgr.GetFieldIndexer())
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-	err = workloadjob.SetupIndexes(ctx, mgr.GetFieldIndexer())
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		if configuration.WaitForPodsReady != nil {
+			podsReadyTracking := configuration.WaitForPodsReady.Enable &&
+				configuration.WaitForPodsReady.BlockAdmission != nil &&
+				*configuration.WaitForPodsReady.BlockAdmission
+			cacheOpts = append(cacheOpts, cache.WithPodsReadyTracking(podsReadyTracking))
 
-	sched := scheduler.New(queues, cCache, mgr.GetClient(), mgr.GetEventRecorderFor(constants.AdmissionName))
-	err = sched.Start(ctx)
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			if configuration.WaitForPodsReady.RequeuingStrategy != nil && configuration.WaitForPodsReady.RequeuingStrategy.Timestamp != nil {
+				timestamp := *configuration.WaitForPodsReady.RequeuingStrategy.Timestamp
+				queuesOpts = append(queuesOpts, queue.WithPodsReadyRequeuingTimestamp(timestamp))
+				schedOpts = append(schedOpts, scheduler.WithPodsReadyRequeuingTimestamp(timestamp))
+			}
+		}
+
+		cCache := cache.New(mgr.GetClient(), cacheOpts...)
+		queues := queue.NewManager(mgr.GetClient(), cCache, queuesOpts...)
+
+		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, configuration)
+		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "controller", failedCtrl)
+
+		failedWebhook, err := webhooks.Setup(mgr)
+		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "webhook", failedWebhook)
+
+		err = workloadjob.SetupIndexes(ctx, mgr.GetFieldIndexer())
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		sched := scheduler.New(queues, cCache, mgr.GetClient(), mgr.GetEventRecorderFor(constants.AdmissionName), schedOpts...)
+
+		err = sched.Start(ctx)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	}
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,14 +21,15 @@ import (
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// ClusterQueuePreemptionApplyConfiguration represents an declarative configuration of the ClusterQueuePreemption type for use
+// ClusterQueuePreemptionApplyConfiguration represents a declarative configuration of the ClusterQueuePreemption type for use
 // with apply.
 type ClusterQueuePreemptionApplyConfiguration struct {
-	ReclaimWithinCohort *v1beta1.PreemptionPolicy `json:"reclaimWithinCohort,omitempty"`
-	WithinClusterQueue  *v1beta1.PreemptionPolicy `json:"withinClusterQueue,omitempty"`
+	ReclaimWithinCohort *v1beta1.PreemptionPolicy             `json:"reclaimWithinCohort,omitempty"`
+	BorrowWithinCohort  *BorrowWithinCohortApplyConfiguration `json:"borrowWithinCohort,omitempty"`
+	WithinClusterQueue  *v1beta1.PreemptionPolicy             `json:"withinClusterQueue,omitempty"`
 }
 
-// ClusterQueuePreemptionApplyConfiguration constructs an declarative configuration of the ClusterQueuePreemption type for use with
+// ClusterQueuePreemptionApplyConfiguration constructs a declarative configuration of the ClusterQueuePreemption type for use with
 // apply.
 func ClusterQueuePreemption() *ClusterQueuePreemptionApplyConfiguration {
 	return &ClusterQueuePreemptionApplyConfiguration{}
@@ -39,6 +40,14 @@ func ClusterQueuePreemption() *ClusterQueuePreemptionApplyConfiguration {
 // If called multiple times, the ReclaimWithinCohort field is set to the value of the last call.
 func (b *ClusterQueuePreemptionApplyConfiguration) WithReclaimWithinCohort(value v1beta1.PreemptionPolicy) *ClusterQueuePreemptionApplyConfiguration {
 	b.ReclaimWithinCohort = &value
+	return b
+}
+
+// WithBorrowWithinCohort sets the BorrowWithinCohort field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the BorrowWithinCohort field is set to the value of the last call.
+func (b *ClusterQueuePreemptionApplyConfiguration) WithBorrowWithinCohort(value *BorrowWithinCohortApplyConfiguration) *ClusterQueuePreemptionApplyConfiguration {
+	b.BorrowWithinCohort = value
 	return b
 }
 

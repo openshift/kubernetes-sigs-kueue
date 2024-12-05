@@ -1170,6 +1170,160 @@ Value could be missing for Workloads created before this field was added,
 in that case spec.podSets[*].count value will be used.</p>
 </td>
 </tr>
+<<<<<<< HEAD
+=======
+<tr><td><code>topologyAssignment</code><br/>
+<a href="#kueue-x-k8s-io-v1beta1-TopologyAssignment"><code>TopologyAssignment</code></a>
+</td>
+<td>
+   <p>topologyAssignment indicates the topology assignment divided into
+topology domains corresponding to the lowest level of the topology.
+The assignment specifies the number of Pods to be scheduled per topology
+domain and specifies the node selectors for each topology domain, in the
+following way: the node selector keys are specified by the levels field
+(same for all domains), and the corresponding node selector value is
+specified by the domains.values subfield. If the TopologySpec.Levels field contains
+&quot;kubernetes.io/hostname&quot; label, topologyAssignment will contain data only for
+this label, and omit higher levels in the topology</p>
+<p>Example:</p>
+<p>topologyAssignment:
+levels:</p>
+<ul>
+<li>cloud.provider.com/topology-block</li>
+<li>cloud.provider.com/topology-rack
+domains:</li>
+<li>values: [block-1, rack-1]
+count: 4</li>
+<li>values: [block-1, rack-2]
+count: 2</li>
+</ul>
+<p>Here:</p>
+<ul>
+<li>4 Pods are to be scheduled on nodes matching the node selector:
+cloud.provider.com/topology-block: block-1
+cloud.provider.com/topology-rack: rack-1</li>
+<li>2 Pods are to be scheduled on nodes matching the node selector:
+cloud.provider.com/topology-block: block-1
+cloud.provider.com/topology-rack: rack-2</li>
+</ul>
+<p>Example:
+Below there is an equivalent of the above example assuming, Topology
+object defines kubernetes.io/hostname as the lowest level in topology.
+Hence we omit higher level of topologies, since the hostname label
+is sufficient to explicitly identify a proper node.</p>
+<p>topologyAssignment:
+levels:</p>
+<ul>
+<li>kubernetes.io/hostname
+domains:</li>
+<li>values: [hostname-1]
+count: 4</li>
+<li>values: [hostname-2]
+count: 2</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `PodSetRequest`     {#kueue-x-k8s-io-v1beta1-PodSetRequest}
+    
+
+**Appears in:**
+
+- [WorkloadStatus](#kueue-x-k8s-io-v1beta1-WorkloadStatus)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>name</code> <B>[Required]</B><br/>
+<code>string</code>
+</td>
+<td>
+   <p>name is the name of the podSet. It should match one of the names in .spec.podSets.</p>
+</td>
+</tr>
+<tr><td><code>resources</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.28/#resourcelist-v1-core"><code>k8s.io/api/core/v1.ResourceList</code></a>
+</td>
+<td>
+   <p>resources is the total resources all the pods in the podset need to run.</p>
+<p>Beside what is provided in podSet's specs, this value also takes into account
+the LimitRange defaults and RuntimeClass overheads at the moment of consideration
+and the application of resource.excludeResourcePrefixes and resource.transformations.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `PodSetTopologyRequest`     {#kueue-x-k8s-io-v1beta1-PodSetTopologyRequest}
+    
+
+**Appears in:**
+
+- [PodSet](#kueue-x-k8s-io-v1beta1-PodSet)
+
+
+<p>PodSetTopologyRequest defines the topology request for a PodSet.</p>
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>required</code><br/>
+<code>string</code>
+</td>
+<td>
+   <p>required indicates the topology level required by the PodSet, as
+indicated by the <code>kueue.x-k8s.io/podset-required-topology</code> PodSet
+annotation.</p>
+</td>
+</tr>
+<tr><td><code>preferred</code><br/>
+<code>string</code>
+</td>
+<td>
+   <p>preferred indicates the topology level preferred by the PodSet, as
+indicated by the <code>kueue.x-k8s.io/podset-preferred-topology</code> PodSet
+annotation.</p>
+</td>
+</tr>
+<tr><td><code>podIndexLabel</code> <B>[Required]</B><br/>
+<code>string</code>
+</td>
+<td>
+   <p>PodIndexLabel indicates the name of the label indexing the pods.
+For example, in the context of</p>
+<ul>
+<li>kubernetes job this is: kubernetes.io/job-completion-index</li>
+<li>JobSet: kubernetes.io/job-completion-index (inherited from Job)</li>
+<li>Kubeflow: training.kubeflow.org/replica-index</li>
+</ul>
+</td>
+</tr>
+<tr><td><code>subGroupIndexLabel</code> <B>[Required]</B><br/>
+<code>string</code>
+</td>
+<td>
+   <p>SubGroupIndexLabel indicates the name of the label indexing the instances of replicated Jobs (groups)
+within a PodSet. For example, in the context of JobSet this is jobset.sigs.k8s.io/job-index.</p>
+</td>
+</tr>
+<tr><td><code>subGroupCount</code> <B>[Required]</B><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>SubGroupIndexLabel indicates the count of replicated Jobs (groups) within a PodSet.
+For example, in the context of JobSet this value is read from jobset.sigs.k8s.io/replicatedjob-replicas.</p>
+</td>
+</tr>
+>>>>>>> kueue-upstream/main
 </tbody>
 </table>
 
@@ -1279,6 +1433,71 @@ Check autoscaling.x-k8s.io ProvisioningRequestSpec.ProvisioningClassName for det
 requesting at least one of them.</p>
 <p>If none of the workloads podsets is requesting at least a managed resource,
 the workload is considered ready.</p>
+</td>
+</tr>
+<tr><td><code>retryStrategy</code><br/>
+<a href="#kueue-x-k8s-io-v1beta1-ProvisioningRequestRetryStrategy"><code>ProvisioningRequestRetryStrategy</code></a>
+</td>
+<td>
+   <p>retryStrategy defines strategy for retrying ProvisioningRequest.
+If null, then the default configuration is applied with the following parameter values:
+backoffLimitCount:  3
+backoffBaseSeconds: 60 - 1 min
+backoffMaxSeconds:  1800 - 30 mins</p>
+<p>To switch off retry mechanism
+set retryStrategy.backoffLimitCount to 0.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `ProvisioningRequestRetryStrategy`     {#kueue-x-k8s-io-v1beta1-ProvisioningRequestRetryStrategy}
+    
+
+**Appears in:**
+
+- [ProvisioningRequestConfigSpec](#kueue-x-k8s-io-v1beta1-ProvisioningRequestConfigSpec)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>backoffLimitCount</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffLimitCount defines the maximum number of re-queuing retries.
+Once the number is reached, the workload is deactivated (<code>.spec.activate</code>=<code>false</code>).</p>
+<p>Every backoff duration is about &quot;b*2^(n-1)+Rand&quot; where:</p>
+<ul>
+<li>&quot;b&quot; represents the base set by &quot;BackoffBaseSeconds&quot; parameter,</li>
+<li>&quot;n&quot; represents the &quot;workloadStatus.requeueState.count&quot;,</li>
+<li>&quot;Rand&quot; represents the random jitter.
+During this time, the workload is taken as an inadmissible and
+other workloads will have a chance to be admitted.
+By default, the consecutive requeue delays are around: (60s, 120s, 240s, ...).</li>
+</ul>
+<p>Defaults to 3.</p>
+</td>
+</tr>
+<tr><td><code>backoffBaseSeconds</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffBaseSeconds defines the base for the exponential backoff for
+re-queuing an evicted workload.</p>
+<p>Defaults to 60.</p>
+</td>
+</tr>
+<tr><td><code>backoffMaxSeconds</code><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>BackoffMaxSeconds defines the maximum backoff time to re-queue an evicted workload.</p>
+<p>Defaults to 1800.</p>
 </td>
 </tr>
 </tbody>
@@ -1402,6 +1621,18 @@ cloud.provider.com/preemptible=&quot;true&quot;:NoSchedule</p>
 <p>tolerations can be up to 8 elements.</p>
 </td>
 </tr>
+<<<<<<< HEAD
+=======
+<tr><td><code>topologyName</code><br/>
+<a href="#kueue-x-k8s-io-v1beta1-TopologyReference"><code>TopologyReference</code></a>
+</td>
+<td>
+   <p>topologyName indicates topology for the TAS ResourceFlavor.
+When specified, it enables scraping of the topology information from the
+nodes matching to the Resource Flavor node labels.</p>
+</td>
+</tr>
+>>>>>>> kueue-upstream/main
 </tbody>
 </table>
 
@@ -1541,6 +1772,105 @@ words, it's the used quota that is over the nominalQuota.</p>
 </tbody>
 </table>
 
+<<<<<<< HEAD
+=======
+## `StopPolicy`     {#kueue-x-k8s-io-v1beta1-StopPolicy}
+    
+(Alias of `string`)
+
+**Appears in:**
+
+- [ClusterQueueSpec](#kueue-x-k8s-io-v1beta1-ClusterQueueSpec)
+
+- [LocalQueueSpec](#kueue-x-k8s-io-v1beta1-LocalQueueSpec)
+
+
+
+
+
+## `TopologyAssignment`     {#kueue-x-k8s-io-v1beta1-TopologyAssignment}
+    
+
+**Appears in:**
+
+- [PodSetAssignment](#kueue-x-k8s-io-v1beta1-PodSetAssignment)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>levels</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>levels is an ordered list of keys denoting the levels of the assigned
+topology (i.e. node label keys), from the highest to the lowest level of
+the topology.</p>
+</td>
+</tr>
+<tr><td><code>domains</code> <B>[Required]</B><br/>
+<a href="#kueue-x-k8s-io-v1beta1-TopologyDomainAssignment"><code>[]TopologyDomainAssignment</code></a>
+</td>
+<td>
+   <p>domains is a list of topology assignments split by topology domains at
+the lowest level of the topology.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `TopologyDomainAssignment`     {#kueue-x-k8s-io-v1beta1-TopologyDomainAssignment}
+    
+
+**Appears in:**
+
+- [TopologyAssignment](#kueue-x-k8s-io-v1beta1-TopologyAssignment)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>values</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>values is an ordered list of node selector values describing a topology
+domain. The values correspond to the consecutive topology levels, from
+the highest to the lowest.</p>
+</td>
+</tr>
+<tr><td><code>count</code> <B>[Required]</B><br/>
+<code>int32</code>
+</td>
+<td>
+   <p>count indicates the number of Pods to be scheduled in the topology
+domain indicated by the values field.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `TopologyReference`     {#kueue-x-k8s-io-v1beta1-TopologyReference}
+    
+(Alias of `string`)
+
+**Appears in:**
+
+- [ResourceFlavorSpec](#kueue-x-k8s-io-v1beta1-ResourceFlavorSpec)
+
+
+<p>TopologyReference is the name of the Topology.</p>
+
+
+
+
+>>>>>>> kueue-upstream/main
 ## `WorkloadSpec`     {#kueue-x-k8s-io-v1beta1-WorkloadSpec}
     
 

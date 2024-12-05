@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-// ResourceGroupApplyConfiguration represents an declarative configuration of the ResourceGroup type for use
+// ResourceGroupApplyConfiguration represents a declarative configuration of the ResourceGroup type for use
 // with apply.
 type ResourceGroupApplyConfiguration struct {
 	CoveredResources []v1.ResourceName                `json:"coveredResources,omitempty"`
 	Flavors          []FlavorQuotasApplyConfiguration `json:"flavors,omitempty"`
 }
 
-// ResourceGroupApplyConfiguration constructs an declarative configuration of the ResourceGroup type for use with
+// ResourceGroupApplyConfiguration constructs a declarative configuration of the ResourceGroup type for use with
 // apply.
 func ResourceGroup() *ResourceGroupApplyConfiguration {
 	return &ResourceGroupApplyConfiguration{}

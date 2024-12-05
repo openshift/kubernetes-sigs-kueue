@@ -49,29 +49,37 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		cqStatus           kueue.ClusterQueueStatus
-		newConditionStatus metav1.ConditionStatus
-		newReason          string
-		newMessage         string
-		newWl              *kueue.Workload
-		wantCqStatus       kueue.ClusterQueueStatus
+		insertCqIntoCache   bool
+		insertCqIntoManager bool
+		cqStatus            kueue.ClusterQueueStatus
+		newConditionStatus  metav1.ConditionStatus
+		newReason           string
+		newMessage          string
+		newWl               *kueue.Workload
+		wantCqStatus        kueue.ClusterQueueStatus
+		wantError           error
 	}{
 		"empty ClusterQueueStatus": {
-			cqStatus:           kueue.ClusterQueueStatus{},
-			newConditionStatus: metav1.ConditionFalse,
-			newReason:          "FlavorNotFound",
-			newMessage:         "Can't admit new workloads; some flavors are not found",
+			insertCqIntoCache:   true,
+			insertCqIntoManager: true,
+			cqStatus:            kueue.ClusterQueueStatus{},
+			newConditionStatus:  metav1.ConditionFalse,
+			newReason:           "FlavorNotFound",
+			newMessage:          "Can't admit new workloads; some flavors are not found",
 			wantCqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
-					Type:    kueue.ClusterQueueActive,
-					Status:  metav1.ConditionFalse,
-					Reason:  "FlavorNotFound",
-					Message: "Can't admit new workloads; some flavors are not found",
+					Type:               kueue.ClusterQueueActive,
+					Status:             metav1.ConditionFalse,
+					Reason:             "FlavorNotFound",
+					Message:            "Can't admit new workloads; some flavors are not found",
+					ObservedGeneration: 1,
 				}},
 			},
 		},
 		"same condition status": {
+			insertCqIntoCache:   true,
+			insertCqIntoManager: true,
 			cqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
@@ -87,14 +95,17 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			wantCqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
-					Type:    kueue.ClusterQueueActive,
-					Status:  metav1.ConditionTrue,
-					Reason:  "Ready",
-					Message: "Can admit new workloads",
+					Type:               kueue.ClusterQueueActive,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Ready",
+					Message:            "Can admit new workloads",
+					ObservedGeneration: 1,
 				}},
 			},
 		},
 		"same condition status with different reason and message": {
+			insertCqIntoCache:   true,
+			insertCqIntoManager: true,
 			cqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
@@ -110,14 +121,17 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			wantCqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
-					Type:    kueue.ClusterQueueActive,
-					Status:  metav1.ConditionFalse,
-					Reason:  "Terminating",
-					Message: "Can't admit new workloads; clusterQueue is terminating",
+					Type:               kueue.ClusterQueueActive,
+					Status:             metav1.ConditionFalse,
+					Reason:             "Terminating",
+					Message:            "Can't admit new workloads; clusterQueue is terminating",
+					ObservedGeneration: 1,
 				}},
 			},
 		},
 		"different condition status": {
+			insertCqIntoCache:   true,
+			insertCqIntoManager: true,
 			cqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
@@ -133,14 +147,17 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			wantCqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
-					Type:    kueue.ClusterQueueActive,
-					Status:  metav1.ConditionTrue,
-					Reason:  "Ready",
-					Message: "Can admit new workloads",
+					Type:               kueue.ClusterQueueActive,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Ready",
+					Message:            "Can admit new workloads",
+					ObservedGeneration: 1,
 				}},
 			},
 		},
 		"different pendingWorkloads with same condition status": {
+			insertCqIntoCache:   true,
+			insertCqIntoManager: true,
 			cqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items)),
 				Conditions: []metav1.Condition{{
@@ -157,19 +174,29 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			wantCqStatus: kueue.ClusterQueueStatus{
 				PendingWorkloads: int32(len(defaultWls.Items) + 1),
 				Conditions: []metav1.Condition{{
-					Type:    kueue.ClusterQueueActive,
-					Status:  metav1.ConditionTrue,
-					Reason:  "Ready",
-					Message: "Can admit new workloads",
+					Type:               kueue.ClusterQueueActive,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Ready",
+					Message:            "Can admit new workloads",
+					ObservedGeneration: 1,
 				}},
 			},
+		},
+		"cluster queue does not exist on manager": {
+			wantError: queue.ErrClusterQueueDoesNotExist,
+		},
+		"cluster queue does not exist on cache": {
+			insertCqIntoManager: true,
+			wantError:           cache.ErrCqNotFound,
 		},
 	}
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			cq := utiltesting.MakeClusterQueue(cqName).
-				QueueingStrategy(kueue.StrictFIFO).Obj()
+				QueueingStrategy(kueue.StrictFIFO).
+				Generation(1).
+				Obj()
 			cq.Status = tc.cqStatus
 			lq := utiltesting.MakeLocalQueue(lqName, "").
 				ClusterQueue(cqName).Obj()
@@ -179,11 +206,15 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 				Build()
 			cqCache := cache.New(cl)
 			qManager := queue.NewManager(cl, cqCache)
-			if err := cqCache.AddClusterQueue(ctx, cq); err != nil {
-				t.Fatalf("Inserting clusterQueue in cache: %v", err)
+			if tc.insertCqIntoCache {
+				if err := cqCache.AddClusterQueue(ctx, cq); err != nil {
+					t.Fatalf("Inserting clusterQueue in cache: %v", err)
+				}
 			}
-			if err := qManager.AddClusterQueue(ctx, cq); err != nil {
-				t.Fatalf("Inserting clusterQueue in manager: %v", err)
+			if tc.insertCqIntoManager {
+				if err := qManager.AddClusterQueue(ctx, cq); err != nil {
+					t.Fatalf("Inserting clusterQueue in manager: %v", err)
+				}
 			}
 			if err := qManager.AddLocalQueue(ctx, lq); err != nil {
 				t.Fatalf("Inserting localQueue in manager: %v", err)
@@ -200,9 +231,9 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			if tc.newWl != nil {
 				r.qManager.AddOrUpdateWorkload(tc.newWl)
 			}
-			err := r.updateCqStatusIfChanged(ctx, cq, tc.newConditionStatus, tc.newReason, tc.newMessage)
-			if err != nil {
-				t.Errorf("Updating ClusterQueueStatus: %v", err)
+			gotError := r.updateCqStatusIfChanged(ctx, cq, tc.newConditionStatus, tc.newReason, tc.newMessage)
+			if diff := cmp.Diff(tc.wantError, gotError, cmpopts.EquateErrors()); len(diff) != 0 {
+				t.Errorf("Unexpected error (-want/+got):\n%s", diff)
 			}
 			configCmpOpts := []cmp.Option{
 				cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
@@ -217,9 +248,9 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 }
 
 type cqMetrics struct {
-	NominalDPs   []testingmetrics.GaugeDataPoint
-	BorrowingDPs []testingmetrics.GaugeDataPoint
-	UsageDPs     []testingmetrics.GaugeDataPoint
+	NominalDPs   []testingmetrics.MetricDataPoint
+	BorrowingDPs []testingmetrics.MetricDataPoint
+	UsageDPs     []testingmetrics.MetricDataPoint
 }
 
 func allMetricsForQueue(name string) cqMetrics {
@@ -230,8 +261,8 @@ func allMetricsForQueue(name string) cqMetrics {
 	}
 }
 
-func resourceDataPoint(cohort, name, flavor, res string, v float64) testingmetrics.GaugeDataPoint {
-	return testingmetrics.GaugeDataPoint{
+func resourceDataPoint(cohort, name, flavor, res string, v float64) testingmetrics.MetricDataPoint {
+	return testingmetrics.MetricDataPoint{
 		Labels: map[string]string{
 			"cohort":        cohort,
 			"cluster_queue": name,
@@ -292,13 +323,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"no change": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -306,13 +337,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"update-in-place": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -324,13 +355,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 				return ret
 			}(),
 			wantUpdatedMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 3),
 				},
 			},
@@ -338,13 +369,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"change-cohort": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -354,13 +385,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 				return ret
 			}(),
 			wantUpdatedMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort2", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort2", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort2", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -368,13 +399,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"add-rm-flavor": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -385,13 +416,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 				return ret
 			}(),
 			wantUpdatedMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor2", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor2", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor2", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -399,13 +430,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"add-rm-resource": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -416,13 +447,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 				return ret
 			}(),
 			wantUpdatedMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceMemory), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceMemory), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceMemory), 2),
 				},
 			},
@@ -430,13 +461,13 @@ func TestRecordResourceMetrics(t *testing.T) {
 		"drop-usage": {
 			queue: baseQueue.DeepCopy(),
 			wantMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
-				UsageDPs: []testingmetrics.GaugeDataPoint{
+				UsageDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -446,10 +477,10 @@ func TestRecordResourceMetrics(t *testing.T) {
 				return ret
 			}(),
 			wantUpdatedMetrics: cqMetrics{
-				NominalDPs: []testingmetrics.GaugeDataPoint{
+				NominalDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 1),
 				},
-				BorrowingDPs: []testingmetrics.GaugeDataPoint{
+				BorrowingDPs: []testingmetrics.MetricDataPoint{
 					resourceDataPoint("cohort", "name", "flavor", string(corev1.ResourceCPU), 2),
 				},
 			},
@@ -457,7 +488,7 @@ func TestRecordResourceMetrics(t *testing.T) {
 	}
 
 	opts := []cmp.Option{
-		cmpopts.SortSlices(func(a, b testingmetrics.GaugeDataPoint) bool { return a.Less(&b) }),
+		cmpopts.SortSlices(func(a, b testingmetrics.MetricDataPoint) bool { return a.Less(&b) }),
 		cmpopts.EquateEmpty(),
 	}
 
@@ -528,8 +559,9 @@ func TestClusterQueuePendingWorkloadsStatus(t *testing.T) {
 		},
 	}
 	for name, tc := range testCases {
-		defer features.SetFeatureGateDuringTest(t, features.QueueVisibility, tc.enableQueueVisibility)()
 		t.Run(name, func(t *testing.T) {
+			features.SetFeatureGateDuringTest(t, features.QueueVisibility, tc.enableQueueVisibility)
+
 			cq := utiltesting.MakeClusterQueue(cqName).
 				QueueingStrategy(kueue.StrictFIFO).Obj()
 			lq := utiltesting.MakeLocalQueue(lqName, "").

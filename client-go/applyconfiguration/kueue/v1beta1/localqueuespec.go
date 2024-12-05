@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,13 +21,14 @@ import (
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// LocalQueueSpecApplyConfiguration represents an declarative configuration of the LocalQueueSpec type for use
+// LocalQueueSpecApplyConfiguration represents a declarative configuration of the LocalQueueSpec type for use
 // with apply.
 type LocalQueueSpecApplyConfiguration struct {
 	ClusterQueue *v1beta1.ClusterQueueReference `json:"clusterQueue,omitempty"`
+	StopPolicy   *v1beta1.StopPolicy            `json:"stopPolicy,omitempty"`
 }
 
-// LocalQueueSpecApplyConfiguration constructs an declarative configuration of the LocalQueueSpec type for use with
+// LocalQueueSpecApplyConfiguration constructs a declarative configuration of the LocalQueueSpec type for use with
 // apply.
 func LocalQueueSpec() *LocalQueueSpecApplyConfiguration {
 	return &LocalQueueSpecApplyConfiguration{}
@@ -38,5 +39,13 @@ func LocalQueueSpec() *LocalQueueSpecApplyConfiguration {
 // If called multiple times, the ClusterQueue field is set to the value of the last call.
 func (b *LocalQueueSpecApplyConfiguration) WithClusterQueue(value v1beta1.ClusterQueueReference) *LocalQueueSpecApplyConfiguration {
 	b.ClusterQueue = &value
+	return b
+}
+
+// WithStopPolicy sets the StopPolicy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the StopPolicy field is set to the value of the last call.
+func (b *LocalQueueSpecApplyConfiguration) WithStopPolicy(value v1beta1.StopPolicy) *LocalQueueSpecApplyConfiguration {
+	b.StopPolicy = &value
 	return b
 }

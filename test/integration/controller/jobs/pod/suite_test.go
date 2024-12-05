@@ -35,12 +35,13 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/job"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	"sigs.k8s.io/kueue/pkg/controller/tas"
+	tasindexer "sigs.k8s.io/kueue/pkg/controller/tas/indexer"
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/scheduler"
 	"sigs.k8s.io/kueue/pkg/util/kubeversion"
 	"sigs.k8s.io/kueue/pkg/webhooks"
 	"sigs.k8s.io/kueue/test/integration/framework"
-	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -61,8 +62,36 @@ func TestAPIs(t *testing.T) {
 	)
 }
 
-func managerSetup(opts ...jobframework.Option) framework.ManagerSetup {
-	return func(mgr manager.Manager, ctx context.Context) {
+var _ = ginkgo.BeforeSuite(func() {
+	fwk = &framework.Framework{
+		CRDPath:     crdPath,
+		WebhookPath: webhookPath,
+	}
+	cfg = fwk.Init()
+	ctx, k8sClient = fwk.SetupClient(cfg)
+})
+
+var _ = ginkgo.AfterSuite(func() {
+	fwk.Teardown()
+})
+
+func managerSetup(
+	setupTASControllers bool,
+	enableScheduler bool,
+	configuration *config.Configuration,
+	opts ...jobframework.Option,
+) framework.ManagerSetup {
+	if configuration == nil {
+		configuration = &config.Configuration{}
+	}
+	if configuration.WaitForPodsReady != nil {
+		opts = append(opts, jobframework.WithWaitForPodsReady(configuration.WaitForPodsReady))
+	}
+	var queueOptions []queue.Option
+	if configuration.Resources != nil && len(configuration.Resources.ExcludeResourcePrefixes) > 0 {
+		queueOptions = append([]queue.Option{}, queue.WithExcludedResourcePrefixes(configuration.Resources.ExcludeResourcePrefixes))
+	}
+	return func(ctx context.Context, mgr manager.Manager) {
 		err := indexer.Setup(ctx, mgr.GetFieldIndexer())
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
@@ -77,55 +106,42 @@ func managerSetup(opts ...jobframework.Option) framework.ManagerSetup {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		// Job reconciler is enabled for "pod parent managed by queue" tests
+		err = job.SetupIndexes(ctx, mgr.GetFieldIndexer())
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
 		jobReconciler := job.NewReconciler(
 			mgr.GetClient(),
 			mgr.GetEventRecorderFor(constants.JobControllerName),
 			opts...)
 		err = jobReconciler.SetupWithManager(mgr)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		jobframework.EnableIntegration(job.FrameworkName)
 
 		cCache := cache.New(mgr.GetClient())
-		queues := queue.NewManager(mgr.GetClient(), cCache)
+		queues := queue.NewManager(mgr.GetClient(), cCache, queueOptions...)
 
-		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, &config.Configuration{})
+		mgr.GetScheme().Default(configuration)
+
+		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, configuration)
 		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "controller", failedCtrl)
 
 		err = pod.SetupWebhook(mgr, opts...)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		failedWebhook, err := webhooks.Setup(mgr)
 		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "webhook", failedWebhook)
-	}
-}
 
-func managerAndSchedulerSetup(opts ...jobframework.Option) framework.ManagerSetup {
-	return func(mgr manager.Manager, ctx context.Context) {
-		err := indexer.Setup(ctx, mgr.GetFieldIndexer())
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		if setupTASControllers {
+			failedCtrl, err = tas.SetupControllers(mgr, queues, cCache, configuration)
+			gomega.Expect(err).ToNot(gomega.HaveOccurred(), "TAS controller", failedCtrl)
 
-		err = pod.SetupIndexes(ctx, mgr.GetFieldIndexer())
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			err = tasindexer.SetupIndexes(ctx, mgr.GetFieldIndexer())
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
 
-		reconciler := pod.NewReconciler(
-			mgr.GetClient(),
-			mgr.GetEventRecorderFor(constants.JobControllerName),
-			opts...)
-		err = reconciler.SetupWithManager(mgr)
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-
-		cCache := cache.New(mgr.GetClient())
-		queues := queue.NewManager(mgr.GetClient(), cCache)
-
-		failedCtrl, err := core.SetupControllers(mgr, queues, cCache, &config.Configuration{})
-		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "controller", failedCtrl)
-
-		err = pod.SetupWebhook(mgr, opts...)
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-
-		failedWebhook, err := webhooks.Setup(mgr)
-		gomega.Expect(err).ToNot(gomega.HaveOccurred(), "webhook", failedWebhook)
-
-		sched := scheduler.New(queues, cCache, mgr.GetClient(), mgr.GetEventRecorderFor(constants.AdmissionName))
-		err = sched.Start(ctx)
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		if enableScheduler {
+			sched := scheduler.New(queues, cCache, mgr.GetClient(), mgr.GetEventRecorderFor(constants.AdmissionName))
+			err := sched.Start(ctx)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
 	}
 }

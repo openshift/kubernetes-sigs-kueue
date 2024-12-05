@@ -17,23 +17,28 @@ limitations under the License.
 package mxjob
 
 import (
+	"strings"
+
 	"github.com/google/go-cmp/cmp/cmpopts"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
+	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
-	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	workloadmxjob "sigs.k8s.io/kueue/pkg/controller/jobs/kubeflow/jobs/mxjob"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/kubeflow/kubeflowjob"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/util/testing"
 	testingmxjob "sigs.k8s.io/kueue/pkg/util/testingjobs/mxjob"
+	testingnode "sigs.k8s.io/kueue/pkg/util/testingjobs/node"
 	kftesting "sigs.k8s.io/kueue/test/integration/controller/jobs/kubeflow"
 	"sigs.k8s.io/kueue/test/integration/framework"
 	"sigs.k8s.io/kueue/test/util"
@@ -46,29 +51,23 @@ const (
 	priorityValue     = 10
 )
 
-var (
-	ignoreConditionTimestamps = cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")
-)
-
-// +kubebuilder:docs-gen:collapse=Imports
-
-var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
-
+var _ = ginkgo.Describe("Job controller", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
+		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true),
+			jobframework.WithManagedJobsNamespaceSelector(util.NewNamespaceSelectorExcluding("unmanaged-ns"))))
+		unmanagedNamespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "unmanaged-ns",
+			},
 		}
-		cfg = fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true)))
-	})
-	ginkgo.AfterAll(func() {
-		fwk.Teardown()
+		gomega.Expect(k8sClient.Create(ctx, unmanagedNamespace)).To(gomega.Succeed())
 	})
 
+	ginkgo.AfterAll(func() {
+		fwk.StopManager(ctx)
+	})
 	var (
-		ns          *corev1.Namespace
-		wlLookupKey types.NamespacedName
+		ns *corev1.Namespace
 	)
 	ginkgo.BeforeEach(func() {
 		ns = &corev1.Namespace{
@@ -77,7 +76,6 @@ var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailu
 			},
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
-		wlLookupKey = types.NamespacedName{Name: workloadmxjob.GetWorkloadNameForMXJob(jobName), Namespace: ns.Name}
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -87,52 +85,46 @@ var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailu
 		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(testingmxjob.MakeMXJob(jobName, ns.Name).Obj())}
 		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(&kftraining.MXJob{})}
 
-		kftesting.ShouldReconcileJob(ctx, k8sClient, kfJob, createdJob, ns, wlLookupKey, []kftesting.PodSetsResource{
+		kftesting.ShouldReconcileJob(ctx, k8sClient, kfJob, createdJob, []kftesting.PodSetsResource{
 			{
-				NodeName:    kftraining.MXJobReplicaTypeScheduler,
+				RoleName:    kftraining.MXJobReplicaTypeScheduler,
 				ResourceCPU: "on-demand",
 			},
 			{
-				NodeName:    kftraining.MXJobReplicaTypeServer,
+				RoleName:    kftraining.MXJobReplicaTypeServer,
 				ResourceCPU: "spot",
 			},
 			{
-				NodeName:    kftraining.MXJobReplicaTypeWorker,
+				RoleName:    kftraining.MXJobReplicaTypeWorker,
 				ResourceCPU: "spot",
 			},
 		})
 	})
+
+	ginkgo.It("Should not manage a job without a queue-name submittted to an unmanaged namespace", func() {
+		ginkgo.By("Creating an unsuspended job without a queue-name in unmanaged-ns")
+		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(testingmxjob.MakeMXJob(jobName, "unmanaged-ns").Suspend(false).Obj())}
+		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(&kftraining.MXJob{})}
+		kftesting.ShouldNotReconcileUnmanagedJob(ctx, k8sClient, kfJob, createdJob)
+	})
 })
 
-var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
-	type podsReadyTestSpec struct {
-		beforeJobStatus *kftraining.JobStatus
-		beforeCondition *metav1.Condition
-		jobStatus       kftraining.JobStatus
-		suspended       bool
-		wantCondition   *metav1.Condition
-	}
-
+var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	var (
 		ns            *corev1.Namespace
-		wlLookupKey   types.NamespacedName
-		defaultFlavor = testing.MakeResourceFlavor("default").Label(instanceKey, "default").Obj()
+		defaultFlavor = testing.MakeResourceFlavor("default").NodeLabel(instanceKey, "default").Obj()
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
-		}
-		cfg := fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithWaitForPodsReady(true)))
+		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true})))
 
 		ginkgo.By("Create a resource flavor")
 		gomega.Expect(k8sClient.Create(ctx, defaultFlavor)).Should(gomega.Succeed())
 	})
+
 	ginkgo.AfterAll(func() {
-		util.ExpectResourceFlavorToBeDeleted(ctx, k8sClient, defaultFlavor, true)
-		fwk.Teardown()
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, defaultFlavor, true)
+		fwk.StopManager(ctx)
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -142,114 +134,41 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 			},
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
-		wlLookupKey = types.NamespacedName{Name: workloadmxjob.GetWorkloadNameForMXJob(jobName), Namespace: ns.Name}
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
 	})
 
 	ginkgo.DescribeTable("Single job at different stages of progress towards completion",
-		func(podsReadyTestSpec podsReadyTestSpec) {
-			ginkgo.By("Create a job")
-			job := testingmxjob.MakeMXJob(jobName, ns.Name).Parallelism(2, 2).Obj()
-			jobQueueName := "test-queue"
-			job.Annotations = map[string]string{constants.QueueAnnotation: jobQueueName}
-			gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
-			lookupKey := types.NamespacedName{Name: jobName, Namespace: ns.Name}
-			createdJob := &kftraining.MXJob{}
-			gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+		func(podsReadyTestSpec kftesting.PodsReadyTestSpec) {
+			kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(testingmxjob.MakeMXJob(jobName, ns.Name).Parallelism(2, 2).Obj())}
+			createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(&kftraining.MXJob{})}
 
-			ginkgo.By("Fetch the workload created for the job")
-			createdWorkload := &kueue.Workload{}
-			gomega.Eventually(func() error {
-				return k8sClient.Get(ctx, wlLookupKey, createdWorkload)
-			}, util.Timeout, util.Interval).Should(gomega.Succeed())
-
-			ginkgo.By("Admit the workload created for the job")
-			admission := testing.MakeAdmission("foo").
-				PodSets(
-					kueue.PodSetAssignment{
-						Name: "Chief",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: "default",
-						},
-						Count: ptr.To(createdWorkload.Spec.PodSets[0].Count),
-					},
-					kueue.PodSetAssignment{
-						Name: "PS",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: "default",
-						},
-						Count: ptr.To(createdWorkload.Spec.PodSets[1].Count),
-					},
-					kueue.PodSetAssignment{
-						Name: "Worker",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: "default",
-						},
-						Count: ptr.To(createdWorkload.Spec.PodSets[2].Count),
-					},
-				).
-				Obj()
-			gomega.Expect(util.SetQuotaReservation(ctx, k8sClient, createdWorkload, admission)).Should(gomega.Succeed())
-			util.SyncAdmittedConditionForWorkloads(ctx, k8sClient, createdWorkload)
-			gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
-
-			ginkgo.By("Await for the job to be unsuspended")
-			gomega.Eventually(func() *bool {
-				gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-				return createdJob.Spec.RunPolicy.Suspend
-			}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
-
-			if podsReadyTestSpec.beforeJobStatus != nil {
-				ginkgo.By("Update the job status to simulate its initial progress towards completion")
-				createdJob.Status = *podsReadyTestSpec.beforeJobStatus
-				gomega.Expect(k8sClient.Status().Update(ctx, createdJob)).Should(gomega.Succeed())
-				gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-			}
-
-			if podsReadyTestSpec.beforeCondition != nil {
-				ginkgo.By("Update the workload status")
-				gomega.Eventually(func() *metav1.Condition {
-					gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
-					return apimeta.FindStatusCondition(createdWorkload.Status.Conditions, kueue.WorkloadPodsReady)
-				}, util.Timeout, util.Interval).Should(gomega.BeComparableTo(podsReadyTestSpec.beforeCondition, ignoreConditionTimestamps))
-			}
-
-			ginkgo.By("Update the job status to simulate its progress towards completion")
-			createdJob.Status = podsReadyTestSpec.jobStatus
-			gomega.Expect(k8sClient.Status().Update(ctx, createdJob)).Should(gomega.Succeed())
-			gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-
-			if podsReadyTestSpec.suspended {
-				ginkgo.By("Unset admission of the workload to suspend the job")
-				gomega.Eventually(func() error {
-					// the update may need to be retried due to a conflict as the workload gets
-					// also updated due to setting of the job status.
-					if err := k8sClient.Get(ctx, wlLookupKey, createdWorkload); err != nil {
-						return err
-					}
-					return util.SetQuotaReservation(ctx, k8sClient, createdWorkload, nil)
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
-				util.SyncAdmittedConditionForWorkloads(ctx, k8sClient, createdWorkload)
-			}
-
-			ginkgo.By("Verify the PodsReady condition is added")
-			gomega.Eventually(func() *metav1.Condition {
-				gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
-				return apimeta.FindStatusCondition(createdWorkload.Status.Conditions, kueue.WorkloadPodsReady)
-			}, util.Timeout, util.Interval).Should(gomega.BeComparableTo(podsReadyTestSpec.wantCondition, ignoreConditionTimestamps))
+			kftesting.JobControllerWhenWaitForPodsReadyEnabled(ctx, k8sClient, kfJob, createdJob, podsReadyTestSpec, []kftesting.PodSetsResource{
+				{
+					RoleName:    kftraining.MXJobReplicaTypeScheduler,
+					ResourceCPU: "default",
+				},
+				{
+					RoleName:    kftraining.MXJobReplicaTypeServer,
+					ResourceCPU: "default",
+				},
+				{
+					RoleName:    kftraining.MXJobReplicaTypeWorker,
+					ResourceCPU: "default",
+				},
+			})
 		},
-		ginkgo.Entry("No progress", podsReadyTestSpec{
-			wantCondition: &metav1.Condition{
+		ginkgo.Entry("No progress", kftesting.PodsReadyTestSpec{
+			WantCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionFalse,
 				Reason:  "PodsReady",
 				Message: "Not all pods are ready or succeeded",
 			},
 		}),
-		ginkgo.Entry("Running MXJob", podsReadyTestSpec{
-			jobStatus: kftraining.JobStatus{
+		ginkgo.Entry("Running MXJob", kftesting.PodsReadyTestSpec{
+			JobStatus: kftraining.JobStatus{
 				Conditions: []kftraining.JobCondition{
 					{
 						Type:   kftraining.JobRunning,
@@ -258,21 +177,21 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 					},
 				},
 			},
-			wantCondition: &metav1.Condition{
+			WantCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionTrue,
 				Reason:  "PodsReady",
 				Message: "All pods were ready or succeeded since the workload admission",
 			},
 		}),
-		ginkgo.Entry("Running MXJob; PodsReady=False before", podsReadyTestSpec{
-			beforeCondition: &metav1.Condition{
+		ginkgo.Entry("Running MXJob; PodsReady=False before", kftesting.PodsReadyTestSpec{
+			BeforeCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionFalse,
 				Reason:  "PodsReady",
 				Message: "Not all pods are ready or succeeded",
 			},
-			jobStatus: kftraining.JobStatus{
+			JobStatus: kftraining.JobStatus{
 				Conditions: []kftraining.JobCondition{
 					{
 						Type:   kftraining.JobRunning,
@@ -281,15 +200,15 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 					},
 				},
 			},
-			wantCondition: &metav1.Condition{
+			WantCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionTrue,
 				Reason:  "PodsReady",
 				Message: "All pods were ready or succeeded since the workload admission",
 			},
 		}),
-		ginkgo.Entry("Job suspended; PodsReady=True before", podsReadyTestSpec{
-			beforeJobStatus: &kftraining.JobStatus{
+		ginkgo.Entry("Job suspended; PodsReady=True before", kftesting.PodsReadyTestSpec{
+			BeforeJobStatus: &kftraining.JobStatus{
 				Conditions: []kftraining.JobCondition{
 					{
 						Type:   kftraining.JobRunning,
@@ -298,13 +217,13 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 					},
 				},
 			},
-			beforeCondition: &metav1.Condition{
+			BeforeCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionTrue,
 				Reason:  "PodsReady",
 				Message: "All pods were ready or succeeded since the workload admission",
 			},
-			jobStatus: kftraining.JobStatus{
+			JobStatus: kftraining.JobStatus{
 				Conditions: []kftraining.JobCondition{
 					{
 						Type:   kftraining.JobRunning,
@@ -313,8 +232,8 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 					},
 				},
 			},
-			suspended: true,
-			wantCondition: &metav1.Condition{
+			Suspended: true,
+			WantCondition: &metav1.Condition{
 				Type:    kueue.WorkloadPodsReady,
 				Status:  metav1.ConditionFalse,
 				Reason:  "PodsReady",
@@ -324,7 +243,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 	)
 })
 
-var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+var _ = ginkgo.Describe("Job controller interacting with scheduler", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	var (
 		ns                  *corev1.Namespace
 		onDemandFlavor      *kueue.ResourceFlavor
@@ -334,15 +253,11 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
-		}
-		cfg := fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerAndSchedulerSetup())
+		fwk.StartManager(ctx, cfg, managerAndSchedulerSetup(false))
 	})
+
 	ginkgo.AfterAll(func() {
-		fwk.Teardown()
+		fwk.StopManager(ctx)
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -353,10 +268,10 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
 
-		onDemandFlavor = testing.MakeResourceFlavor("on-demand").Label(instanceKey, "on-demand").Obj()
+		onDemandFlavor = testing.MakeResourceFlavor("on-demand").NodeLabel(instanceKey, "on-demand").Obj()
 		gomega.Expect(k8sClient.Create(ctx, onDemandFlavor)).Should(gomega.Succeed())
 
-		spotUntaintedFlavor = testing.MakeResourceFlavor("spot-untainted").Label(instanceKey, "spot-untainted").Obj()
+		spotUntaintedFlavor = testing.MakeResourceFlavor("spot-untainted").NodeLabel(instanceKey, "spot-untainted").Obj()
 		gomega.Expect(k8sClient.Create(ctx, spotUntaintedFlavor)).Should(gomega.Succeed())
 
 		clusterQueue = testing.MakeClusterQueue("dev-clusterqueue").
@@ -368,9 +283,9 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
-		util.ExpectClusterQueueToBeDeleted(ctx, k8sClient, clusterQueue, true)
-		util.ExpectResourceFlavorToBeDeleted(ctx, k8sClient, onDemandFlavor, true)
-		gomega.Expect(util.DeleteResourceFlavor(ctx, k8sClient, spotUntaintedFlavor)).To(gomega.Succeed())
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, onDemandFlavor, true)
+		gomega.Expect(util.DeleteObject(ctx, k8sClient, spotUntaintedFlavor)).To(gomega.Succeed())
 	})
 
 	ginkgo.It("Should schedule jobs as they fit in their ClusterQueue", func() {
@@ -378,23 +293,188 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
 		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
 
-		ginkgo.By("checking a dev job starts")
-		job := testingmxjob.MakeMXJob("dev-job", ns.Name).Queue(localQueue.Name).
-			Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "3").
-			Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "4").
-			Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "4").
+		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(
+			testingmxjob.MakeMXJob(jobName, ns.Name).Queue(localQueue.Name).
+				Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "3").
+				Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "4").
+				Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "4").
+				Obj(),
+		)}
+		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(&kftraining.MXJob{})}
+
+		kftesting.ShouldScheduleJobsAsTheyFitInTheirClusterQueue(ctx, k8sClient, kfJob, createdJob, clusterQueue, []kftesting.PodSetsResource{
+			{
+				RoleName:    kftraining.MXJobReplicaTypeScheduler,
+				ResourceCPU: kueue.ResourceFlavorReference(spotUntaintedFlavor.Name),
+			},
+			{
+				RoleName:    kftraining.MXJobReplicaTypeServer,
+				ResourceCPU: kueue.ResourceFlavorReference(spotUntaintedFlavor.Name),
+			},
+			{
+				RoleName:    kftraining.MXJobReplicaTypeWorker,
+				ResourceCPU: kueue.ResourceFlavorReference(onDemandFlavor.Name),
+			},
+		})
+	})
+})
+
+var _ = ginkgo.Describe("MXJob controller when TopologyAwareScheduling enabled", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+	const (
+		nodeGroupLabel = "node-group"
+		tasBlockLabel  = "cloud.com/topology-block"
+		tasRackLabel   = "cloud.com/topology-rack"
+	)
+
+	var (
+		ns           *corev1.Namespace
+		nodes        []corev1.Node
+		topology     *kueuealpha.Topology
+		tasFlavor    *kueue.ResourceFlavor
+		clusterQueue *kueue.ClusterQueue
+		localQueue   *kueue.LocalQueue
+	)
+
+	ginkgo.BeforeAll(func() {
+		fwk.StartManager(ctx, cfg, managerAndSchedulerSetup(true))
+	})
+
+	ginkgo.AfterAll(func() {
+		fwk.StopManager(ctx)
+	})
+
+	ginkgo.BeforeEach(func() {
+		features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.TopologyAwareScheduling, true)
+
+		ns = &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "tas-mxjob-",
+			},
+		}
+		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+
+		nodes = []corev1.Node{
+			*testingnode.MakeNode("b1r1").
+				Label(nodeGroupLabel, "tas").
+				Label(tasBlockLabel, "b1").
+				Label(tasRackLabel, "r1").
+				StatusAllocatable(corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("1Gi"),
+				}).
+				Ready().
+				Obj(),
+		}
+		util.CreateNodes(ctx, k8sClient, nodes)
+
+		topology = testing.MakeTopology("default").Levels([]string{
+			tasBlockLabel, tasRackLabel,
+		}).Obj()
+		gomega.Expect(k8sClient.Create(ctx, topology)).Should(gomega.Succeed())
+
+		tasFlavor = testing.MakeResourceFlavor("tas-flavor").
+			NodeLabel(nodeGroupLabel, "tas").
+			TopologyName("default").Obj()
+		gomega.Expect(k8sClient.Create(ctx, tasFlavor)).Should(gomega.Succeed())
+
+		clusterQueue = testing.MakeClusterQueue("cluster-queue").
+			ResourceGroup(*testing.MakeFlavorQuotas(tasFlavor.Name).Resource(corev1.ResourceCPU, "5").Obj()).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
-		createdJob := &kftraining.MXJob{}
-		gomega.Eventually(func() *bool {
-			gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: job.Name, Namespace: job.Namespace}, createdJob)).
-				Should(gomega.Succeed())
-			return createdJob.Spec.RunPolicy.Suspend
-		}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
-		gomega.Expect(createdJob.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeScheduler].Template.Spec.NodeSelector[instanceKey]).Should(gomega.Equal(spotUntaintedFlavor.Name))
-		gomega.Expect(createdJob.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeServer].Template.Spec.NodeSelector[instanceKey]).Should(gomega.Equal(spotUntaintedFlavor.Name))
-		gomega.Expect(createdJob.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeWorker].Template.Spec.NodeSelector[instanceKey]).Should(gomega.Equal(onDemandFlavor.Name))
-		util.ExpectPendingWorkloadsMetric(clusterQueue, 0, 0)
-		util.ExpectReservingActiveWorkloadsMetric(clusterQueue, 1)
+		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
+
+		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
+		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+	})
+
+	ginkgo.AfterEach(func() {
+		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, tasFlavor, true)
+		gomega.Expect(util.DeleteObject(ctx, k8sClient, topology)).Should(gomega.Succeed())
+		for _, node := range nodes {
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, &node, true)
+		}
+	})
+
+	ginkgo.It("should admit workload which fits in a required topology domain", func() {
+		mxJob := testingmxjob.MakeMXJob("mxjob", ns.Name).
+			Queue(localQueue.Name).
+			Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "100m").
+			Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "100m").
+			Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "100m").
+			PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetRequiredTopologyAnnotation, tasBlockLabel).
+			PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetRequiredTopologyAnnotation, tasBlockLabel).
+			PodAnnotation(kftraining.MXJobReplicaTypeWorker, kueuealpha.PodSetPreferredTopologyAnnotation, tasRackLabel).
+			Obj()
+		ginkgo.By("creating a MXJob", func() {
+			gomega.Expect(k8sClient.Create(ctx, mxJob)).Should(gomega.Succeed())
+		})
+
+		wl := &kueue.Workload{}
+		wlLookupKey := types.NamespacedName{Name: workloadmxjob.GetWorkloadNameForMXJob(mxJob.Name, mxJob.UID), Namespace: ns.Name}
+
+		ginkgo.By("verify the workload is created", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, wlLookupKey, wl)).Should(gomega.Succeed())
+				g.Expect(wl.Spec.PodSets).Should(gomega.BeComparableTo([]kueue.PodSet{
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeScheduler)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Required:      ptr.To(tasBlockLabel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeServer)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Required:      ptr.To(tasBlockLabel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeWorker)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Preferred:     ptr.To(tasRackLabel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+				}, cmpopts.IgnoreFields(kueue.PodSet{}, "Template")))
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+		})
+
+		ginkgo.By("verify the workload is admitted", func() {
+			util.ExpectWorkloadsToBeAdmitted(ctx, k8sClient, wl)
+			util.ExpectReservingActiveWorkloadsMetric(clusterQueue, 1)
+		})
+
+		ginkgo.By("verify admission for the workload", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, wlLookupKey, wl)).Should(gomega.Succeed())
+				g.Expect(wl.Status.Admission).ShouldNot(gomega.BeNil())
+				g.Expect(wl.Status.Admission.PodSetAssignments).Should(gomega.HaveLen(3))
+				g.Expect(wl.Status.Admission.PodSetAssignments[0].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{tasBlockLabel, tasRackLabel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+				g.Expect(wl.Status.Admission.PodSetAssignments[1].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{tasBlockLabel, tasRackLabel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+				g.Expect(wl.Status.Admission.PodSetAssignments[1].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{tasBlockLabel, tasRackLabel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+		})
 	})
 })

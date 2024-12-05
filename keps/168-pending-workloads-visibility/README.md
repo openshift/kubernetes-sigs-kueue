@@ -43,8 +43,8 @@ tags, and then generate with `hack/update-toc.sh`.
     - [Unit Tests](#unit-tests)
     - [Integration tests](#integration-tests)
   - [Graduation Criteria](#graduation-criteria)
-    - [Beta](#beta)
-    - [Stable](#stable)
+    - [Alpha](#alpha)
+    - [Deprecation](#deprecation)
 - [Implementation History](#implementation-history)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
@@ -515,7 +515,7 @@ After the implementation PR is merged, add the names of the tests here.
 
 ### Graduation Criteria
 
-#### Beta
+#### Alpha
 
 First iteration (0.5):
 
@@ -530,9 +530,19 @@ Third iteration (0.7):
 
 - reevaluate the need for exposing positions and support if needed
 
-#### Stable
+#### Deprecation
 
-- drop the feature gate
+We deprecate the feature, and going to remove it in feature versions of the API,
+in favor of monitoring pending workloads using the [on-demand visibility API](https://kueue.sigs.k8s.io/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/).
+
+First iteration (0.9):
+
+- deprecate the QueueVisibility feature gate and corresponding API.
+
+Second iteration (v1beta2):
+
+- remove the QueueVisibility feature gate,
+- remove PendingWorkloadsStatus field from ClusterQueue object and QueueVisibility field from Config object on bumping the API version.
 
 <!--
 
@@ -605,7 +615,7 @@ Pros:
 Cons:
 - it requires a substantial number of requests when a workload is admitted, or
   a high priority workload is inserted. For example, assuming 1000 workloads,
-  and expotential bucketing with base 2, this is 10 requests.
+  and exponential bucketing with base 2, this is 10 requests.
 - it is not clear if the coarse-grained information would satisfy user
   expectations. For example, a user may need to wait long to observe reduction
   of a bucket.

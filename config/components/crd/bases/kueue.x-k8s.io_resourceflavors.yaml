@@ -130,6 +130,14 @@ spec:
                 type: array
                 x-kubernetes-list-type: atomic
             type: object
+<<<<<<< HEAD
+=======
+            x-kubernetes-validations:
+            - message: at least one nodeLabel is required when topology is set
+              rule: '!has(self.topologyName) || self.nodeLabels.size() >= 1'
+            - message: resourceFlavorSpec are immutable when topologyName is set
+              rule: '!has(oldSelf.topologyName) || self == oldSelf'
+>>>>>>> kueue-upstream/main
         type: object
     served: true
     storage: true

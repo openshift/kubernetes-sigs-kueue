@@ -21,11 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-//+genclient
-//+genclient:nonNamespaced
-//+kubebuilder:object:root=true
-//+kubebuilder:storageversion
-//+kubebuilder:resource:scope=Cluster,shortName={flavor,flavors}
+// +genclient
+// +genclient:nonNamespaced
+// +kubebuilder:object:root=true
+// +kubebuilder:storageversion
+// +kubebuilder:resource:scope=Cluster,shortName={flavor,flavors,rf}
 
 // ResourceFlavor is the Schema for the resourceflavors API.
 type ResourceFlavor struct {
@@ -35,7 +35,14 @@ type ResourceFlavor struct {
 	Spec ResourceFlavorSpec `json:"spec,omitempty"`
 }
 
+// TopologyReference is the name of the Topology.
+// +kubebuilder:validation:MaxLength=253
+// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+type TopologyReference string
+
 // ResourceFlavorSpec defines the desired state of the ResourceFlavor
+// +kubebuilder:validation:XValidation:rule="!has(self.topologyName) || self.nodeLabels.size() >= 1", message="at least one nodeLabel is required when topology is set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.topologyName) || self == oldSelf", message="resourceFlavorSpec are immutable when topologyName is set"
 type ResourceFlavorSpec struct {
 	// nodeLabels are labels that associate the ResourceFlavor with Nodes that
 	// have the same labels.
@@ -65,6 +72,7 @@ type ResourceFlavorSpec struct {
 	// +optional
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(x, x.effect in ['NoSchedule', 'PreferNoSchedule', 'NoExecute'])", message="supported taint effect values: 'NoSchedule', 'PreferNoSchedule', 'NoExecute'"
 	NodeTaints []corev1.Taint `json:"nodeTaints,omitempty"`
 
 	// tolerations are extra tolerations that will be added to the pods admitted in
@@ -78,10 +86,22 @@ type ResourceFlavorSpec struct {
 	// +optional
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.key) ? x.operator == 'Exists' : true)", message="operator must be Exists when 'key' is empty, which means 'match all values and all keys'"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, has(x.tolerationSeconds) ? x.effect == 'NoExecute' : true)", message="effect must be 'NoExecute' when 'tolerationSeconds' is set"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.operator) || x.operator in ['Equal', 'Exists'])", message="supported toleration values: 'Equal'(default), 'Exists'"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, has(x.operator) && x.operator == 'Exists' ? !has(x.value) : true)", message="a value must be empty when 'operator' is 'Exists'"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.effect) || x.effect in ['NoSchedule', 'PreferNoSchedule', 'NoExecute'])", message="supported taint effect values: 'NoSchedule', 'PreferNoSchedule', 'NoExecute'"
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// topologyName indicates topology for the TAS ResourceFlavor.
+	// When specified, it enables scraping of the topology information from the
+	// nodes matching to the Resource Flavor node labels.
+	//
+	// +optional
+	TopologyName *TopologyReference `json:"topologyName,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ResourceFlavorList contains a list of ResourceFlavor
 type ResourceFlavorList struct {

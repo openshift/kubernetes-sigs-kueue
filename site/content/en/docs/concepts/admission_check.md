@@ -81,8 +81,16 @@ Kueue ensures that the list of the Workloads AdmissionCheckStates is in sync wit
 
 ### Admission Check Controller
 
+<<<<<<< HEAD
 Is a component that monitors Workloads maintaining the content of its specific `admissionCheckStates` and the `Active` condition of the AdmissionChecks it's  controlling.
 The logic for how an AdmissionCheck changes states is not part of Kueue.
+=======
+If any of the Workload's AdmissionCheck is in the `Rejected` state:
+  - Workload is deactivated - [`workload.Spec.Active`](docs/concepts/workload/#active) is set to `False`
+  - If `Admitted` the Workload is evicted - Workload has an `Evicted` condition in `workload.Status.Condition` with `Deactivated` as a `Reason`
+  - If the Workload has `QuotaReservation` it will be released.
+  - Event `AdmissionCheckRejected` is emitted
+>>>>>>> kueue-upstream/main
 
 ## What's next?
 

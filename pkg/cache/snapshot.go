@@ -17,134 +17,148 @@ limitations under the License.
 package cache
 
 import (
-	corev1 "k8s.io/api/core/v1"
+	"context"
+	"fmt"
+	"maps"
+
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/klog/v2"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/hierarchy"
+	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 type Snapshot struct {
-	ClusterQueues            map[string]*ClusterQueue
+	hierarchy.Manager[*ClusterQueueSnapshot, *CohortSnapshot]
 	ResourceFlavors          map[kueue.ResourceFlavorReference]*kueue.ResourceFlavor
 	InactiveClusterQueueSets sets.Set[string]
 }
 
 // RemoveWorkload removes a workload from its corresponding ClusterQueue and
-// updates resources usage.
+// updates resource usage.
 func (s *Snapshot) RemoveWorkload(wl *workload.Info) {
 	cq := s.ClusterQueues[wl.ClusterQueue]
 	delete(cq.Workloads, workload.Key(wl.Obj))
-	updateUsage(wl, cq.Usage, -1)
-	if cq.Cohort != nil {
-		updateUsage(wl, cq.Cohort.Usage, -1)
-	}
+	cq.removeUsage(wl.FlavorResourceUsage())
 }
 
-// AddWorkload removes a workload from its corresponding ClusterQueue and
-// updates resources usage.
+// AddWorkload adds a workload from its corresponding ClusterQueue and
+// updates resource usage.
 func (s *Snapshot) AddWorkload(wl *workload.Info) {
 	cq := s.ClusterQueues[wl.ClusterQueue]
 	cq.Workloads[workload.Key(wl.Obj)] = wl
-	updateUsage(wl, cq.Usage, 1)
-	if cq.Cohort != nil {
-		updateUsage(wl, cq.Cohort.Usage, 1)
+	cq.AddUsage(wl.FlavorResourceUsage())
+}
+
+func (s *Snapshot) Log(log logr.Logger) {
+	for name, cq := range s.ClusterQueues {
+		cohortName := "<none>"
+		if cq.HasParent() {
+			cohortName = cq.Parent().Name
+		}
+
+		log.Info("Found ClusterQueue",
+			"clusterQueue", klog.KRef("", name),
+			"cohort", cohortName,
+			"resourceGroups", cq.ResourceGroups,
+			"usage", cq.ResourceNode.Usage,
+			"workloads", utilmaps.Keys(cq.Workloads),
+		)
+	}
+	for name, cohort := range s.Cohorts {
+		log.Info("Found cohort",
+			"cohort", name,
+			"resources", cohort.ResourceNode.SubtreeQuota,
+			"usage", cohort.ResourceNode.Usage,
+		)
 	}
 }
 
-func (c *Cache) Snapshot() Snapshot {
+func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	snap := Snapshot{
-		ClusterQueues:            make(map[string]*ClusterQueue, len(c.clusterQueues)),
+		Manager:                  hierarchy.NewManager(newCohortSnapshot),
 		ResourceFlavors:          make(map[kueue.ResourceFlavorReference]*kueue.ResourceFlavor, len(c.resourceFlavors)),
 		InactiveClusterQueueSets: sets.New[string](),
 	}
-	for _, cq := range c.clusterQueues {
-		if !cq.Active() {
+	for _, cohort := range c.hm.Cohorts {
+		if c.hm.CycleChecker.HasCycle(cohort) {
+			continue
+		}
+		snap.AddCohort(cohort.Name)
+		snap.Cohorts[cohort.Name].ResourceNode = cohort.resourceNode.Clone()
+		if cohort.HasParent() {
+			snap.UpdateCohortEdge(cohort.Name, cohort.Parent().Name)
+		}
+	}
+	tasSnapshots := make(map[kueue.ResourceFlavorReference]*TASFlavorSnapshot)
+	if features.Enabled(features.TopologyAwareScheduling) {
+		for key, cache := range c.tasCache.Clone() {
+			s, err := cache.snapshot(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("%w: failed to construct snapshot for TAS flavor: %q", err, key)
+			} else {
+				tasSnapshots[key] = s
+			}
+		}
+	}
+	for _, cq := range c.hm.ClusterQueues {
+		if !cq.Active() || (cq.HasParent() && c.hm.CycleChecker.HasCycle(cq.Parent())) {
 			snap.InactiveClusterQueueSets.Insert(cq.Name)
 			continue
 		}
-		snap.ClusterQueues[cq.Name] = cq.snapshot()
+		cqSnapshot := snapshotClusterQueue(cq)
+		snap.AddClusterQueue(cqSnapshot)
+		if cq.HasParent() {
+			snap.UpdateClusterQueueEdge(cq.Name, cq.Parent().Name)
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			for tasFlv, s := range tasSnapshots {
+				if cq.flavorInUse(tasFlv) {
+					cqSnapshot.TASFlavors[tasFlv] = s
+				}
+			}
+		}
 	}
 	for name, rf := range c.resourceFlavors {
 		// Shallow copy is enough
 		snap.ResourceFlavors[name] = rf
 	}
-	for _, cohort := range c.cohorts {
-		cohortCopy := newCohort(cohort.Name, cohort.Members.Len())
-		cohortCopy.AllocatableResourceGeneration = 0
-		for cq := range cohort.Members {
-			if cq.Active() {
-				cqCopy := snap.ClusterQueues[cq.Name]
-				cqCopy.accumulateResources(cohortCopy)
-				cqCopy.Cohort = cohortCopy
-				cohortCopy.Members.Insert(cqCopy)
-				cohortCopy.AllocatableResourceGeneration += cqCopy.AllocatableResourceGeneration
-			}
-		}
-	}
-	return snap
+	return &snap, nil
 }
 
-// snapshot creates a copy of ClusterQueue that includes references to immutable
-// objects and deep copies of changing ones. A reference to the cohort is not included.
-func (c *ClusterQueue) snapshot() *ClusterQueue {
-	cc := &ClusterQueue{
+// snapshotClusterQueue creates a copy of ClusterQueue that includes
+// references to immutable objects and deep copies of changing ones.
+func snapshotClusterQueue(c *clusterQueue) *ClusterQueueSnapshot {
+	cc := &ClusterQueueSnapshot{
 		Name:                          c.Name,
-		ResourceGroups:                c.ResourceGroups, // Shallow copy is enough.
-		RGByResource:                  c.RGByResource,   // Shallow copy is enough.
+		ResourceGroups:                make([]ResourceGroup, len(c.ResourceGroups)),
 		FlavorFungibility:             c.FlavorFungibility,
+		FairWeight:                    c.FairWeight,
 		AllocatableResourceGeneration: c.AllocatableResourceGeneration,
-		Usage:                         make(FlavorResourceQuantities, len(c.Usage)),
-		Workloads:                     make(map[string]*workload.Info, len(c.Workloads)),
+		Workloads:                     maps.Clone(c.Workloads),
 		Preemption:                    c.Preemption,
 		NamespaceSelector:             c.NamespaceSelector,
 		Status:                        c.Status,
-		AdmissionChecks:               c.AdmissionChecks.Clone(),
+		AdmissionChecks:               utilmaps.DeepCopySets[kueue.ResourceFlavorReference](c.AdmissionChecks),
+		ResourceNode:                  c.resourceNode.Clone(),
+		TASFlavors:                    make(map[kueue.ResourceFlavorReference]*TASFlavorSnapshot),
 	}
-	for fName, rUsage := range c.Usage {
-		rUsageCopy := make(map[corev1.ResourceName]int64, len(rUsage))
-		for k, v := range rUsage {
-			rUsageCopy[k] = v
-		}
-		cc.Usage[fName] = rUsageCopy
-	}
-	for k, v := range c.Workloads {
-		// Shallow copy is enough.
-		cc.Workloads[k] = v
+	for i, rg := range c.ResourceGroups {
+		cc.ResourceGroups[i] = rg.Clone()
 	}
 	return cc
 }
 
-func (c *ClusterQueue) accumulateResources(cohort *Cohort) {
-	if cohort.RequestableResources == nil {
-		cohort.RequestableResources = make(FlavorResourceQuantities, len(c.ResourceGroups))
-	}
-	for _, rg := range c.ResourceGroups {
-		for _, flvQuotas := range rg.Flavors {
-			res := cohort.RequestableResources[flvQuotas.Name]
-			if res == nil {
-				res = make(map[corev1.ResourceName]int64, len(flvQuotas.Resources))
-				cohort.RequestableResources[flvQuotas.Name] = res
-			}
-			for rName, rQuota := range flvQuotas.Resources {
-				res[rName] += rQuota.Nominal
-			}
-		}
-	}
-	if cohort.Usage == nil {
-		cohort.Usage = make(FlavorResourceQuantities, len(c.Usage))
-	}
-	for fName, resUsages := range c.Usage {
-		used := cohort.Usage[fName]
-		if used == nil {
-			used = make(map[corev1.ResourceName]int64, len(resUsages))
-			cohort.Usage[fName] = used
-		}
-		for res, val := range resUsages {
-			used[res] += val
-		}
+func newCohortSnapshot(name string) *CohortSnapshot {
+	return &CohortSnapshot{
+		Name:   name,
+		Cohort: hierarchy.NewCohort[*ClusterQueueSnapshot, *CohortSnapshot](),
 	}
 }

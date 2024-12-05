@@ -10,6 +10,29 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+<<<<<<< HEAD
+=======
+      path: /mutate-apps-v1-deployment
+  failurePolicy: Fail
+  name: mdeployment.kb.io
+  rules:
+  - apiGroups:
+    - apps
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - deployments
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+>>>>>>> kueue-upstream/main
       path: /mutate-batch-v1-job
   failurePolicy: Fail
   name: mjob.kb.io
@@ -200,6 +223,29 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+<<<<<<< HEAD
+=======
+      path: /mutate-apps-v1-statefulset
+  failurePolicy: Fail
+  name: mstatefulset.kb.io
+  rules:
+  - apiGroups:
+    - apps
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - statefulsets
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+>>>>>>> kueue-upstream/main
       path: /mutate-kueue-x-k8s-io-v1beta1-clusterqueue
   failurePolicy: Fail
   name: mclusterqueue.kb.io

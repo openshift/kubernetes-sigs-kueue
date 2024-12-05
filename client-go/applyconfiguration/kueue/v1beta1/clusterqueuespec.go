@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,23 +18,26 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 	kueuev1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// ClusterQueueSpecApplyConfiguration represents an declarative configuration of the ClusterQueueSpec type for use
+// ClusterQueueSpecApplyConfiguration represents a declarative configuration of the ClusterQueueSpec type for use
 // with apply.
 type ClusterQueueSpecApplyConfiguration struct {
-	ResourceGroups    []ResourceGroupApplyConfiguration         `json:"resourceGroups,omitempty"`
-	Cohort            *string                                   `json:"cohort,omitempty"`
-	QueueingStrategy  *kueuev1beta1.QueueingStrategy            `json:"queueingStrategy,omitempty"`
-	NamespaceSelector *v1.LabelSelector                         `json:"namespaceSelector,omitempty"`
-	FlavorFungibility *FlavorFungibilityApplyConfiguration      `json:"flavorFungibility,omitempty"`
-	Preemption        *ClusterQueuePreemptionApplyConfiguration `json:"preemption,omitempty"`
-	AdmissionChecks   []string                                  `json:"admissionChecks,omitempty"`
+	ResourceGroups          []ResourceGroupApplyConfiguration          `json:"resourceGroups,omitempty"`
+	Cohort                  *string                                    `json:"cohort,omitempty"`
+	QueueingStrategy        *kueuev1beta1.QueueingStrategy             `json:"queueingStrategy,omitempty"`
+	NamespaceSelector       *v1.LabelSelectorApplyConfiguration        `json:"namespaceSelector,omitempty"`
+	FlavorFungibility       *FlavorFungibilityApplyConfiguration       `json:"flavorFungibility,omitempty"`
+	Preemption              *ClusterQueuePreemptionApplyConfiguration  `json:"preemption,omitempty"`
+	AdmissionChecks         []string                                   `json:"admissionChecks,omitempty"`
+	AdmissionChecksStrategy *AdmissionChecksStrategyApplyConfiguration `json:"admissionChecksStrategy,omitempty"`
+	StopPolicy              *kueuev1beta1.StopPolicy                   `json:"stopPolicy,omitempty"`
+	FairSharing             *FairSharingApplyConfiguration             `json:"fairSharing,omitempty"`
 }
 
-// ClusterQueueSpecApplyConfiguration constructs an declarative configuration of the ClusterQueueSpec type for use with
+// ClusterQueueSpecApplyConfiguration constructs a declarative configuration of the ClusterQueueSpec type for use with
 // apply.
 func ClusterQueueSpec() *ClusterQueueSpecApplyConfiguration {
 	return &ClusterQueueSpecApplyConfiguration{}
@@ -72,8 +75,8 @@ func (b *ClusterQueueSpecApplyConfiguration) WithQueueingStrategy(value kueuev1b
 // WithNamespaceSelector sets the NamespaceSelector field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the NamespaceSelector field is set to the value of the last call.
-func (b *ClusterQueueSpecApplyConfiguration) WithNamespaceSelector(value v1.LabelSelector) *ClusterQueueSpecApplyConfiguration {
-	b.NamespaceSelector = &value
+func (b *ClusterQueueSpecApplyConfiguration) WithNamespaceSelector(value *v1.LabelSelectorApplyConfiguration) *ClusterQueueSpecApplyConfiguration {
+	b.NamespaceSelector = value
 	return b
 }
 
@@ -100,5 +103,29 @@ func (b *ClusterQueueSpecApplyConfiguration) WithAdmissionChecks(values ...strin
 	for i := range values {
 		b.AdmissionChecks = append(b.AdmissionChecks, values[i])
 	}
+	return b
+}
+
+// WithAdmissionChecksStrategy sets the AdmissionChecksStrategy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AdmissionChecksStrategy field is set to the value of the last call.
+func (b *ClusterQueueSpecApplyConfiguration) WithAdmissionChecksStrategy(value *AdmissionChecksStrategyApplyConfiguration) *ClusterQueueSpecApplyConfiguration {
+	b.AdmissionChecksStrategy = value
+	return b
+}
+
+// WithStopPolicy sets the StopPolicy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the StopPolicy field is set to the value of the last call.
+func (b *ClusterQueueSpecApplyConfiguration) WithStopPolicy(value kueuev1beta1.StopPolicy) *ClusterQueueSpecApplyConfiguration {
+	b.StopPolicy = &value
+	return b
+}
+
+// WithFairSharing sets the FairSharing field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the FairSharing field is set to the value of the last call.
+func (b *ClusterQueueSpecApplyConfiguration) WithFairSharing(value *FairSharingApplyConfiguration) *ClusterQueueSpecApplyConfiguration {
+	b.FairSharing = value
 	return b
 }

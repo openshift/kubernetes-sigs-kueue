@@ -24,13 +24,16 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	config "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/queue"
@@ -64,8 +67,8 @@ func NewResourceFlavorReconciler(
 	}
 }
 
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch;update;delete
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch;update;delete
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors/finalizers,verbs=update
 
 func (r *ResourceFlavorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var flavor kueue.ResourceFlavor
@@ -88,7 +91,7 @@ func (r *ResourceFlavorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(&flavor, kueue.ResourceInUseFinalizerName) {
-			if cqs := r.cache.ClusterQueuesUsingFlavor(flavor.Name); len(cqs) != 0 {
+			if cqs := r.cache.ClusterQueuesUsingFlavor(kueue.ResourceFlavorReference(flavor.Name)); len(cqs) != 0 {
 				log.V(3).Info("resourceFlavor is still in use", "ClusterQueues", cqs)
 				// We avoid to return error here to prevent backoff requeue, which is passive and wasteful.
 				// Instead, we drive the removal of finalizer by ClusterQueue Update/Delete events
@@ -108,7 +111,7 @@ func (r *ResourceFlavorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 func (r *ResourceFlavorReconciler) AddUpdateWatcher(watchers ...ResourceFlavorUpdateWatcher) {
-	r.watchers = watchers
+	r.watchers = append(r.watchers, watchers...)
 }
 
 func (r *ResourceFlavorReconciler) notifyWatchers(oldRF, newRF *kueue.ResourceFlavor) {
@@ -215,20 +218,20 @@ type cqHandler struct {
 	cache *cache.Cache
 }
 
-func (h *cqHandler) Create(context.Context, event.CreateEvent, workqueue.RateLimitingInterface) {
+func (h *cqHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *cqHandler) Update(context.Context, event.UpdateEvent, workqueue.RateLimitingInterface) {
+func (h *cqHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *cqHandler) Delete(context.Context, event.DeleteEvent, workqueue.RateLimitingInterface) {
+func (h *cqHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
 // Generic accepts update/delete events from clusterQueue via channel.
 // For update events, we only check the old obj to see whether old resourceFlavors
 // are still in use since new resourceFlavors are always in use.
 // For delete events, we check the original obj since new obj is nil.
-func (h *cqHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.RateLimitingInterface) {
+func (h *cqHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	cq := e.Object.(*kueue.ClusterQueue)
 	if cq.Name == "" {
 		return
@@ -236,7 +239,7 @@ func (h *cqHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue
 
 	for _, rg := range cq.Spec.ResourceGroups {
 		for _, flavor := range rg.Flavors {
-			if cqs := h.cache.ClusterQueuesUsingFlavor(string(flavor.Name)); len(cqs) == 0 {
+			if cqs := h.cache.ClusterQueuesUsingFlavor(flavor.Name); len(cqs) == 0 {
 				req := reconcile.Request{
 					NamespacedName: types.NamespacedName{
 						Name: string(flavor.Name),
@@ -249,15 +252,16 @@ func (h *cqHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ResourceFlavorReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ResourceFlavorReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.Configuration) error {
 	handler := cqHandler{
 		cache: r.cache,
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kueue.ResourceFlavor{}).
-		WatchesRawSource(&source.Channel{Source: r.cqUpdateCh}, &handler).
+		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
+		WatchesRawSource(source.Channel(r.cqUpdateCh, &handler)).
 		WithEventFilter(r).
-		Complete(r)
+		Complete(WithLeadingManager(mgr, r, &kueue.ResourceFlavor{}, cfg))
 }
 
 func resourceFlavors(cq *kueue.ClusterQueue) sets.Set[kueue.ResourceFlavorReference] {

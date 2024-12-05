@@ -123,6 +123,54 @@ status:
 ```
 The `count` can only increase while the workload holds a Quota Reservation.
 
+<<<<<<< HEAD
+=======
+## All-or-nothing semantics for Job Resource Assignment
+
+This mechanism allows a Job to be evicted and re-queued if the job doesn't become ready.
+Please refer to the [All-or-nothing with ready Pods](/docs/tasks/manage/setup_wait_for_pods_ready/) for more details.
+
+### Exponential Backoff Requeueing
+
+Once evictions with `PodsReadyTimeout` reasons occur, a Workload will be re-queued with backoff.
+The Workload status allows you to know the following:
+
+- `.status.requeueState.count` indicates the numbers of times a Workload has already been backoff re-queued by Eviction with PodsReadyTimeout reason
+- `.status.requeueState.requeueAt` indicates the time when a Workload will be re-queued the next time
+
+```yaml
+status:
+  requeueState:
+    count: 5
+    requeueAt: 2024-02-11T04:51:03Z
+```
+
+When a Workload deactivated by All-or-nothing with ready Pods is re-activated,
+the requeueState (`.status.requeueState`) will be reset to null.
+
+## Replicate labels from Jobs into Workloads
+You can configure Kueue to copy labels, at Workload creation, into the new Workload from the underlying Job or Pod objects. This can be useful for Workload identification and debugging.
+You can specify which labels should be copied by setting the `labelKeysToCopy` field in the configuration API (under `integrations`). By default, Kueue does not copy any Job or Pod label into the Workload. 
+
+## Maximum execution time
+
+You can configure a Workload's maximum execution time by specifying the expected maximum number of seconds for it to run in:
+
+```yaml
+spec:
+  maximumExecutionTimeSeconds: n
+```
+
+If the workload spends more then `n` seconds in `Admitted` state, including the time spent as `Admitted` in previous "Admit/Evict" cycles, it gets automatically deactivated.
+Once deactivated, the accumulated time spent as active in previous "Admit/Evict" cycles is set to 0.
+
+If `maximumExecutionTimeSeconds` is not specified, the workload has no execution time limit.
+
+You can configure the `maximumExecutionTimeSeconds` of the Workload associated with any supported Kueue Job by specifying the desired value as `kueue.x-k8s.io/max-exec-time-seconds` label of the job. 
+
+
+
+>>>>>>> kueue-upstream/main
 ## What's next
 
 - Learn about [workload priority class](/docs/concepts/workload_priority_class).

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import (
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// WorkloadPriorityClassApplyConfiguration represents an declarative configuration of the WorkloadPriorityClass type for use
+// WorkloadPriorityClassApplyConfiguration represents a declarative configuration of the WorkloadPriorityClass type for use
 // with apply.
 type WorkloadPriorityClassApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
@@ -32,7 +32,7 @@ type WorkloadPriorityClassApplyConfiguration struct {
 	Description                      *string `json:"description,omitempty"`
 }
 
-// WorkloadPriorityClass constructs an declarative configuration of the WorkloadPriorityClass type for use with
+// WorkloadPriorityClass constructs a declarative configuration of the WorkloadPriorityClass type for use with
 // apply.
 func WorkloadPriorityClass(name string) *WorkloadPriorityClassApplyConfiguration {
 	b := &WorkloadPriorityClassApplyConfiguration{}
@@ -214,4 +214,10 @@ func (b *WorkloadPriorityClassApplyConfiguration) WithValue(value int32) *Worklo
 func (b *WorkloadPriorityClassApplyConfiguration) WithDescription(value string) *WorkloadPriorityClassApplyConfiguration {
 	b.Description = &value
 	return b
+}
+
+// GetName retrieves the value of the Name field in the declarative configuration.
+func (b *WorkloadPriorityClassApplyConfiguration) GetName() *string {
+	b.ensureObjectMetaApplyConfigurationExists()
+	return b.Name
 }

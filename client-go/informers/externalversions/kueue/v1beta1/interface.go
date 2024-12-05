@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,6 +29,10 @@ type Interface interface {
 	ClusterQueues() ClusterQueueInformer
 	// LocalQueues returns a LocalQueueInformer.
 	LocalQueues() LocalQueueInformer
+	// MultiKueueClusters returns a MultiKueueClusterInformer.
+	MultiKueueClusters() MultiKueueClusterInformer
+	// MultiKueueConfigs returns a MultiKueueConfigInformer.
+	MultiKueueConfigs() MultiKueueConfigInformer
 	// ProvisioningRequestConfigs returns a ProvisioningRequestConfigInformer.
 	ProvisioningRequestConfigs() ProvisioningRequestConfigInformer
 	// ResourceFlavors returns a ResourceFlavorInformer.
@@ -63,6 +67,16 @@ func (v *version) ClusterQueues() ClusterQueueInformer {
 // LocalQueues returns a LocalQueueInformer.
 func (v *version) LocalQueues() LocalQueueInformer {
 	return &localQueueInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// MultiKueueClusters returns a MultiKueueClusterInformer.
+func (v *version) MultiKueueClusters() MultiKueueClusterInformer {
+	return &multiKueueClusterInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// MultiKueueConfigs returns a MultiKueueConfigInformer.
+func (v *version) MultiKueueConfigs() MultiKueueConfigInformer {
+	return &multiKueueConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // ProvisioningRequestConfigs returns a ProvisioningRequestConfigInformer.

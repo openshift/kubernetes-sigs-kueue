@@ -61,7 +61,6 @@ func TestToRefMap(t *testing.T) {
 				}
 			}
 		})
-
 	}
 }
 
@@ -105,7 +104,7 @@ func TestContains(t *testing.T) {
 			},
 			wantResult: true,
 		},
-		"missmatch": {
+		"mismatch": {
 			a: map[string]int{
 				"v1": 1,
 				"v2": 3,
@@ -128,77 +127,79 @@ func TestContains(t *testing.T) {
 	}
 }
 
-func TestMergeIntersect(t *testing.T) {
+func TestFilterKeys(t *testing.T) {
 	cases := map[string]struct {
-		a             map[string]int
-		b             map[string]int
-		wantMerge     map[string]int
-		wantIntersect map[string]int
+		m    map[string]int
+		k    []string
+		want map[string]int
 	}{
-		"nil a": {
-			a: nil,
-			b: map[string]int{
-				"v1": 1,
+		"nil m": {
+			m: nil,
+			k: []string{
+				"k1",
 			},
-			wantMerge: map[string]int{
-				"v1": 1,
-			},
-			wantIntersect: nil,
+			want: nil,
 		},
-		"nil b": {
-			a: map[string]int{
+		"nil k": {
+			m: map[string]int{
 				"v1": 1,
 			},
-			b: nil,
-			wantMerge: map[string]int{
-				"v1": 1,
-			},
-			wantIntersect: nil,
+			k:    nil,
+			want: nil,
 		},
-		"extra in b": {
-			a: map[string]int{
-				"v1": 1,
-			},
-			b: map[string]int{
+		"empty k": {
+			m: map[string]int{
 				"v1": 1,
 				"v2": 2,
+				"v3": 3,
 			},
-			wantMerge: map[string]int{
-				"v1": 2,
+			k:    []string{},
+			want: nil,
+		},
+		"empty m": {
+			m:    map[string]int{},
+			k:    []string{"k1"},
+			want: map[string]int{},
+		},
+		"filter one": {
+			m: map[string]int{
+				"v1": 1,
 				"v2": 2,
+				"v3": 3,
 			},
-			wantIntersect: map[string]int{
-				"v1": 2,
+			k: []string{"v1", "v3"},
+			want: map[string]int{
+				"v1": 1,
+				"v3": 3,
 			},
 		},
-		"extra in a": {
-			a: map[string]int{
+		"filter two": {
+			m: map[string]int{
 				"v1": 1,
 				"v2": 2,
+				"v3": 3,
 			},
-			b: map[string]int{
+			k: []string{"v1"},
+			want: map[string]int{
 				"v1": 1,
 			},
-			wantMerge: map[string]int{
-				"v1": 2,
+		},
+		"filter all": {
+			m: map[string]int{
+				"v1": 1,
 				"v2": 2,
+				"v3": 3,
 			},
-			wantIntersect: map[string]int{
-				"v1": 2,
-			},
+			k:    []string{"v4"},
+			want: map[string]int{},
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			gotMerge := Merge(tc.a, tc.b, func(a, b int) int { return a + b })
-			if diff := cmp.Diff(tc.wantMerge, gotMerge); diff != "" {
-				t.Errorf("Unexpected Merge result(-want/+got): %s", diff)
-			}
-
-			gotIntersect := Intersect(tc.a, tc.b, func(a, b int) int { return a + b })
-			if diff := cmp.Diff(tc.wantIntersect, gotIntersect); diff != "" {
-				t.Errorf("Unexpected Intersect result(-want/+got): %s", diff)
+			got := FilterKeys(tc.m, tc.k)
+			if diff := cmp.Diff(got, tc.want); diff != "" {
+				t.Errorf("Unexpected result, expecting %v", tc.want)
 			}
 		})
 	}

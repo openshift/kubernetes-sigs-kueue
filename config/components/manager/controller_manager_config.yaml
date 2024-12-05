@@ -24,6 +24,9 @@ clientConnection:
 #waitForPodsReady:
 #  enable: true
 #manageJobsWithoutQueueName: true
+#managedJobsNamespaceSelector:
+#  matchLabels:
+#    kueue-managed: "true"
 #internalCertManagement:
 #  enable: false
 #  webhookServiceName: ""

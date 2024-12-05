@@ -32,8 +32,32 @@ A core design principle for Kueue is to avoid duplicating mature functionality i
 - **System insight:** Build-in [prometheus metrics](/docs/reference/metrics/) to help monitor the state of the system, as well as Conditions.
 - **AdmissionChecks:** A mechanism for internal or external components to influence whether a workload can be [admitted](/docs/concepts/admission_check/).
 - **Advanced autoscaling support:** Integration with cluster-autoscaler's [provisioningRequest](/docs/admission-check-controllers/provisioning/#job-using-a-provisioningrequest) via admissionChecks.
+<<<<<<< HEAD
 - **Sequential admission:** A simple implementation of [all-or-nothing scheduling](/docs/tasks/setup_sequential_admission/).
 - **Partial admission:** Allows jobs to run with a [smaller parallelism](/docs/tasks/run_jobs/#partial-admission), based on available quota, if the application supports it.
+=======
+- **All-or-nothing with ready Pods:** A timeout-based implementation of [All-or-nothing scheduling](/docs/tasks/manage/setup_wait_for_pods_ready/).
+- **Partial admission:** Allows jobs to run with a [smaller parallelism](/docs/tasks/run/jobs/#partial-admission), based on available quota, if the application supports it.
+
+## Job-integrated features
+
+| Feature                                                                                                         | Batch&nbsp;Job | JobSet | MXJob | PaddleJob | PytorchJob | TFJob | XGBoostJob | MPIJob | Pod | RayCluster | RayJob |
+|-----------------------------------------------------------------------------------------------------------------|----------------|--------|-------|-----------|------------|-------|------------|--------|-----|------------|--------|
+| [Dynamic Reclaim](/docs/concepts/workload/#dynamic-reclaim)                                                     | +              | +      |       |           |            |       |            |        | +   |            |        |
+| [MultiKueue](/docs/concepts/multikueue/)                                                                        | +              | +      |       | +         | +          | +     | +          | +      |     |            |        |
+| [MultiKueueBatchJobWithManagedBy](/docs/concepts/multikueue/#multikueuebatchjobwithmanagedby-enabled)           | +              |        |       |           |            |       |            |        |     |            |        |
+| [PartialAdmission](/docs/tasks/run/jobs/#partial-admission)                                                     | +              |        |       |           |            |       |            |        |     |            |        |
+| [Workload Priority Class](/docs/concepts/workload_priority_class/)                                              | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [FlavorFungibility](/docs/concepts/cluster_queue/#flavorfungibility)                                            | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [ProvisioningACC](/docs/admission-check-controllers/provisioning/)                                              | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [QueueVisibility](/docs/tasks/manage/monitor_pending_workloads/pending_workloads_in_status/)                    | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [VisibilityOnDemand](/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/)                 | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [PrioritySortingWithinCohort](/docs/concepts/cluster_queue/#flavors-and-borrowing-semantics)                    | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [LendingLimit](/docs/concepts/cluster_queue/#lendinglimit)                                                      | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [All-or-nothing with ready Pods](/docs/concepts/workload/#all-or-nothing-semantics-for-job-resource-assignment) | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [Fair Sharing](/docs/concepts/preemption/#fair-sharing)                                                         | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+| [Topology Aware Scheduling](/docs/concepts/topology_aware_scheduling)                                           | +              | +      | +     | +         | +          | +     | +          | +      | +   | +          | +      |
+>>>>>>> kueue-upstream/main
 
 ## High-level Kueue operation
 

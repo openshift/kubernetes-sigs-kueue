@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,9 @@ import (
 
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
+	v1alpha1 "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	visibilityv1beta1 "sigs.k8s.io/kueue/apis/visibility/v1beta1"
 )
 
 // GenericInformer is type of SharedIndexInformer which will locate and delegate to other
@@ -51,13 +53,21 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=kueue.x-k8s.io, Version=v1beta1
+	// Group=kueue.x-k8s.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithResource("topologies"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1alpha1().Topologies().Informer()}, nil
+
+		// Group=kueue.x-k8s.io, Version=v1beta1
 	case v1beta1.SchemeGroupVersion.WithResource("admissionchecks"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().AdmissionChecks().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("clusterqueues"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().ClusterQueues().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("localqueues"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().LocalQueues().Informer()}, nil
+	case v1beta1.SchemeGroupVersion.WithResource("multikueueclusters"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().MultiKueueClusters().Informer()}, nil
+	case v1beta1.SchemeGroupVersion.WithResource("multikueueconfigs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().MultiKueueConfigs().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("provisioningrequestconfigs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().ProvisioningRequestConfigs().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("resourceflavors"):
@@ -66,6 +76,12 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().Workloads().Informer()}, nil
 	case v1beta1.SchemeGroupVersion.WithResource("workloadpriorityclasses"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kueue().V1beta1().WorkloadPriorityClasses().Informer()}, nil
+
+		// Group=visibility.kueue.x-k8s.io, Version=v1beta1
+	case visibilityv1beta1.SchemeGroupVersion.WithResource("clusterqueues"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Visibility().V1beta1().ClusterQueues().Informer()}, nil
+	case visibilityv1beta1.SchemeGroupVersion.WithResource("localqueues"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Visibility().V1beta1().LocalQueues().Informer()}, nil
 
 	}
 

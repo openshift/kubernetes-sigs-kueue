@@ -20,8 +20,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"reflect"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -38,7 +38,7 @@ func fromFile(path string, scheme *runtime.Scheme, cfg *configapi.Configuration)
 		return err
 	}
 
-	codecs := serializer.NewCodecFactory(scheme)
+	codecs := serializer.NewCodecFactory(scheme, serializer.EnableStrict)
 
 	// Regardless of if the bytes are of any external version,
 	// it will be read successfully and converted into the internal version
@@ -116,16 +116,22 @@ func addLeaderElectionTo(o *ctrl.Options, cfg *configapi.Configuration) {
 		o.LeaderElectionID = cfg.LeaderElection.ResourceName
 	}
 
-	if o.LeaseDuration == nil && !reflect.DeepEqual(cfg.LeaderElection.LeaseDuration, metav1.Duration{}) {
+	if o.LeaseDuration == nil && !equality.Semantic.DeepEqual(cfg.LeaderElection.LeaseDuration, metav1.Duration{}) {
 		o.LeaseDuration = &cfg.LeaderElection.LeaseDuration.Duration
 	}
 
-	if o.RenewDeadline == nil && !reflect.DeepEqual(cfg.LeaderElection.RenewDeadline, metav1.Duration{}) {
+	if o.RenewDeadline == nil && !equality.Semantic.DeepEqual(cfg.LeaderElection.RenewDeadline, metav1.Duration{}) {
 		o.RenewDeadline = &cfg.LeaderElection.RenewDeadline.Duration
 	}
 
-	if o.RetryPeriod == nil && !reflect.DeepEqual(cfg.LeaderElection.RetryPeriod, metav1.Duration{}) {
+	if o.RetryPeriod == nil && !equality.Semantic.DeepEqual(cfg.LeaderElection.RetryPeriod, metav1.Duration{}) {
 		o.RetryPeriod = &cfg.LeaderElection.RetryPeriod.Duration
+	}
+
+	if o.LeaderElection {
+		// When the manager is terminated, the leader manager voluntarily steps down
+		// from the leader role as soon as possible.
+		o.LeaderElectionReleaseOnCancel = true
 	}
 }
 
@@ -162,9 +168,13 @@ func Load(scheme *runtime.Scheme, configFile string) (ctrl.Options, configapi.Co
 			return options, cfg, err
 		}
 	}
-	if err := validate(&cfg).ToAggregate(); err != nil {
+	if err := validate(&cfg, scheme).ToAggregate(); err != nil {
 		return options, cfg, err
 	}
 	addTo(&options, &cfg)
 	return options, cfg, err
+}
+
+func WaitForPodsReadyIsEnabled(cfg *configapi.Configuration) bool {
+	return cfg.WaitForPodsReady != nil && cfg.WaitForPodsReady.Enable
 }

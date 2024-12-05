@@ -29,7 +29,7 @@ import (
 // SyncAdmittedCondition sync the state of the Admitted condition
 // with the state of QuotaReserved and AdmissionChecks.
 // Return true if any change was done.
-func SyncAdmittedCondition(w *kueue.Workload) bool {
+func SyncAdmittedCondition(w *kueue.Workload, now time.Time) bool {
 	hasReservation := HasQuotaReservation(w)
 	hasAllChecksReady := HasAllChecksReady(w)
 	isAdmitted := IsAdmitted(w)
@@ -38,15 +38,16 @@ func SyncAdmittedCondition(w *kueue.Workload) bool {
 		return false
 	}
 	newCondition := metav1.Condition{
-		Type:    kueue.WorkloadAdmitted,
-		Status:  metav1.ConditionTrue,
-		Reason:  "Admitted",
-		Message: "The workload is admitted",
+		Type:               kueue.WorkloadAdmitted,
+		Status:             metav1.ConditionTrue,
+		Reason:             "Admitted",
+		Message:            "The workload is admitted",
+		ObservedGeneration: w.Generation,
 	}
 	switch {
 	case !hasReservation && !hasAllChecksReady:
 		newCondition.Status = metav1.ConditionFalse
-		newCondition.Reason = "NoReservationNoChecks"
+		newCondition.Reason = "NoReservationUnsatisfiedChecks"
 		newCondition.Message = "The workload has no reservation and not all checks ready"
 	case !hasReservation:
 		newCondition.Status = metav1.ConditionFalse
@@ -54,12 +55,24 @@ func SyncAdmittedCondition(w *kueue.Workload) bool {
 		newCondition.Message = "The workload has no reservation"
 	case !hasAllChecksReady:
 		newCondition.Status = metav1.ConditionFalse
-		newCondition.Reason = "NoChecks"
+		newCondition.Reason = "UnsatisfiedChecks"
 		newCondition.Message = "The workload has not all checks ready"
 	}
 
-	apimeta.SetStatusCondition(&w.Status.Conditions, newCondition)
-	return true
+	// Accumulate the admitted time if needed
+	if isAdmitted && newCondition.Status == metav1.ConditionFalse {
+		oldCondition := apimeta.FindStatusCondition(w.Status.Conditions, kueue.WorkloadAdmitted)
+		// in practice the oldCondition cannot be nil, however we should try to avoid nil ptr deref.
+		if oldCondition != nil {
+			d := int32(now.Sub(oldCondition.LastTransitionTime.Time).Seconds())
+			if w.Status.AccumulatedPastExexcutionTimeSeconds != nil {
+				*w.Status.AccumulatedPastExexcutionTimeSeconds += d
+			} else {
+				w.Status.AccumulatedPastExexcutionTimeSeconds = &d
+			}
+		}
+	}
+	return apimeta.SetStatusCondition(&w.Status.Conditions, newCondition)
 }
 
 // FindAdmissionCheck - returns a pointer to the check identified by checkName if found in checks.
@@ -71,6 +84,25 @@ func FindAdmissionCheck(checks []kueue.AdmissionCheckState, checkName string) *k
 	}
 
 	return nil
+}
+
+// ResetChecksOnEviction sets all AdmissionChecks to Pending
+func ResetChecksOnEviction(w *kueue.Workload, now time.Time) bool {
+	checks := w.Status.AdmissionChecks
+	updated := false
+	for i := range checks {
+		if checks[i].State == kueue.CheckStatePending {
+			continue
+		}
+		checks[i] = kueue.AdmissionCheckState{
+			Name:               checks[i].Name,
+			State:              kueue.CheckStatePending,
+			LastTransitionTime: metav1.NewTime(now),
+			Message:            "Reset to Pending after eviction. Previously: " + string(checks[i].State),
+		}
+		updated = true
+	}
+	return updated
 }
 
 // SetAdmissionCheckState - adds or updates newCheck in the provided checks list.
@@ -99,13 +131,13 @@ func SetAdmissionCheckState(checks *[]kueue.AdmissionCheckState, newCheck kueue.
 	existingCondition.PodSetUpdates = newCheck.PodSetUpdates
 }
 
-// GetRejectedChecks returns the list of Rejected admission checks
-func GetRejectedChecks(wl *kueue.Workload) []string {
-	rejectedChecks := make([]string, 0, len(wl.Status.AdmissionChecks))
+// RejectedChecks returns the list of Rejected admission checks
+func RejectedChecks(wl *kueue.Workload) []kueue.AdmissionCheckState {
+	rejectedChecks := make([]kueue.AdmissionCheckState, 0, len(wl.Status.AdmissionChecks))
 	for i := range wl.Status.AdmissionChecks {
 		ac := wl.Status.AdmissionChecks[i]
 		if ac.State == kueue.CheckStateRejected {
-			rejectedChecks = append(rejectedChecks, ac.Name)
+			rejectedChecks = append(rejectedChecks, ac)
 		}
 	}
 	return rejectedChecks
@@ -138,11 +170,22 @@ func HasAllChecks(wl *kueue.Workload, mustHaveChecks sets.Set[string]) bool {
 	return mustHaveChecks.Len() == 0
 }
 
-// HasRetryOrRejectedChecks returns true if any of the workloads checks are Retry or Rejected
-func HasRetryOrRejectedChecks(wl *kueue.Workload) bool {
+// HasRetryChecks returns true if any of the workloads checks is Retry
+func HasRetryChecks(wl *kueue.Workload) bool {
 	for i := range wl.Status.AdmissionChecks {
 		state := wl.Status.AdmissionChecks[i].State
-		if state == kueue.CheckStateRetry || state == kueue.CheckStateRejected {
+		if state == kueue.CheckStateRetry {
+			return true
+		}
+	}
+	return false
+}
+
+// HasRejectedChecks returns true if any of the workloads checks is Rejected
+func HasRejectedChecks(wl *kueue.Workload) bool {
+	for i := range wl.Status.AdmissionChecks {
+		state := wl.Status.AdmissionChecks[i].State
+		if state == kueue.CheckStateRejected {
 			return true
 		}
 	}

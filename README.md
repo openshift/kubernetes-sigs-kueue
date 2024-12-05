@@ -21,12 +21,12 @@ Read the [overview](https://kueue.sigs.k8s.io/docs/overview/) to learn more.
 - **Resource management:** Support resource fair sharing and [preemption](https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/#preemption) with a variety of policies between different tenants.
 - **Dynamic resource reclaim:** A mechanism to [release](https://kueue.sigs.k8s.io/docs/concepts/workload/#dynamic-reclaim) quota as the pods of a Job complete.
 - **Resource flavor fungibility:** Quota [borrowing or preemption](https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/#flavorfungibility) in ClusterQueue and Cohort.
-- **Integrations:** Built-in support for popular jobs, e.g. [BatchJob](https://kueue.sigs.k8s.io/docs/tasks/run_jobs/), [Kubeflow training jobs](https://kueue.sigs.k8s.io/docs/tasks/run_kubeflow_jobs/), [RayJob](https://kueue.sigs.k8s.io/docs/tasks/run_rayjobs/), [JobSet](https://kueue.sigs.k8s.io/docs/tasks/run_jobsets/),  [plain Pod](https://kueue.sigs.k8s.io/docs/tasks/run_plain_pods/).
+- **Integrations:** Built-in support for popular jobs, e.g. [BatchJob](https://kueue.sigs.k8s.io/docs/tasks/run/jobs/), [Kubeflow training jobs](https://kueue.sigs.k8s.io/docs/tasks/run/kubeflow/), [RayJob](https://kueue.sigs.k8s.io/docs/tasks/run/rayjobs/), [RayCluster](https://kueue.sigs.k8s.io/docs/tasks/run/rayclusters/), [JobSet](https://kueue.sigs.k8s.io/docs/tasks/run/jobsets/),  [plain Pod](https://kueue.sigs.k8s.io/docs/tasks/run/plain_pods/).
 - **System insight:** Build-in [prometheus metrics](https://kueue.sigs.k8s.io/docs/reference/metrics/) to help monitor the state of the system, as well as Conditions.
 - **AdmissionChecks:** A mechanism for internal or external components to influence whether a workload can be [admitted](https://kueue.sigs.k8s.io/docs/concepts/admission_check/).
 - **Advanced autoscaling support:** Integration with cluster-autoscaler's [provisioningRequest](https://kueue.sigs.k8s.io/docs/admission-check-controllers/provisioning/#job-using-a-provisioningrequest) via admissionChecks.
-- **Sequential admission:** A simple implementation of [all-or-nothing scheduling](https://kueue.sigs.k8s.io/docs/tasks/setup_sequential_admission/).
-- **Partial admission:** Allows jobs to run with a [smaller parallelism](https://kueue.sigs.k8s.io/docs/tasks/run_jobs/#partial-admission), based on available quota, if the application supports it.
+- **All-or-nothing with ready Pods:** A timeout-based implementation of [All-or-nothing scheduling](https://kueue.sigs.k8s.io/docs/tasks/manage/setup_wait_for_pods_ready/).
+- **Partial admission:** Allows jobs to run with a [smaller parallelism](https://kueue.sigs.k8s.io/docs/tasks/run/jobs/#partial-admission), based on available quota, if the application supports it.
 
 ## Production Readiness status
 
@@ -36,10 +36,10 @@ Read the [overview](https://kueue.sigs.k8s.io/docs/overview/) to learn more.
   - ✔️ Unit Test [testgrid](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-unit-main).
   - ✔️ Integration Test [testgrid](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-integration-main)
   - ✔️ E2E Tests for Kubernetes
-    [1.25](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-25),
-    [1.26](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-26),
-    [1.27](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-27),
-    [1.28](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-28)
+    [1.28](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-28),
+    [1.29](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-29),
+    [1.30](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-30),
+    [1.31](https://testgrid.k8s.io/sig-scheduling#periodic-kueue-test-e2e-main-1-31),
     on Kind.
 - ✔️ Scalability verification via [performance tests](https://github.com/kubernetes-sigs/kueue/tree/main/test/performance).
 - ✔️ Monitoring via [metrics](https://kueue.sigs.k8s.io/docs/reference/metrics).
@@ -52,12 +52,12 @@ Read the [overview](https://kueue.sigs.k8s.io/docs/overview/) to learn more.
 
 ## Installation
 
-**Requires Kubernetes 1.22 or newer**.
+**Requires Kubernetes 1.25 or newer**.
 
 To install the latest release of Kueue in your cluster, run the following command:
 
 ```shell
-kubectl apply -f https://github.com/kubernetes-sigs/kueue/releases/download/v0.5.0/manifests.yaml
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/v0.9.1/manifests.yaml
 ```
 
 The controller runs in the `kueue-system` namespace.

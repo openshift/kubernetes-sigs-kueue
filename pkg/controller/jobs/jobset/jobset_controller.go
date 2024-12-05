@@ -18,12 +18,15 @@ package jobset
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
+	batchv1 "k8s.io/api/batch/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,25 +46,32 @@ var (
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
 		SetupIndexes:           SetupIndexes,
+		NewJob:                 NewJob,
 		NewReconciler:          NewReconciler,
 		SetupWebhook:           SetupJobSetWebhook,
 		JobType:                &jobsetapi.JobSet{},
 		AddToScheme:            jobsetapi.AddToScheme,
 		IsManagingObjectsOwner: isJobSet,
+		MultiKueueAdapter:      &multikueueAdapter{},
 	}))
 }
 
-//+kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
-//+kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch
-//+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;update;patch
-//+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/status,verbs=get;update
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/finalizers,verbs=update
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch
-//+kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/finalizers,verbs=get;update
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
 
-var NewReconciler = jobframework.NewGenericReconciler(func() jobframework.GenericJob { return &JobSet{} }, nil)
+func NewJob() jobframework.GenericJob {
+	return &JobSet{}
+}
+
+var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
 
 func isJobSet(owner *metav1.OwnerReference) bool {
 	return owner.Kind == "JobSet" && strings.HasPrefix(owner.APIVersion, "jobset.x-k8s.io/v1")
@@ -101,6 +111,10 @@ func (j *JobSet) GVK() schema.GroupVersionKind {
 	return gvk
 }
 
+func (j *JobSet) PodLabelSelector() string {
+	return fmt.Sprintf("%s=%s", jobsetapi.JobSetNameKey, j.Name)
+}
+
 func (j *JobSet) PodSets() []kueue.PodSet {
 	podSets := make([]kueue.PodSet, len(j.Spec.ReplicatedJobs))
 	for index, replicatedJob := range j.Spec.ReplicatedJobs {
@@ -108,6 +122,9 @@ func (j *JobSet) PodSets() []kueue.PodSet {
 			Name:     replicatedJob.Name,
 			Template: *replicatedJob.Template.Spec.Template.DeepCopy(),
 			Count:    podsCount(&replicatedJob),
+			TopologyRequest: jobframework.PodSetTopologyRequest(&replicatedJob.Template.Spec.Template.ObjectMeta,
+				ptr.To(batchv1.JobCompletionIndexAnnotation), ptr.To(jobsetapi.JobIndexKey),
+				ptr.To(replicatedJob.Replicas)),
 		}
 	}
 	return podSets
@@ -144,32 +161,20 @@ func (j *JobSet) RestorePodSetsInfo(podSetsInfo []podset.PodSetInfo) bool {
 	return changed
 }
 
-func (j *JobSet) Finished() (metav1.Condition, bool) {
-	if apimeta.IsStatusConditionTrue(j.Status.Conditions, string(jobsetapi.JobSetCompleted)) {
-		condition := metav1.Condition{
-			Type:    kueue.WorkloadFinished,
-			Status:  metav1.ConditionTrue,
-			Reason:  "JobSetFinished",
-			Message: "JobSet finished successfully",
-		}
-		return condition, true
+func (j *JobSet) Finished() (message string, success, finished bool) {
+	if c := apimeta.FindStatusCondition(j.Status.Conditions, string(jobsetapi.JobSetCompleted)); c != nil && c.Status == metav1.ConditionTrue {
+		return c.Message, true, true
 	}
-	if apimeta.IsStatusConditionTrue(j.Status.Conditions, string(jobsetapi.JobSetFailed)) {
-		condition := metav1.Condition{
-			Type:    kueue.WorkloadFinished,
-			Status:  metav1.ConditionTrue,
-			Reason:  "JobSetFinished",
-			Message: "JobSet failed",
-		}
-		return condition, true
+	if c := apimeta.FindStatusCondition(j.Status.Conditions, string(jobsetapi.JobSetFailed)); c != nil && c.Status == metav1.ConditionTrue {
+		return c.Message, false, true
 	}
-	return metav1.Condition{}, false
+	return message, success, false
 }
 
 func (j *JobSet) PodsReady() bool {
 	var replicas int32
 	for _, replicatedJob := range j.Spec.ReplicatedJobs {
-		replicas += int32(replicatedJob.Replicas)
+		replicas += replicatedJob.Replicas
 	}
 	var readyReplicas int32
 	for _, replicatedJobStatus := range j.Status.ReplicatedJobsStatus {
@@ -178,9 +183,9 @@ func (j *JobSet) PodsReady() bool {
 	return replicas == readyReplicas
 }
 
-func (j *JobSet) ReclaimablePods() []kueue.ReclaimablePod {
+func (j *JobSet) ReclaimablePods() ([]kueue.ReclaimablePod, error) {
 	if len(j.Status.ReplicatedJobsStatus) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	ret := make([]kueue.ReclaimablePod, 0, len(j.Spec.ReplicatedJobs))
@@ -189,7 +194,7 @@ func (j *JobSet) ReclaimablePods() []kueue.ReclaimablePod {
 	for i := range j.Spec.ReplicatedJobs {
 		spec := &j.Spec.ReplicatedJobs[i]
 		if status, found := statuses[spec.Name]; found && status.Succeeded > 0 {
-			if status.Succeeded > 0 && status.Succeeded <= int32(spec.Replicas) {
+			if status.Succeeded > 0 && status.Succeeded <= spec.Replicas {
 				ret = append(ret, kueue.ReclaimablePod{
 					Name:  spec.Name,
 					Count: status.Succeeded * podsCountPerReplica(spec),
@@ -197,7 +202,7 @@ func (j *JobSet) ReclaimablePods() []kueue.ReclaimablePod {
 			}
 		}
 	}
-	return ret
+	return ret, nil
 }
 
 func podsCountPerReplica(rj *jobsetapi.ReplicatedJob) int32 {
@@ -212,13 +217,13 @@ func podsCountPerReplica(rj *jobsetapi.ReplicatedJob) int32 {
 
 func podsCount(rj *jobsetapi.ReplicatedJob) int32 {
 	// The JobSet's operator validates that this will not overflow.
-	return int32(rj.Replicas) * podsCountPerReplica(rj)
+	return rj.Replicas * podsCountPerReplica(rj)
 }
 
 func SetupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
 	return jobframework.SetupWorkloadOwnerIndex(ctx, indexer, gvk)
 }
 
-func GetWorkloadNameForJobSet(jobSetName string) string {
-	return jobframework.GetWorkloadNameForOwnerWithGVK(jobSetName, gvk)
+func GetWorkloadNameForJobSet(jobSetName string, jobSetUID types.UID) string {
+	return jobframework.GetWorkloadNameForOwnerWithGVK(jobSetName, jobSetUID, gvk)
 }

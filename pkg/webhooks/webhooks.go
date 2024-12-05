@@ -16,7 +16,9 @@ limitations under the License.
 
 package webhooks
 
-import ctrl "sigs.k8s.io/controller-runtime"
+import (
+	ctrl "sigs.k8s.io/controller-runtime"
+)
 
 // Setup sets up the webhooks for core controllers. It returns the name of the
 // webhook that failed to create and an error, if any.
@@ -33,12 +35,8 @@ func Setup(mgr ctrl.Manager) (string, error) {
 		return "ClusterQueue", err
 	}
 
-	if err := setupWebhookForLocalQueue(mgr); err != nil {
-		return "Queue", err
-	}
-
-	if err := setupWebhookForAdmissionCheck(mgr); err != nil {
-		return "AdmissionCheck", err
+	if err := setupWebhookForCohort(mgr); err != nil {
+		return "Cohort", err
 	}
 
 	return "", nil

@@ -42,68 +42,72 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		},
 		"no parameters specified": {
 			check: utiltesting.MakeAdmissionCheck("check1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
-				Type:    kueue.AdmissionCheckActive,
-				Status:  metav1.ConditionFalse,
-				Reason:  "BadParametersRef",
-				Message: "Unexpected parameters reference",
+				Type:               kueue.AdmissionCheckActive,
+				Status:             metav1.ConditionFalse,
+				Reason:             "BadParametersRef",
+				Message:            "missing parameters reference",
+				ObservedGeneration: 1,
 			},
 		},
 		"bad ref group": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters("bad.group", ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
-				Type:    kueue.AdmissionCheckActive,
-				Status:  metav1.ConditionFalse,
-				Reason:  "BadParametersRef",
-				Message: "Unexpected parameters reference",
+				Type:               kueue.AdmissionCheckActive,
+				Status:             metav1.ConditionFalse,
+				Reason:             "BadParametersRef",
+				Message:            "wrong group \"bad.group\", expecting \"kueue.x-k8s.io\": bad parameters reference",
+				ObservedGeneration: 1,
 			},
 		},
 		"bad ref kind": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, "BadKind", "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
-				Type:    kueue.AdmissionCheckActive,
-				Status:  metav1.ConditionFalse,
-				Reason:  "BadParametersRef",
-				Message: "Unexpected parameters reference",
+				Type:               kueue.AdmissionCheckActive,
+				Status:             metav1.ConditionFalse,
+				Reason:             "BadParametersRef",
+				Message:            "wrong kind \"BadKind\", expecting \"ProvisioningRequestConfig\": bad parameters reference",
+				ObservedGeneration: 1,
 			},
 		},
 		"config missing": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
-				Type:    kueue.AdmissionCheckActive,
-				Status:  metav1.ConditionFalse,
-				Reason:  "UnknownParametersRef",
-				Message: "provisioningrequestconfigs.kueue.x-k8s.io \"config1\" not found",
+				Type:               kueue.AdmissionCheckActive,
+				Status:             metav1.ConditionFalse,
+				Reason:             "BadParametersRef",
+				Message:            "provisioningrequestconfigs.kueue.x-k8s.io \"config1\" not found",
+				ObservedGeneration: 1,
 			},
 		},
 		"config found": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Generation(1).
 				Obj(),
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*utiltesting.MakeProvisioningRequestConfig("config1").Obj()},
 			wantCondition: &metav1.Condition{
-				Type:    kueue.AdmissionCheckActive,
-				Status:  metav1.ConditionTrue,
-				Reason:  "Active",
-				Message: "The admission check is active",
+				Type:               kueue.AdmissionCheckActive,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Active",
+				Message:            "The admission check is active",
+				ObservedGeneration: 1,
 			},
 		},
 	}
@@ -118,13 +122,15 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 			builder = builder.WithLists(&kueue.ProvisioningRequestConfigList{Items: tc.configs})
 
 			k8sclient := builder.Build()
-			helper := storeHelper{
-				client: k8sclient,
-			}
 
+			helper, err := newProvisioningConfigHelper(k8sclient)
+			if err != nil {
+				t.Errorf("unable to create the config helper: %s", err)
+				return
+			}
 			reconciler := acReconciler{
 				client: k8sclient,
-				helper: &helper,
+				helper: helper,
 			}
 
 			req := reconcile.Request{
@@ -140,7 +146,6 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 			gotAc := &kueue.AdmissionCheck{}
 			if err := k8sclient.Get(ctx, types.NamespacedName{Name: tc.check.Name}, gotAc); err != nil {
 				t.Errorf("unexpected error getting check %q", tc.check.Name)
-
 			}
 
 			gotCondition := apimeta.FindStatusCondition(gotAc.Status.Conditions, kueue.AdmissionCheckActive)

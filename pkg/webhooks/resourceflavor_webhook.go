@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -53,7 +52,7 @@ var _ webhook.CustomDefaulter = &ResourceFlavorWebhook{}
 func (w *ResourceFlavorWebhook) Default(ctx context.Context, obj runtime.Object) error {
 	rf := obj.(*kueue.ResourceFlavor)
 	log := ctrl.LoggerFrom(ctx).WithName("resourceflavor-webhook")
-	log.V(5).Info("Applying defaults", "resourceFlavor", klog.KObj(rf))
+	log.V(5).Info("Applying defaults")
 
 	if !controllerutil.ContainsFinalizer(rf, kueue.ResourceInUseFinalizerName) {
 		controllerutil.AddFinalizer(rf, kueue.ResourceInUseFinalizerName)
@@ -69,20 +68,20 @@ var _ webhook.CustomValidator = &ResourceFlavorWebhook{}
 func (w *ResourceFlavorWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	rf := obj.(*kueue.ResourceFlavor)
 	log := ctrl.LoggerFrom(ctx).WithName("resourceflavor-webhook")
-	log.V(5).Info("Validating create", "resourceFlavor", klog.KObj(rf))
+	log.V(5).Info("Validating create")
 	return nil, ValidateResourceFlavor(rf).ToAggregate()
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type
-func (w *ResourceFlavorWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (w *ResourceFlavorWebhook) ValidateUpdate(ctx context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
 	newRF := newObj.(*kueue.ResourceFlavor)
 	log := ctrl.LoggerFrom(ctx).WithName("resourceflavor-webhook")
-	log.V(5).Info("Validating update", "resourceFlavor", klog.KObj(newRF))
+	log.V(5).Info("Validating update")
 	return nil, ValidateResourceFlavor(newRF).ToAggregate()
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type
-func (w *ResourceFlavorWebhook) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (w *ResourceFlavorWebhook) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
@@ -111,8 +110,6 @@ func validateNodeTaints(taints []corev1.Taint, fldPath *field.Path) field.ErrorL
 		if errs := validation.IsValidLabelValue(currTaint.Value); len(errs) != 0 {
 			allErrors = append(allErrors, field.Invalid(idxPath.Child("value"), currTaint.Value, strings.Join(errs, ";")))
 		}
-		// validate the taint effect
-		allErrors = append(allErrors, validateTaintEffect(&currTaint.Effect, false, idxPath.Child("effect"))...)
 
 		// validate if taint is unique by <key, effect>
 		if len(uniqueTaints[currTaint.Effect]) > 0 && uniqueTaints[currTaint.Effect].Has(currTaint.Key) {
@@ -127,30 +124,6 @@ func validateNodeTaints(taints []corev1.Taint, fldPath *field.Path) field.ErrorL
 			uniqueTaints[currTaint.Effect] = sets.New[string]()
 		}
 		uniqueTaints[currTaint.Effect].Insert(currTaint.Key)
-	}
-	return allErrors
-}
-
-// validateTaintEffect is extracted from git.k8s.io/kubernetes/pkg/apis/core/validation/validation.go
-func validateTaintEffect(effect *corev1.TaintEffect, allowEmpty bool, fldPath *field.Path) field.ErrorList {
-	if !allowEmpty && len(*effect) == 0 {
-		return field.ErrorList{field.Required(fldPath, "")}
-	}
-
-	allErrors := field.ErrorList{}
-	switch *effect {
-	// TODO: Replace next line with subsequent commented-out line when implement TaintEffectNoScheduleNoAdmit.
-	case corev1.TaintEffectNoSchedule, corev1.TaintEffectPreferNoSchedule, corev1.TaintEffectNoExecute:
-		// case core.TaintEffectNoSchedule, core.TaintEffectPreferNoSchedule, core.TaintEffectNoScheduleNoAdmit, core.TaintEffectNoExecute:
-	default:
-		validValues := []string{
-			string(corev1.TaintEffectNoSchedule),
-			string(corev1.TaintEffectPreferNoSchedule),
-			string(corev1.TaintEffectNoExecute),
-			// TODO: Uncomment this block when implement TaintEffectNoScheduleNoAdmit.
-			// string(core.TaintEffectNoScheduleNoAdmit),
-		}
-		allErrors = append(allErrors, field.NotSupported(fldPath, *effect, validValues))
 	}
 	return allErrors
 }

@@ -18,15 +18,27 @@ package config
 
 import (
 	"fmt"
+	"slices"
+	"strings"
+	"unsafe"
 
 	corev1 "k8s.io/api/core/v1"
+	apimachineryvalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
+	apimachineryutilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/utils/strings/slices"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
+	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	podworkload "sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	"sigs.k8s.io/kueue/pkg/features"
 )
 
 const (
@@ -35,31 +47,113 @@ const (
 )
 
 var (
-	integrationsPath           = field.NewPath("integrations")
-	integrationsFrameworksPath = integrationsPath.Child("frameworks")
-	podOptionsPath             = integrationsPath.Child("podOptions")
-	namespaceSelectorPath      = podOptionsPath.Child("namespaceSelector")
+	integrationsPath                  = field.NewPath("integrations")
+	integrationsFrameworksPath        = integrationsPath.Child("frameworks")
+	integrationsExternalFrameworkPath = integrationsPath.Child("externalFrameworks")
+	podOptionsPath                    = integrationsPath.Child("podOptions")
+	namespaceSelectorPath             = podOptionsPath.Child("namespaceSelector")
+	managedJobsNamespaceSelectorPath  = field.NewPath("managedJobsNamespaceSelector")
+	waitForPodsReadyPath              = field.NewPath("waitForPodsReady")
+	requeuingStrategyPath             = waitForPodsReadyPath.Child("requeuingStrategy")
+	multiKueuePath                    = field.NewPath("multiKueue")
+	fsPreemptionStrategiesPath        = field.NewPath("fairSharing", "preemptionStrategies")
+	internalCertManagementPath        = field.NewPath("internalCertManagement")
+	queueVisibilityPath               = field.NewPath("queueVisibility")
+	resourceTransformationPath        = field.NewPath("resources", "transformations")
 )
 
-func validate(c *configapi.Configuration) field.ErrorList {
+func validate(c *configapi.Configuration, scheme *runtime.Scheme) field.ErrorList {
 	var allErrs field.ErrorList
-
+	allErrs = append(allErrs, validateWaitForPodsReady(c)...)
 	allErrs = append(allErrs, validateQueueVisibility(c)...)
+	allErrs = append(allErrs, validateIntegrations(c, scheme)...)
+	allErrs = append(allErrs, validateMultiKueue(c)...)
+	allErrs = append(allErrs, validateFairSharing(c)...)
+	allErrs = append(allErrs, validateInternalCertManagement(c)...)
+	allErrs = append(allErrs, validateResourceTransformations(c)...)
+	allErrs = append(allErrs, validateManagedJobsNamespaceSelector(c)...)
+	return allErrs
+}
 
-	// Validate PodNamespaceSelector for the pod framework
-	allErrs = append(allErrs, validateIntegrations(c)...)
+func validateInternalCertManagement(c *configapi.Configuration) field.ErrorList {
+	var allErrs field.ErrorList
+	if c.InternalCertManagement == nil || !ptr.Deref(c.InternalCertManagement.Enable, false) {
+		return allErrs
+	}
+	if svcName := c.InternalCertManagement.WebhookServiceName; svcName != nil {
+		if errs := apimachineryutilvalidation.IsDNS1035Label(*svcName); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(internalCertManagementPath.Child("webhookServiceName"), svcName, strings.Join(errs, ",")))
+		}
+	}
+	if secName := c.InternalCertManagement.WebhookSecretName; secName != nil {
+		if errs := apimachineryutilvalidation.IsDNS1123Subdomain(*secName); len(errs) != 0 {
+			allErrs = append(allErrs, field.Invalid(internalCertManagementPath.Child("webhookSecretName"), secName, strings.Join(errs, ",")))
+		}
+	}
+	return allErrs
+}
 
+func validateMultiKueue(c *configapi.Configuration) field.ErrorList {
+	var allErrs field.ErrorList
+	if c.MultiKueue != nil {
+		if c.MultiKueue.GCInterval != nil && c.MultiKueue.GCInterval.Duration < 0 {
+			allErrs = append(allErrs, field.Invalid(multiKueuePath.Child("gcInterval"),
+				c.MultiKueue.GCInterval.Duration, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+		if c.MultiKueue.WorkerLostTimeout != nil && c.MultiKueue.WorkerLostTimeout.Duration < 0 {
+			allErrs = append(allErrs, field.Invalid(multiKueuePath.Child("workerLostTimeout"),
+				c.MultiKueue.WorkerLostTimeout.Duration, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+		if c.MultiKueue.Origin != nil {
+			if errs := apimachineryutilvalidation.IsValidLabelValue(*c.MultiKueue.Origin); len(errs) != 0 {
+				allErrs = append(allErrs, field.Invalid(multiKueuePath.Child("origin"), *c.MultiKueue.Origin, strings.Join(errs, ",")))
+			}
+		}
+	}
+	return allErrs
+}
+
+func validateWaitForPodsReady(c *configapi.Configuration) field.ErrorList {
+	var allErrs field.ErrorList
+	if !WaitForPodsReadyIsEnabled(c) {
+		return allErrs
+	}
+	if c.WaitForPodsReady.Timeout != nil && c.WaitForPodsReady.Timeout.Duration < 0 {
+		allErrs = append(allErrs, field.Invalid(waitForPodsReadyPath.Child("timeout"),
+			c.WaitForPodsReady.Timeout, apimachineryvalidation.IsNegativeErrorMsg))
+	}
+	if strategy := c.WaitForPodsReady.RequeuingStrategy; strategy != nil {
+		if strategy.Timestamp != nil &&
+			*strategy.Timestamp != configapi.CreationTimestamp && *strategy.Timestamp != configapi.EvictionTimestamp {
+			allErrs = append(allErrs, field.NotSupported(requeuingStrategyPath.Child("timestamp"),
+				strategy.Timestamp, []configapi.RequeuingTimestamp{configapi.CreationTimestamp, configapi.EvictionTimestamp}))
+		}
+		if strategy.BackoffLimitCount != nil && *strategy.BackoffLimitCount < 0 {
+			allErrs = append(allErrs, field.Invalid(requeuingStrategyPath.Child("backoffLimitCount"),
+				*strategy.BackoffLimitCount, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+		if strategy.BackoffBaseSeconds != nil && *strategy.BackoffBaseSeconds < 0 {
+			allErrs = append(allErrs, field.Invalid(requeuingStrategyPath.Child("backoffBaseSeconds"),
+				*strategy.BackoffBaseSeconds, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+		if ptr.Deref(strategy.BackoffMaxSeconds, 0) < 0 {
+			allErrs = append(allErrs, field.Invalid(requeuingStrategyPath.Child("backoffMaxSeconds"),
+				*strategy.BackoffMaxSeconds, apimachineryvalidation.IsNegativeErrorMsg))
+		}
+	}
 	return allErrs
 }
 
 func validateQueueVisibility(cfg *configapi.Configuration) field.ErrorList {
 	var allErrs field.ErrorList
 	if cfg.QueueVisibility != nil {
-		queueVisibilityPath := field.NewPath("queueVisibility")
 		if cfg.QueueVisibility.ClusterQueues != nil {
-			clusterQueues := queueVisibilityPath.Child("clusterQueues")
+			maxCountPath := queueVisibilityPath.Child("clusterQueues").Child("maxCount")
+			if cfg.QueueVisibility.ClusterQueues.MaxCount < 0 {
+				allErrs = append(allErrs, field.Invalid(maxCountPath, cfg.QueueVisibility.ClusterQueues.MaxCount, apimachineryvalidation.IsNegativeErrorMsg))
+			}
 			if cfg.QueueVisibility.ClusterQueues.MaxCount > queueVisibilityClusterQueuesMaxValue {
-				allErrs = append(allErrs, field.Invalid(clusterQueues.Child("maxCount"), cfg.QueueVisibility.ClusterQueues.MaxCount, fmt.Sprintf("must be less than %d", queueVisibilityClusterQueuesMaxValue)))
+				allErrs = append(allErrs, field.Invalid(maxCountPath, cfg.QueueVisibility.ClusterQueues.MaxCount, fmt.Sprintf("must be less than %d", queueVisibilityClusterQueuesMaxValue)))
 			}
 		}
 		if cfg.QueueVisibility.UpdateIntervalSeconds < queueVisibilityClusterQueuesUpdateIntervalSeconds {
@@ -69,26 +163,48 @@ func validateQueueVisibility(cfg *configapi.Configuration) field.ErrorList {
 	return allErrs
 }
 
-func validateIntegrations(c *configapi.Configuration) field.ErrorList {
+func validateIntegrations(c *configapi.Configuration, scheme *runtime.Scheme) field.ErrorList {
 	var allErrs field.ErrorList
-
 	if c.Integrations == nil {
 		return field.ErrorList{field.Required(integrationsPath, "cannot be empty")}
 	}
-
 	if c.Integrations.Frameworks == nil {
 		return field.ErrorList{field.Required(integrationsFrameworksPath, "cannot be empty")}
 	}
 
-	allErrs = append(allErrs, validatePodIntegrationOptions(c)...)
+	managedFrameworks := sets.New[string]()
+	availableBuiltInFrameworks := jobframework.GetIntegrationsList()
+	for idx, framework := range c.Integrations.Frameworks {
+		if cb, found := jobframework.GetIntegration(framework); !found {
+			allErrs = append(allErrs, field.NotSupported(integrationsFrameworksPath.Index(idx), framework, availableBuiltInFrameworks))
+		} else if gvk, err := apiutil.GVKForObject(cb.JobType, scheme); err == nil {
+			if managedFrameworks.Has(gvk.String()) {
+				allErrs = append(allErrs, field.Duplicate(integrationsFrameworksPath.Index(idx), framework))
+			} else {
+				managedFrameworks = managedFrameworks.Insert(gvk.String())
+			}
+		}
+	}
+	for idx, framework := range c.Integrations.ExternalFrameworks {
+		gvk, _ := schema.ParseKindArg(framework)
+		switch {
+		case gvk == nil:
+			allErrs = append(allErrs, field.Invalid(integrationsExternalFrameworkPath.Index(idx), framework, "must be format, 'Kind.version.group.com'"))
+		case managedFrameworks.Has(gvk.String()):
+			allErrs = append(allErrs, field.Duplicate(integrationsExternalFrameworkPath.Index(idx), framework))
+		default:
+			managedFrameworks = managedFrameworks.Insert(gvk.String())
+		}
+	}
 
+	allErrs = append(allErrs, validatePodIntegrationOptions(c)...)
 	return allErrs
 }
 
 func validatePodIntegrationOptions(c *configapi.Configuration) field.ErrorList {
 	var allErrs field.ErrorList
 
-	if !slices.Contains(c.Integrations.Frameworks, "pod") {
+	if !slices.Contains(c.Integrations.Frameworks, podworkload.FrameworkName) {
 		return allErrs
 	}
 
@@ -99,7 +215,7 @@ func validatePodIntegrationOptions(c *configapi.Configuration) field.ErrorList {
 		return field.ErrorList{field.Required(namespaceSelectorPath, "a namespace selector is required")}
 	}
 
-	prohibitedNamespaces := []labels.Set{{corev1.LabelMetadataName: "kube-system"}}
+	prohibitedNamespaces := []labels.Set{{corev1.LabelMetadataName: metav1.NamespaceSystem}}
 
 	if c.Namespace != nil && *c.Namespace != "" {
 		prohibitedNamespaces = append(prohibitedNamespaces, labels.Set{corev1.LabelMetadataName: *c.Namespace})
@@ -115,6 +231,107 @@ func validatePodIntegrationOptions(c *configapi.Configuration) field.ErrorList {
 	for _, pn := range prohibitedNamespaces {
 		if selector.Matches(pn) {
 			allErrs = append(allErrs, field.Invalid(namespaceSelectorPath, c.Integrations.PodOptions.NamespaceSelector,
+				fmt.Sprintf("should not match the %q namespace", pn[corev1.LabelMetadataName])))
+		}
+	}
+
+	return allErrs
+}
+
+var (
+	validStrategySets = [][]configapi.PreemptionStrategy{
+		{
+			configapi.LessThanOrEqualToFinalShare,
+		},
+		{
+			configapi.LessThanInitialShare,
+		},
+		{
+			configapi.LessThanOrEqualToFinalShare,
+			configapi.LessThanInitialShare,
+		},
+	}
+
+	validStrategySetsStr = func() []string {
+		var ss []string
+		for _, s := range validStrategySets {
+			// Casting because strings.Join requires a slice of strings
+			strategies := *(*[]string)(unsafe.Pointer(&s))
+			ss = append(ss, strings.Join(strategies, ","))
+		}
+		return ss
+	}()
+)
+
+func validateFairSharing(c *configapi.Configuration) field.ErrorList {
+	fs := c.FairSharing
+	if fs == nil {
+		return nil
+	}
+	var allErrs field.ErrorList
+	if len(fs.PreemptionStrategies) > 0 {
+		validStrategy := false
+		for _, s := range validStrategySets {
+			if slices.Equal(s, fs.PreemptionStrategies) {
+				validStrategy = true
+				break
+			}
+		}
+		if !validStrategy {
+			allErrs = append(allErrs, field.NotSupported(fsPreemptionStrategiesPath, fs.PreemptionStrategies, validStrategySetsStr))
+		}
+	}
+	return allErrs
+}
+
+func validateResourceTransformations(c *configapi.Configuration) field.ErrorList {
+	res := c.Resources
+	if res == nil {
+		return nil
+	}
+	var allErrs field.ErrorList
+	seenKeys := make(sets.Set[corev1.ResourceName])
+	for idx, transform := range res.Transformations {
+		strategy := ptr.Deref(transform.Strategy, "")
+		if !(strategy == configapi.Retain || strategy == configapi.Replace) {
+			allErrs = append(allErrs, field.NotSupported(resourceTransformationPath.Index(idx).Child("strategy"),
+				transform.Strategy, []configapi.ResourceTransformationStrategy{configapi.Retain, configapi.Replace}))
+		}
+		if seenKeys.Has(transform.Input) {
+			allErrs = append(allErrs, field.Duplicate(resourceTransformationPath.Index(idx).Child("input"), transform.Input))
+		} else {
+			seenKeys.Insert(transform.Input)
+		}
+	}
+	return allErrs
+}
+
+func validateManagedJobsNamespaceSelector(c *configapi.Configuration) field.ErrorList {
+	var allErrs field.ErrorList
+
+	if !features.Enabled(features.ManagedJobsNamespaceSelector) {
+		return allErrs
+	}
+
+	if c.ManagedJobsNamespaceSelector == nil {
+		return field.ErrorList{field.Required(managedJobsNamespaceSelectorPath, "required when feature gate is enabled")}
+	}
+
+	// The namespace selector must exempt every prohibitedNamespace
+	prohibitedNamespaces := []labels.Set{{corev1.LabelMetadataName: metav1.NamespaceSystem}}
+	if c.Namespace != nil && *c.Namespace != "" {
+		prohibitedNamespaces = append(prohibitedNamespaces, labels.Set{corev1.LabelMetadataName: *c.Namespace})
+	}
+
+	allErrs = append(allErrs, validation.ValidateLabelSelector(c.ManagedJobsNamespaceSelector, validation.LabelSelectorValidationOptions{}, managedJobsNamespaceSelectorPath)...)
+	selector, err := metav1.LabelSelectorAsSelector(c.ManagedJobsNamespaceSelector)
+	if err != nil {
+		return allErrs
+	}
+
+	for _, pn := range prohibitedNamespaces {
+		if selector.Matches(pn) {
+			allErrs = append(allErrs, field.Invalid(managedJobsNamespaceSelectorPath, c.ManagedJobsNamespaceSelector,
 				fmt.Sprintf("should not match the %q namespace", pn[corev1.LabelMetadataName])))
 		}
 	}

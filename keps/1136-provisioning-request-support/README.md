@@ -10,6 +10,7 @@
     - [Story 1](#story-1)
     - [Story 2](#story-2)
   - [Risks and Mitigations](#risks-and-mitigations)
+    - [BookingExpired condition](#bookingexpired-condition)
 - [Design Details](#design-details)
   - [Test Plan](#test-plan)
       - [Prerequisite testing updates](#prerequisite-testing-updates)
@@ -22,8 +23,8 @@
 
 ## Summary
 
-Introduce an (AdmissionCheck)[https://github.com/kubernetes-sigs/kueue/tree/main/keps/993-two-phase-admission]
-that will use (`ProvisioningRequest`)[https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/proposals/provisioning-request.md]
+Introduce an [AdmissionCheck](https://github.com/kubernetes-sigs/kueue/tree/main/keps/993-two-phase-admission)
+that will use [`ProvisioningRequest`](https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/proposals/provisioning-request.md)
 to ensure that there is enough capacity in the cluster before
 admitting a workload.
 
@@ -33,7 +34,7 @@ Currently Kueue admits workloads based on the quota check alone.
 This works reasonably well in most cases, but doesn't provide
 guarantee that an admitted workload will actually schedule
 in full in the cluster. With `ProvisioningRequest`, SIG-Autoscaling owned
-(ClusterAutoscaler)[https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler]
+[ClusterAutoscaler](https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler)
 opens a way for stronger (but still not hard-guaranteed) all-or-nothing
 scheduling in an autoscaled cloud environment.
 
@@ -73,9 +74,20 @@ succeeds.
 
 ### Risks and Mitigations
 
-There doesn't seem to be much risks or mitigations.
-(Two phase admission process)[https://github.com/kubernetes-sigs/kueue/tree/main/keps/993-two-phase-admission]
-was added specifically for use cases like this.
+#### BookingExpired condition
+
+Kueue's support for the BookingExpired condition in ProvisioningRequest poses a risk. The Cluster Autoscaler may set `BookingExpired=true`,
+potentially ceasing to guarantee the capacity before all pods are scheduled. This can occur in two scenarios:
+
+- **Other AdmissionChecks**: If other AdmissionChecks are used, they might delay pod creation, causing the Cluster Autoscaler to expire the booking.
+- **Massive jobs**: When a very large job is created, the controller responsible for pod creation might not be able to
+  keep pace, again leading to the booking expiring before all pods are scheduled.
+
+This could result in the scheduling of only a subset of pods. To mitigate the first scenario, users can utilize the
+[`WaitForPodsReady`](https://github.com/kubernetes-sigs/kueue/tree/main/keps/349-all-or-nothing) field. This ensures
+a Workload is evicted if not all of its pods are scheduled after a specified timeout. For the second scenario, cluster
+administrators should ensure their control plane is adequately provisioned with sufficient resources - larger VMs and/or
+higher qps for the pod-creating controller) to handle large jobs efficiently.
 
 ## Design Details
 
@@ -95,15 +107,37 @@ The `ProvisioningRequest` should have the owner reference set to the workload.
 To understand what details should it put into `ProvisioningRequest` the controller
 will also need to watch `ProvisioningRequestConfigs`.
 
-* Watch all changes CA makes to `ProvisioningRequests`. If the `Provisioned`
-or `CapacityAvailable` condition is set to `True` then finish the `AdmissionCheck`
-with success (and propagate the information about `ProvisioningRequest` name to
-workload pods - KEP #1145 under `"cluster-autoscaler.kubernetes.io/consume-provisioning-request"`.
-If the `ProvisioningRequest` fails, fail the `AdmissionCheck`.
+* Watch all changes CA makes to `ProvisioningRequests`. If the `ProvisioningRequest's` conditions are set to:
+  - `Provisioned=false` controller should surface information about ProvisioningRequest's ETA. It should emit an event regarding that and for every ETA change.
+  - `Provisioned=true` controller should mark the AdmissionCheck as `Ready` and propagate the information about `ProvisioningRequest` name to
+workload pods - [KEP #1145](https://github.com/kubernetes-sigs/kueue/blob/main/keps/1145-additional-labels/kep.yaml) under `"cluster-autoscaler.kubernetes.io/consume-provisioning-request"`.
+  - `Failed=true` controller should retry AdmissionCheck with respect to the `RetryStrategy` configuration, or mark the AdmissionCheck as `Rejected`
+  - `BookingExpired=true` if a Workload is not `Admitted`, the controller should act the same as for `Failed=true`.
+  - `CapacityRevoked=true` if a Workload is not `Finished`, the controller should mark it as `Inactive`, which will evict it.
+    Additionally, an event should be emitted to signalize this happening. This can happen only if the job
+    allows for retries, for example, in the case of `batch.v1/Job`, when the user
+    sets `.spec.backOffLimit > 0`.
 
 * Watch the admission of the workload - if it is again suspended or finished,
 the provisioning request should also be deleted (the last one can be achieved via
 OwnerReference).
+
+* Retry ProvisioningRequests with respect to the `RetryStrategy` configuration in
+the `ProvisioningRequestConfig`. For each attempt a new provisioning request is
+created with the suffix indicating the attempt number. The corresponding AdmissionCheck will change Workload's `.status.requeueState` accordingly, and change its status to `Retry` state until the Workload is requeued. After the Workload is requeued the workload controller should change the AdmissionCheck's status to `Pending`.
+Unless a user configures otherwise configuration is as follows:
+  - The max number of retries is 3,
+  - The interval between attempts grows exponentially, starting
+from 1min (1, 2, 4 min),
+  - Workloads gets requeued (and the allocated quota is released) after each failure of ProvisioningRequest.
+
+Workload gets requeued in a similar way to [WaitForPodsReady](https://github.com/kubernetes-sigs/kueue/tree/main/keps/349-all-or-nothing) mechanism.
+When AdmissionCheck is in `Retry` state, the workload controller evicts the Workload with `WorkloadRequeued=False` condition with `AdmissionCheck` as a reason.
+After the backoff period, the Workload is requeued, enters the queue again, and begins a new admission cycle, and `.status.requeueState.requeueAt` field is reset.
+
+Additionally, to enable the previous behavior of keeping the quota, in 0.9.0 we introduce the feature gate `KeepQuotaForProvReqRetry`. If the feature gate is enabled the Workload with failed ProvisioningRequest
+will keep the allocated quota and won't be requeued. Instead it will be in the AdmissionCheck phase of admission, and will recreate ProvisioningRequest after backoff time.
+The feature gate is deprecated and will be removed in 0.10 unless we get feedback from users indicating that the old behavior is needed.
 
 The definition of `ProvisioningRequestConfig` is relatively simple and is based on
 what can be set in `ProvisioningRequest`.
@@ -146,6 +180,52 @@ type ProvisioningRequestConfigSpec struct {
 	// +listType=set
 	// +kubebuilder:validation:MaxItems=100
 	ManagedResources []corev1.ResourceName `json:"managedResources,omitempty"`
+
+	// retryStrategy defines strategy for retrying ProvisioningRequest.
+	// If null, then the default configuration is applied with the following parameter values:
+	// backoffLimitCount:  3
+	// backoffBaseSeconds: 60 - 1 min
+	// backoffMaxSeconds:  1800 - 30 mins
+	//
+	// To switch off retry mechanism
+	// set retryStrategy.backoffLimitCount to 0.
+	//
+	// +optional
+	// +kubebuilder:default={backoffLimitCount:3,backoffBaseSeconds:60,backoffMaxSeconds:1800}
+	RetryStrategy *ProvisioningRequestRetryStrategy `json:"retryStrategy,omitempty"`
+}
+
+type ProvisioningRequestRetryStrategy struct {
+	// BackoffLimitCount defines the maximum number of re-queuing retries.
+	// Once the number is reached, the workload is deactivated (`.spec.activate`=`false`).
+	//
+	// Every backoff duration is about "b*2^(n-1)+Rand" where:
+	// - "b" represents the base set by "BackoffBaseSeconds" parameter,
+	// - "n" represents the "workloadStatus.requeueState.count",
+	// - "Rand" represents the random jitter.
+	// During this time, the workload is taken as an inadmissible and
+	// other workloads will have a chance to be admitted.
+	// By default, the consecutive requeue delays are around: (60s, 120s, 240s, ...).
+	//
+	// Defaults to 3.
+	// +optional
+	// +kubebuilder:default=3
+	BackoffLimitCount *int32 `json:"backoffLimitCount,omitempty"`
+
+	// BackoffBaseSeconds defines the base for the exponential backoff for
+	// re-queuing an evicted workload.
+	//
+	// Defaults to 60.
+	// +optional
+	// +kubebuilder:default=60
+	BackoffBaseSeconds *int32 `json:"backoffBaseSeconds,omitempty"`
+
+	// BackoffMaxSeconds defines the maximum backoff time to re-queue an evicted workload.
+	//
+	// Defaults to 1800.
+	// +optional
+	// +kubebuilder:default=1800
+	BackoffMaxSeconds *int32 `json:"backoffMaxSeconds,omitempty"`
 }
 ```
 
@@ -161,7 +241,7 @@ spec:
     kind: “ProvisioningRequestConfig”
     name: “SuperProviderConfig”
 ---
-kind: ProvsioningRequestConfig:
+kind: ProvisioningRequestConfig:
 name: "SuperProviderConfig"
 spec:
   provisioningClass: "SuperSpot"

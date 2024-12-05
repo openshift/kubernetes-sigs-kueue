@@ -32,19 +32,20 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/controller/core/indexer"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/podset"
+	clientutil "sigs.k8s.io/kueue/pkg/util/client"
 )
 
 var (
-	parentWorkloadKey = ".metadata.parentWorkload"
-	gvk               = batchv1.SchemeGroupVersion.WithKind("Job")
+	gvk = batchv1.SchemeGroupVersion.WithKind("Job")
 
 	FrameworkName = "batch/job"
 )
@@ -52,22 +53,25 @@ var (
 const (
 	JobMinParallelismAnnotation              = "kueue.x-k8s.io/job-min-parallelism"
 	JobCompletionsEqualParallelismAnnotation = "kueue.x-k8s.io/job-completions-equal-parallelism"
+	StoppingAnnotation                       = "kueue.x-k8s.io/stopping"
 )
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
 		SetupIndexes:           SetupIndexes,
+		NewJob:                 NewJob,
 		NewReconciler:          NewReconciler,
 		SetupWebhook:           SetupWebhook,
 		JobType:                &batchv1.Job{},
 		IsManagingObjectsOwner: isJob,
+		MultiKueueAdapter:      &multikueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get;update
+// +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs/finalizers,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/status,verbs=get;update;patch
@@ -75,13 +79,13 @@ func init() {
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
 
-var NewReconciler = jobframework.NewGenericReconciler(
-	func() jobframework.GenericJob {
-		return &Job{}
-	}, func(c client.Client) handler.EventHandler {
-		return &parentWorkloadHandler{client: c}
-	},
-)
+func NewJob() jobframework.GenericJob {
+	return &Job{}
+}
+
+var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob, func(b *builder.Builder, c client.Client) *builder.Builder {
+	return b.Watches(&kueue.Workload{}, &parentWorkloadHandler{client: c})
+})
 
 func isJob(owner *metav1.OwnerReference) bool {
 	return owner.Kind == "Job" && owner.APIVersion == gvk.GroupVersion().String()
@@ -91,23 +95,23 @@ type parentWorkloadHandler struct {
 	client client.Client
 }
 
-func (h *parentWorkloadHandler) Create(ctx context.Context, e event.CreateEvent, q workqueue.RateLimitingInterface) {
+func (h *parentWorkloadHandler) Create(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	h.queueReconcileForChildJob(ctx, e.Object, q)
 }
 
-func (h *parentWorkloadHandler) Update(ctx context.Context, e event.UpdateEvent, q workqueue.RateLimitingInterface) {
+func (h *parentWorkloadHandler) Update(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	h.queueReconcileForChildJob(ctx, e.ObjectNew, q)
 }
 
-func (h *parentWorkloadHandler) Delete(context.Context, event.DeleteEvent, workqueue.RateLimitingInterface) {
+func (h *parentWorkloadHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *parentWorkloadHandler) Generic(ctx context.Context, e event.GenericEvent, q workqueue.RateLimitingInterface) {
+func (h *parentWorkloadHandler) Generic(_ context.Context, _ event.GenericEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
 // queueReconcileForChildJob queues reconciliation of the child jobs (jobs with the
 // parent-workload annotation) in reaction to the parent-workload events.
-func (h *parentWorkloadHandler) queueReconcileForChildJob(ctx context.Context, object client.Object, q workqueue.RateLimitingInterface) {
+func (h *parentWorkloadHandler) queueReconcileForChildJob(ctx context.Context, object client.Object, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	w, ok := object.(*kueue.Workload)
 	if !ok {
 		return
@@ -116,7 +120,11 @@ func (h *parentWorkloadHandler) queueReconcileForChildJob(ctx context.Context, o
 	ctx = ctrl.LoggerInto(ctx, log)
 	log.V(5).Info("Queueing reconcile for child jobs")
 	var childJobs batchv1.JobList
-	if err := h.client.List(ctx, &childJobs, client.InNamespace(w.Namespace), client.MatchingFields{parentWorkloadKey: w.Name}); err != nil {
+	owner := metav1.GetControllerOf(w)
+	if owner == nil {
+		return
+	}
+	if err := h.client.List(ctx, &childJobs, client.InNamespace(w.Namespace), client.MatchingFields{indexer.OwnerReferenceUID: string(owner.UID)}); err != nil {
 		klog.Error(err, "Unable to list child jobs")
 		return
 	}
@@ -146,7 +154,7 @@ func fromObject(o runtime.Object) *Job {
 }
 
 func (j *Job) IsSuspended() bool {
-	return j.Spec.Suspend != nil && *j.Spec.Suspend
+	return j.Spec.Suspend != nil && *j.Spec.Suspend && j.Annotations[StoppingAnnotation] != "true"
 }
 
 func (j *Job) IsActive() bool {
@@ -157,11 +165,20 @@ func (j *Job) Suspend() {
 	j.Spec.Suspend = ptr.To(true)
 }
 
-func (j *Job) Stop(ctx context.Context, c client.Client, podSetsInfo []podset.PodSetInfo, eventMsg string) (bool, error) {
+func (j *Job) Stop(ctx context.Context, c client.Client, podSetsInfo []podset.PodSetInfo, _ jobframework.StopReason, _ string) (bool, error) {
+	object := j.Object()
 	stoppedNow := false
+
 	if !j.IsSuspended() {
-		j.Suspend()
-		if err := c.Update(ctx, j.Object()); err != nil {
+		if err := clientutil.Patch(ctx, c, object, true, func() (bool, error) {
+			j.Suspend()
+			if j.ObjectMeta.Annotations == nil {
+				j.ObjectMeta.Annotations = map[string]string{}
+			}
+			// We are using annotation to be sure that all updates finished successfully.
+			j.ObjectMeta.Annotations[StoppingAnnotation] = "true"
+			return true, nil
+		}); err != nil {
 			return false, fmt.Errorf("suspend: %w", err)
 		}
 		stoppedNow = true
@@ -169,18 +186,22 @@ func (j *Job) Stop(ctx context.Context, c client.Client, podSetsInfo []podset.Po
 
 	// Reset start time if necessary, so we can update the scheduling directives.
 	if j.Status.StartTime != nil {
-		j.Status.StartTime = nil
-		if err := c.Status().Update(ctx, j.Object()); err != nil {
+		if err := clientutil.PatchStatus(ctx, c, object, func() (bool, error) {
+			j.Status.StartTime = nil
+			return true, nil
+		}); err != nil {
 			return stoppedNow, fmt.Errorf("reset status: %w", err)
 		}
 	}
 
-	if changed := j.RestorePodSetsInfo(podSetsInfo); !changed {
-		return stoppedNow, nil
-	}
-	if err := c.Update(ctx, j.Object()); err != nil {
+	if err := clientutil.Patch(ctx, c, object, true, func() (bool, error) {
+		j.RestorePodSetsInfo(podSetsInfo)
+		delete(j.ObjectMeta.Annotations, StoppingAnnotation)
+		return true, nil
+	}); err != nil {
 		return false, fmt.Errorf("restore info: %w", err)
 	}
+
 	return stoppedNow, nil
 }
 
@@ -188,30 +209,52 @@ func (j *Job) GVK() schema.GroupVersionKind {
 	return gvk
 }
 
-func (j *Job) ReclaimablePods() []kueue.ReclaimablePod {
+func (j *Job) PodLabelSelector() string {
+	return fmt.Sprintf("%s=%s", batchv1.JobNameLabel, j.Name)
+}
+
+func (j *Job) ReclaimablePods() ([]kueue.ReclaimablePod, error) {
 	parallelism := ptr.Deref(j.Spec.Parallelism, 1)
 	if parallelism == 1 || j.Status.Succeeded == 0 {
-		return nil
+		return nil, nil
 	}
 
 	remaining := ptr.Deref(j.Spec.Completions, parallelism) - j.Status.Succeeded
 	if remaining >= parallelism {
-		return nil
+		return nil, nil
 	}
 
 	return []kueue.ReclaimablePod{{
 		Name:  kueue.DefaultPodSetName,
 		Count: parallelism - remaining,
-	}}
+	}}, nil
+}
+
+// The following labels are managed internally by batch/job controller, we should not
+// propagate them to the workload.
+var (
+	// the legacy names are no longer defined in the api, only in k/2/apis/batch
+	legacyJobNameLabel       = "job-name"
+	legacyControllerUIDLabel = "controller-uid"
+	ManagedLabels            = []string{legacyJobNameLabel, legacyControllerUIDLabel, batchv1.JobNameLabel, batchv1.ControllerUidLabel}
+)
+
+func cleanManagedLabels(pt *corev1.PodTemplateSpec) *corev1.PodTemplateSpec {
+	for _, managedLabel := range ManagedLabels {
+		delete(pt.Labels, managedLabel)
+	}
+	return pt
 }
 
 func (j *Job) PodSets() []kueue.PodSet {
 	return []kueue.PodSet{
 		{
 			Name:     kueue.DefaultPodSetName,
-			Template: *j.Spec.Template.DeepCopy(),
+			Template: *cleanManagedLabels(j.Spec.Template.DeepCopy()),
 			Count:    j.podsCount(),
 			MinCount: j.minPodsCount(),
+			TopologyRequest: jobframework.PodSetTopologyRequest(&j.Spec.Template.ObjectMeta,
+				ptr.To(batchv1.JobCompletionIndexAnnotation), nil, nil),
 		},
 	}
 }
@@ -247,33 +290,24 @@ func (j *Job) RestorePodSetsInfo(podSetsInfo []podset.PodSetInfo) bool {
 			j.Spec.Completions = j.Spec.Parallelism
 		}
 	}
-	changed = podset.RestorePodSpec(&j.Spec.Template.ObjectMeta, &j.Spec.Template.Spec, podSetsInfo[0]) || changed
+	info := podSetsInfo[0]
+	for _, managedLabel := range ManagedLabels {
+		if v, found := j.Spec.Template.Labels[managedLabel]; found {
+			info.AddOrUpdateLabel(managedLabel, v)
+		}
+	}
+	changed = podset.RestorePodSpec(&j.Spec.Template.ObjectMeta, &j.Spec.Template.Spec, info) || changed
 	return changed
 }
 
-func (j *Job) Finished() (metav1.Condition, bool) {
-	var conditionType batchv1.JobConditionType
-	var finished bool
-
+func (j *Job) Finished() (message string, success, finished bool) {
 	for _, c := range j.Status.Conditions {
 		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
-			conditionType = c.Type
-			finished = true
-			break
+			return c.Message, c.Type != batchv1.JobFailed, true
 		}
 	}
 
-	condition := metav1.Condition{
-		Type:    kueue.WorkloadFinished,
-		Status:  metav1.ConditionTrue,
-		Reason:  "JobFinished",
-		Message: "Job finished successfully",
-	}
-	if conditionType == batchv1.JobFailed {
-		condition.Message = "Job failed"
-	}
-
-	return condition, finished
+	return "", true, false
 }
 
 func (j *Job) PodsReady() bool {
@@ -308,19 +342,13 @@ func (j *Job) syncCompletionWithParallelism() bool {
 	return false
 }
 
-func SetupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
-	if err := indexer.IndexField(ctx, &batchv1.Job{}, parentWorkloadKey, func(o client.Object) []string {
-		job := fromObject(o)
-		if pwName := jobframework.ParentWorkloadName(job); pwName != "" {
-			return []string{pwName}
-		}
-		return nil
-	}); err != nil {
+func SetupIndexes(ctx context.Context, fieldIndexer client.FieldIndexer) error {
+	if err := fieldIndexer.IndexField(ctx, &batchv1.Job{}, indexer.OwnerReferenceUID, indexer.IndexOwnerUID); err != nil {
 		return err
 	}
-	return jobframework.SetupWorkloadOwnerIndex(ctx, indexer, gvk)
+	return jobframework.SetupWorkloadOwnerIndex(ctx, fieldIndexer, gvk)
 }
 
-func GetWorkloadNameForJob(jobName string) string {
-	return jobframework.GetWorkloadNameForOwnerWithGVK(jobName, gvk)
+func GetWorkloadNameForJob(jobName string, jobUID types.UID) string {
+	return jobframework.GetWorkloadNameForOwnerWithGVK(jobName, jobUID, gvk)
 }

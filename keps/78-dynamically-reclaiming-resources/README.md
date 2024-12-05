@@ -9,13 +9,13 @@
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
   - [Pod Completion Accounting](#pod-completion-accounting)
-    - [Reference design for (<code>batch/Job</code>)](#reference-design-for-)
+    - [Reference design for (<code>batch/Job</code>)](#reference-design-for-batchjob)
       - [To consider](#to-consider)
   - [API](#api)
 - [Implementation](#implementation)
   - [Workload](#workload)
     - [API](#api-1)
-    - [<code>pkg/workload</code>](#)
+    - [<code>pkg/workload</code>](#pkgworkload)
   - [Jobframework](#jobframework)
   - [Batch/Job](#batchjob)
 - [Testing Plan](#testing-plan)
@@ -87,7 +87,7 @@ the expected reclaimablePods should be:
 
 ##### To consider
 According to [kubernetes/enhancements](https://github.com/kubernetes/enhancements) the algorithm presented above might need to be reworked in order to account for:
-- [KEP-3939](https://github.com/kubernetes/enhancements/pull/3940) which adds a new field `terminating` to account for terminating pods, depending on `spec.RecreatePodsWhen`, when reclaimablePods are computed the new fiels needs to be taken into account.
+- [KEP-3939](https://github.com/kubernetes/enhancements/pull/3940) which adds a new field `terminating` to account for terminating pods, depending on `spec.RecreatePodsWhen`, when reclaimablePods are computed the new fields needs to be taken into account.
 - [KEP-3850](https://github.com/kubernetes/enhancements/pull/3967) which adds the ability for an index to fail. If an index fails, the resources previously reserved for it are no longer needed.
 
 ### API

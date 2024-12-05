@@ -384,3 +384,91 @@ following command:
 ```shell
 kubectl apply -f team-a-cq.yaml -f team-b-cq.yaml -f shared-cq.yaml
 ```
+<<<<<<< HEAD:site/content/en/docs/tasks/administer_cluster_quotas.md
+=======
+
+## Exclude arbitrary resources in the quota management 
+By default, administrators must specify all resources required by Pods in the ClusterQueues `.spec.resourceGroups[*]`.
+If you want to exclude some resources in the ClusterQueues quota management and admission process, 
+you can specify the resource prefixes in the Kueue Configuration as a cluster-level setting.
+
+Follow the [installation instructions for using a custom configuration](/docs/installation#install-a-custom-configured-released-version) 
+and extend the configuration with fields similar to the following:
+
+```yaml
+apiVersion: config.kueue.x-k8s.io/v1beta1
+kind: Configuration
+resources:
+  excludeResourcePrefixes:
+  - "example.com"
+```
+
+## Transform resources for quota management
+
+{{< feature-state state="beta" for_version="v0.10" >}}
+{{% alert title="Note" color="primary" %}}
+
+`ConfigurableResourceTransformation` is a Beta feature that is enabled by default.
+
+You can disable it by setting the `ConfigurableResourceTransformation` feature gate. Check the [Installation](/docs/installation/#change-the-feature-gates-configuration) guide for details on feature gate configuration.
+{{% /alert %}}
+
+An administrator may customize how the resources requested by Pods are
+converted into Workload resource requests. This enables
+the admission and quota calculations done by ClusterQueues to be performed
+on a transformed set of resources requirements without changing
+the resource requests and limits that the Pods created by the Workload
+will present to the Kubernetes Scheduler when the Workload is admitted by
+a ClusterQueue. Customizations are defined by specifying resource transformations
+in the Kueue configuration as a cluster-level setting.
+
+The supported transformations enable mapping an input resource into one or more
+output resources by multiplying the input resource quantity by a scaling factor.
+The input resource may either be retained (default) or removed from the transformed resources. If no transformation is defined for an input resource, it is retained without change.
+
+Follow the [installation instructions for using a custom configuration](/docs/installation#install-a-custom-configured-released-version)
+and extend the Kueue configuration with fields similar to the following:
+
+```yaml
+apiVersion: config.kueue.x-k8s.io/v1beta1
+kind: Configuration
+resources:
+  transformations:
+  - input: example.com/gpu-type1:
+    strategy: Replace
+    outputs:
+      example.com/gpu-memory: 5Gi
+      example.com/credits: 10
+  - input: example.com/gpu-type2:
+    strategy: Replace
+    outputs:
+      example.com/gpu-memory: 20Gi
+      example.com/credits: 40
+  - input: cpu
+    strategy: Retain
+    outputs:
+      example.com/credits: 1
+```
+
+With this example configuration, a Pod that requests:
+```yaml
+    resources:
+      requests:
+        cpu: 1
+        memory: 100Gi
+      limits:
+        example.com/gpu-type1: 2
+        example.com/gpu-type2: 1
+```
+
+The Workload obtains an effective resource requests for quota purposes:
+
+```yaml
+    resources:
+      requests:
+        cpu: 1
+        memory: 100Gi
+        example.com/gpu-memory: 30Gi
+        example.com/credits: 61
+```
+>>>>>>> kueue-upstream/main:site/content/en/docs/tasks/manage/administer_cluster_quotas.md

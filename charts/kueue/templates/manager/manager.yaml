@@ -4,25 +4,28 @@ metadata:
   name: {{ include "kueue.fullname" . }}-controller-manager
   namespace: '{{ .Release.Namespace }}'
   labels:
-    control-plane: controller-manager
+  {{- include "kueue.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controllerManager.replicas }}
   selector:
     matchLabels:
-      control-plane: controller-manager
     {{- include "kueue.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        control-plane: controller-manager
       {{- include "kueue.selectorLabels" . | nindent 8 }}
       annotations:
+        charts.kueue.x-k8s.io/config-checksum: {{ include (print .Template.BasePath "/manager/manager-config.yaml") . | sha256sum }}
         kubectl.kubernetes.io/default-container: manager
+        {{- if .Values.controllerManager.manager.podAnnotations }}
+        {{- toYaml .Values.controllerManager.manager.podAnnotations | nindent 8 }}
+        {{- end }}
     spec:
       containers:
       - args:
         - --config=/controller_manager_config.yaml
         - --zap-log-level=2
+        {{- include "kueue.featureGates" . | indent 8 }}
         command:
         - /manager
         image: "{{ .Values.controllerManager.manager.image.repository }}:{{ .Values.controllerManager.manager.image.tag | default .Chart.AppVersion }}"
@@ -38,6 +41,9 @@ spec:
           successThreshold: {{ .Values.controllerManager.livenessProbe.successThreshold }}
         name: manager
         ports:
+        - containerPort: 8082
+          name: visibility
+          protocol: TCP
         - containerPort: 9443
           name: webhook-server
           protocol: TCP
@@ -50,8 +56,8 @@ spec:
           timeoutSeconds: {{ .Values.controllerManager.readinessProbe.timeoutSeconds }}
           failureThreshold: {{ .Values.controllerManager.readinessProbe.failureThreshold }}
           successThreshold: {{ .Values.controllerManager.readinessProbe.successThreshold }}
-        resources: {{- toYaml .Values.controllerManager.manager.resources | nindent 10
-          }}
+        resources:
+          {{- toYaml .Values.controllerManager.manager.resources | nindent 10 }}
         securityContext:
           {{- toYaml .Values.controllerManager.manager.containerSecurityContext | nindent 10 }}
         volumeMounts:
@@ -82,6 +88,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       terminationGracePeriodSeconds: 10
+      {{- with .Values.controllerManager.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
       - name: cert
         secret:

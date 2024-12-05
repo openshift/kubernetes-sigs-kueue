@@ -1,18 +1,79 @@
 # golangci-lint configuration file
 # see: https://golangci-lint.run/usage/configuration/
 
-# Options for analysis running
-run:
-  # Which dirs to skip: they won't be analyzed;
-  skip-dirs:
-    - bin
-
 # Settings of specific linters
 linters-settings:
-  goimports:
-    local-prefixes: sigs.k8s.io/kueue
+  gocritic:
+    enabled-checks:
+      - dupImport
+      - stringsCompare
+    disabled-checks:
+      - appendAssign
+      - exitAfterDefer
+  govet:
+    enable:
+      - nilness
+  gci:
+    sections:
+      - standard # Standard section: captures all standard packages.
+      - default # Default section: contains all imports that could not be matched to another section type.
+      - prefix(sigs.k8s.io/kueue) # Custom section: groups all imports with the specified Prefix.
+      - blank # Blank section: contains all blank imports. This section is not present unless explicitly enabled.
+      - dot # Dot section: contains all dot imports.
+    skip-generated: true # Skip generated files.
+  perfsprint:
+    int-conversion: false
+    errorf: true
+    sprintf1: false
+    strconcat: false
+  revive:
+    enable-all-rules: false
+    rules:
+      - name: context-as-argument
+      - name: empty-lines
+      - name: var-naming
+      - name: redundant-import-alias
 
 # Settings for enabling and disabling linters
 linters:
   enable:
-    - goimports
+    - copyloopvar
+    - dupword
+    - durationcheck
+    - fatcontext
+    - gci
+    - ginkgolinter
+    - gocritic
+    - govet
+    - loggercheck
+    - misspell
+    - perfsprint
+    - revive
+    - unconvert
+    - makezero
+
+# Settings related to issues
+issues:
+  # Which dirs to exclude: issues from them won't be reported
+  exclude-dirs:
+    - bin
+    - vendor
+  # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude-rules:
+    - linters:
+      - staticcheck
+      # TODO(#768): Drop when incrementing the API version.
+      text: "SA1019: constants.QueueAnnotation is deprecated"
+    - linters:
+        - staticcheck
+      text: "SA1019: j.Status.State is deprecated: the State field is replaced by the Conditions field."
+    - linters:
+        - staticcheck
+      text: "SA1019: j.Status.RayClusterStatus.State is deprecated: the State field is replaced by the Conditions field."
+    - linters:
+        - fatcontext
+      path: "^test/*"
+  # Show all issues from a linter
+  max-issues-per-linter: 0
+  # Show all issues with the same text
+  max-same-issues: 0

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,17 +17,19 @@ limitations under the License.
 
 package v1beta1
 
-// WorkloadSpecApplyConfiguration represents an declarative configuration of the WorkloadSpec type for use
+// WorkloadSpecApplyConfiguration represents a declarative configuration of the WorkloadSpec type for use
 // with apply.
 type WorkloadSpecApplyConfiguration struct {
-	PodSets             []PodSetApplyConfiguration `json:"podSets,omitempty"`
-	QueueName           *string                    `json:"queueName,omitempty"`
-	PriorityClassName   *string                    `json:"priorityClassName,omitempty"`
-	Priority            *int32                     `json:"priority,omitempty"`
-	PriorityClassSource *string                    `json:"priorityClassSource,omitempty"`
+	PodSets                     []PodSetApplyConfiguration `json:"podSets,omitempty"`
+	QueueName                   *string                    `json:"queueName,omitempty"`
+	PriorityClassName           *string                    `json:"priorityClassName,omitempty"`
+	Priority                    *int32                     `json:"priority,omitempty"`
+	PriorityClassSource         *string                    `json:"priorityClassSource,omitempty"`
+	Active                      *bool                      `json:"active,omitempty"`
+	MaximumExecutionTimeSeconds *int32                     `json:"maximumExecutionTimeSeconds,omitempty"`
 }
 
-// WorkloadSpecApplyConfiguration constructs an declarative configuration of the WorkloadSpec type for use with
+// WorkloadSpecApplyConfiguration constructs a declarative configuration of the WorkloadSpec type for use with
 // apply.
 func WorkloadSpec() *WorkloadSpecApplyConfiguration {
 	return &WorkloadSpecApplyConfiguration{}
@@ -75,5 +77,21 @@ func (b *WorkloadSpecApplyConfiguration) WithPriority(value int32) *WorkloadSpec
 // If called multiple times, the PriorityClassSource field is set to the value of the last call.
 func (b *WorkloadSpecApplyConfiguration) WithPriorityClassSource(value string) *WorkloadSpecApplyConfiguration {
 	b.PriorityClassSource = &value
+	return b
+}
+
+// WithActive sets the Active field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Active field is set to the value of the last call.
+func (b *WorkloadSpecApplyConfiguration) WithActive(value bool) *WorkloadSpecApplyConfiguration {
+	b.Active = &value
+	return b
+}
+
+// WithMaximumExecutionTimeSeconds sets the MaximumExecutionTimeSeconds field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the MaximumExecutionTimeSeconds field is set to the value of the last call.
+func (b *WorkloadSpecApplyConfiguration) WithMaximumExecutionTimeSeconds(value int32) *WorkloadSpecApplyConfiguration {
+	b.MaximumExecutionTimeSeconds = &value
 	return b
 }

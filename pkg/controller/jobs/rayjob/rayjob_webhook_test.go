@@ -22,12 +22,16 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	rayjobapi "github.com/ray-project/kuberay/ray-operator/apis/ray/v1alpha1"
+	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
+	corev1 "k8s.io/api/core/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/features"
 	testingrayutil "sigs.k8s.io/kueue/pkg/util/testingjobs/rayjob"
 )
 
@@ -38,8 +42,8 @@ var (
 
 func TestValidateDefault(t *testing.T) {
 	testcases := map[string]struct {
-		oldJob    *rayjobapi.RayJob
-		newJob    *rayjobapi.RayJob
+		oldJob    *rayv1.RayJob
+		newJob    *rayv1.RayJob
 		manageAll bool
 	}{
 		"unmanaged": {
@@ -73,6 +77,7 @@ func TestValidateDefault(t *testing.T) {
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
+			features.SetFeatureGateDuringTest(t, features.ManagedJobsNamespaceSelector, false)
 			wh := &RayJobWebhook{
 				manageJobsWithoutQueueName: tc.manageAll,
 			}
@@ -88,11 +93,11 @@ func TestValidateDefault(t *testing.T) {
 }
 
 func TestValidateCreate(t *testing.T) {
-	worker := rayjobapi.WorkerGroupSpec{}
-	bigWorkerGroup := []rayjobapi.WorkerGroupSpec{worker, worker, worker, worker, worker, worker, worker, worker}
+	worker := rayv1.WorkerGroupSpec{}
+	bigWorkerGroup := []rayv1.WorkerGroupSpec{worker, worker, worker, worker, worker, worker, worker, worker}
 
 	testcases := map[string]struct {
-		job       *rayjobapi.RayJob
+		job       *rayv1.RayJob
 		manageAll bool
 		wantErr   error
 	}{
@@ -147,12 +152,87 @@ func TestValidateCreate(t *testing.T) {
 		},
 		"worker group uses head name": {
 			job: testingrayutil.MakeJob("job", "ns").Queue("queue").
-				WithWorkerGroups(rayjobapi.WorkerGroupSpec{
+				WithWorkerGroups(rayv1.WorkerGroupSpec{
 					GroupName: headGroupPodSetName,
 				}).
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Forbidden(field.NewPath("spec", "rayClusterSpec", "workerGroupSpecs").Index(0).Child("groupName"), fmt.Sprintf("%q is reserved for the head group", headGroupPodSetName)),
+			}.ToAggregate(),
+		},
+		"valid topology request": {
+			job: testingrayutil.MakeJob("rayjob", "ns").Queue("queue").
+				WithHeadGroupSpec(rayv1.HeadGroupSpec{
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								kueuealpha.PodSetRequiredTopologyAnnotation: "cloud.com/block",
+							},
+						},
+					},
+				}).
+				WithWorkerGroups(
+					rayv1.WorkerGroupSpec{
+						GroupName: "wg1",
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									kueuealpha.PodSetRequiredTopologyAnnotation: "cloud.com/block",
+								},
+							},
+						},
+					},
+					rayv1.WorkerGroupSpec{
+						GroupName: "wg2",
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									kueuealpha.PodSetPreferredTopologyAnnotation: "cloud.com/block",
+								},
+							},
+						},
+					},
+					rayv1.WorkerGroupSpec{GroupName: "wg3"},
+				).
+				Obj(),
+		},
+		"invalid topology request": {
+			job: testingrayutil.MakeJob("rayjob", "ns").Queue("queue").
+				WithHeadGroupSpec(rayv1.HeadGroupSpec{
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								kueuealpha.PodSetPreferredTopologyAnnotation: "cloud.com/block",
+								kueuealpha.PodSetRequiredTopologyAnnotation:  "cloud.com/block",
+							},
+						},
+					},
+				}).
+				WithWorkerGroups(
+					rayv1.WorkerGroupSpec{
+						GroupName: "wg1",
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									kueuealpha.PodSetPreferredTopologyAnnotation: "cloud.com/block",
+									kueuealpha.PodSetRequiredTopologyAnnotation:  "cloud.com/block",
+								},
+							},
+						},
+					},
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(
+					field.NewPath("spec.rayClusterSpec.headGroupSpec.template, metadata.annotations"),
+					field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`,
+				),
+				field.Invalid(
+					field.NewPath("spec.rayClusterSpec.workerGroupSpecs[0].template.metadata.annotations"),
+					field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`,
+				),
 			}.ToAggregate(),
 		},
 	}
@@ -172,8 +252,8 @@ func TestValidateCreate(t *testing.T) {
 
 func TestValidateUpdate(t *testing.T) {
 	testcases := map[string]struct {
-		oldJob    *rayjobapi.RayJob
-		newJob    *rayjobapi.RayJob
+		oldJob    *rayv1.RayJob
+		newJob    *rayv1.RayJob
 		manageAll bool
 		wantErr   error
 	}{
@@ -223,7 +303,7 @@ func TestValidateUpdate(t *testing.T) {
 				ShutdownAfterJobFinishes(true).
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), "queue", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), "queue2", apivalidation.FieldImmutableErrorMsg),
 			}.ToAggregate(),
 		},
 		"managed - queue name can change while suspended": {
@@ -249,7 +329,7 @@ func TestValidateUpdate(t *testing.T) {
 				WorkloadPriorityClass("test-2").
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(workloadPriorityClassNamePath, "test-1", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(workloadPriorityClassNamePath, "test-2", apivalidation.FieldImmutableErrorMsg),
 			}.ToAggregate(),
 		},
 	}

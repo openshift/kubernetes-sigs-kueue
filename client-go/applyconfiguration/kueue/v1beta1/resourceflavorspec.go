@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,17 +19,19 @@ package v1beta1
 
 import (
 	v1 "k8s.io/api/core/v1"
+	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// ResourceFlavorSpecApplyConfiguration represents an declarative configuration of the ResourceFlavorSpec type for use
+// ResourceFlavorSpecApplyConfiguration represents a declarative configuration of the ResourceFlavorSpec type for use
 // with apply.
 type ResourceFlavorSpecApplyConfiguration struct {
-	NodeLabels  map[string]string `json:"nodeLabels,omitempty"`
-	NodeTaints  []v1.Taint        `json:"nodeTaints,omitempty"`
-	Tolerations []v1.Toleration   `json:"tolerations,omitempty"`
+	NodeLabels   map[string]string          `json:"nodeLabels,omitempty"`
+	NodeTaints   []v1.Taint                 `json:"nodeTaints,omitempty"`
+	Tolerations  []v1.Toleration            `json:"tolerations,omitempty"`
+	TopologyName *v1beta1.TopologyReference `json:"topologyName,omitempty"`
 }
 
-// ResourceFlavorSpecApplyConfiguration constructs an declarative configuration of the ResourceFlavorSpec type for use with
+// ResourceFlavorSpecApplyConfiguration constructs a declarative configuration of the ResourceFlavorSpec type for use with
 // apply.
 func ResourceFlavorSpec() *ResourceFlavorSpecApplyConfiguration {
 	return &ResourceFlavorSpecApplyConfiguration{}
@@ -66,5 +68,13 @@ func (b *ResourceFlavorSpecApplyConfiguration) WithTolerations(values ...v1.Tole
 	for i := range values {
 		b.Tolerations = append(b.Tolerations, values[i])
 	}
+	return b
+}
+
+// WithTopologyName sets the TopologyName field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the TopologyName field is set to the value of the last call.
+func (b *ResourceFlavorSpecApplyConfiguration) WithTopologyName(value v1beta1.TopologyReference) *ResourceFlavorSpecApplyConfiguration {
+	b.TopologyName = &value
 	return b
 }

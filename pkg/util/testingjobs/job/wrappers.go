@@ -51,7 +51,7 @@ func MakeJob(name, ns string) *JobWrapper {
 						{
 							Name:      "c",
 							Image:     "pause",
-							Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}, Limits: corev1.ResourceList{}},
 						},
 					},
 					NodeSelector: map[string]string{},
@@ -69,6 +69,16 @@ func (j *JobWrapper) Obj() *batchv1.Job {
 // Clone returns deep copy of the Job.
 func (j *JobWrapper) Clone() *JobWrapper {
 	return &JobWrapper{Job: *j.DeepCopy()}
+}
+
+func (j *JobWrapper) BackoffLimit(limit int32) *JobWrapper {
+	j.Spec.BackoffLimit = ptr.To(limit)
+	return j
+}
+
+func (j *JobWrapper) TerminationGracePeriod(seconds int64) *JobWrapper {
+	j.Spec.Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
+	return j
 }
 
 // Suspend updates the suspend status of the job
@@ -129,12 +139,6 @@ func (j *JobWrapper) QueueNameAnnotation(queue string) *JobWrapper {
 	return j.SetAnnotation(constants.QueueAnnotation, queue)
 }
 
-// ParentWorkload sets the parent-workload annotation
-func (j *JobWrapper) ParentWorkload(parentWorkload string) *JobWrapper {
-	j.Annotations[constants.ParentWorkloadAnnotation] = parentWorkload
-	return j
-}
-
 func (j *JobWrapper) SetAnnotation(key, content string) *JobWrapper {
 	j.Annotations[key] = content
 	return j
@@ -176,6 +180,12 @@ func (j *JobWrapper) Request(r corev1.ResourceName, v string) *JobWrapper {
 	return j
 }
 
+// Limit adds a resource limit to the default container.
+func (j *JobWrapper) Limit(r corev1.ResourceName, v string) *JobWrapper {
+	j.Spec.Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	return j
+}
+
 func (j *JobWrapper) Image(image string, args []string) *JobWrapper {
 	j.Spec.Template.Spec.Containers[0].Image = image
 	j.Spec.Template.Spec.Containers[0].Args = args
@@ -193,6 +203,11 @@ func (j *JobWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersi
 			Controller: ptr.To(true),
 		},
 	}
+	return j
+}
+
+func (j *JobWrapper) Containers(containers ...corev1.Container) *JobWrapper {
+	j.Spec.Template.Spec.Containers = containers
 	return j
 }
 
@@ -217,5 +232,31 @@ func (j *JobWrapper) Active(c int32) *JobWrapper {
 // Condition adds a condition
 func (j *JobWrapper) Condition(c batchv1.JobCondition) *JobWrapper {
 	j.Status.Conditions = append(j.Status.Conditions, c)
+	return j
+}
+
+// Generation sets the generation
+func (j *JobWrapper) Generation(g int64) *JobWrapper {
+	j.ObjectMeta.Generation = g
+	return j
+}
+
+func SetContainerDefaults(c *corev1.Container) {
+	if c.TerminationMessagePath == "" {
+		c.TerminationMessagePath = "/dev/termination-log"
+	}
+
+	if c.TerminationMessagePolicy == "" {
+		c.TerminationMessagePolicy = corev1.TerminationMessageReadFile
+	}
+
+	if c.ImagePullPolicy == "" {
+		c.ImagePullPolicy = corev1.PullIfNotPresent
+	}
+}
+
+// ManagedBy adds a managedby.
+func (j *JobWrapper) ManagedBy(c string) *JobWrapper {
+	j.Spec.ManagedBy = &c
 	return j
 }

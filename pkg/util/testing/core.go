@@ -21,8 +21,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -46,24 +46,36 @@ func SingleContainerForRequest(request map[corev1.ResourceName]string) []corev1.
 	}
 }
 
-// CheckLatestEvent will return true if the latest event is as you want.
-func CheckLatestEvent(ctx context.Context, k8sClient client.Client,
-	eventReason string,
-	eventType string, eventNote string) (bool, error) {
-	events := &eventsv1.EventList{}
-	if err := k8sClient.List(ctx, events, &client.ListOptions{}); err != nil {
+// CheckEventRecordedFor checks if an event identified by eventReason, eventType, eventNote
+// was recorded for the object indentified by ref.
+func CheckEventRecordedFor(ctx context.Context, k8sClient client.Client,
+	eventReason string, eventType string, eventMessage string,
+	ref types.NamespacedName) (bool, error) {
+	events := &corev1.EventList{}
+	if err := k8sClient.List(ctx, events, client.InNamespace(ref.Namespace)); err != nil {
 		return false, err
 	}
 
-	length := len(events.Items)
-	if length == 0 {
-		return false, fmt.Errorf("no events currently exist")
+	for i := range events.Items {
+		item := &events.Items[i]
+		if item.InvolvedObject.Name == ref.Name && item.Reason == eventReason && item.Type == eventType && item.Message == eventMessage {
+			return true, nil
+		}
 	}
+	return false, fmt.Errorf("event not found after checking %d events, eventReason: %s , eventType: %s, eventMessage: %s, namespace: %s ",
+		len(events.Items), eventReason, eventType, eventMessage, ref.Namespace)
+}
 
-	item := events.Items[length-1]
-	if item.Reason == eventReason && item.Type == eventType && item.Note == eventNote {
-		return true, nil
+// HasEventAppeared returns if an event has been emitted
+func HasEventAppeared(ctx context.Context, k8sClient client.Client, event corev1.Event) (bool, error) {
+	events := &corev1.EventList{}
+	if err := k8sClient.List(ctx, events, &client.ListOptions{}); err != nil {
+		return false, err
 	}
-
-	return false, fmt.Errorf("mismatch with the latest event")
+	for _, item := range events.Items {
+		if item.Reason == event.Reason && item.Type == event.Type && item.Message == event.Message {
+			return true, nil
+		}
+	}
+	return false, nil
 }

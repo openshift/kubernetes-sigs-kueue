@@ -17,24 +17,26 @@ limitations under the License.
 package job
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	kubeflow "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/apimachinery/pkg/version"
-	fakediscovery "k8s.io/client-go/discovery/fake"
-	fakeclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
-	"sigs.k8s.io/kueue/pkg/controller/jobframework"
-	"sigs.k8s.io/kueue/pkg/util/kubeversion"
+	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/queue"
+	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	testingutil "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
 
 	// without this only the job framework is registered
@@ -42,57 +44,30 @@ import (
 )
 
 const (
-	invalidRFC1123Message = `a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')`
+	invalidRFC1123Message  = `a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')`
+	invalidLabelKeyMessage = `name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`
 )
 
 var (
 	annotationsPath               = field.NewPath("metadata", "annotations")
 	labelsPath                    = field.NewPath("metadata", "labels")
-	parentWorkloadKeyPath         = annotationsPath.Key(constants.ParentWorkloadAnnotation)
 	queueNameLabelPath            = labelsPath.Key(constants.QueueLabel)
+	prebuiltWlNameLabelPath       = labelsPath.Key(constants.PrebuiltWorkloadLabel)
+	maxExecTimeLabelPath          = labelsPath.Key(constants.MaxExecTimeSecondsLabel)
 	queueNameAnnotationsPath      = annotationsPath.Key(constants.QueueAnnotation)
 	workloadPriorityClassNamePath = labelsPath.Key(constants.WorkloadPriorityClassLabel)
 )
 
 func TestValidateCreate(t *testing.T) {
 	testcases := []struct {
-		name          string
-		job           *batchv1.Job
-		wantErr       field.ErrorList
-		serverVersion string
+		name    string
+		job     *batchv1.Job
+		wantErr field.ErrorList
 	}{
 		{
 			name:    "simple",
 			job:     testingutil.MakeJob("job", "default").Queue("queue").Obj(),
 			wantErr: nil,
-		},
-		{
-			name: "valid parent-workload annotation",
-			job: testingutil.MakeJob("job", "default").
-				ParentWorkload("parent-workload-name").
-				Queue("queue").
-				OwnerReference("parent-workload-name", kubeflow.SchemeGroupVersionKind).
-				Obj(),
-			wantErr: nil,
-		},
-		{
-			name: "invalid parent-workload annotation",
-			job: testingutil.MakeJob("job", "default").
-				ParentWorkload("parent workload name").
-				OwnerReference("parent workload name", kubeflow.SchemeGroupVersionKind).
-				Queue("queue").
-				Obj(),
-			wantErr: field.ErrorList{field.Invalid(parentWorkloadKeyPath, "parent workload name", invalidRFC1123Message)},
-		},
-		{
-			name: "invalid parent-workload annotation (owner is missing)",
-			job: testingutil.MakeJob("job", "default").
-				ParentWorkload("parent-workload").
-				Queue("queue").
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Forbidden(parentWorkloadKeyPath, "must not add a parent workload annotation to job without OwnerReference"),
-			},
 		},
 		{
 			name:    "invalid queue-name label",
@@ -103,18 +78,6 @@ func TestValidateCreate(t *testing.T) {
 			name:    "invalid queue-name annotation (deprecated)",
 			job:     testingutil.MakeJob("job", "default").QueueNameAnnotation("queue name").Obj(),
 			wantErr: field.ErrorList{field.Invalid(queueNameAnnotationsPath, "queue name", invalidRFC1123Message)},
-		},
-		{
-			name: "invalid queue-name and parent-workload annotation",
-			job: testingutil.MakeJob("job", "default").
-				Queue("queue name").
-				ParentWorkload("parent workload name").
-				OwnerReference("parent workload name", kubeflow.SchemeGroupVersionKind).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(parentWorkloadKeyPath, "parent workload name", invalidRFC1123Message),
-				field.Invalid(queueNameLabelPath, "queue name", invalidRFC1123Message),
-			},
 		},
 		{
 			name: "invalid partial admission annotation (format)",
@@ -170,7 +133,6 @@ func TestValidateCreate(t *testing.T) {
 			wantErr: field.ErrorList{
 				field.Invalid(field.NewPath("spec", "completions"), ptr.To[int32](6), fmt.Sprintf("should be equal to parallelism when %s is annotation is true", JobCompletionsEqualParallelismAnnotation)),
 			},
-			serverVersion: "1.27.0",
 		},
 		{
 			name: "valid sync completions annotation, wrong job completions type (default)",
@@ -182,7 +144,6 @@ func TestValidateCreate(t *testing.T) {
 			wantErr: field.ErrorList{
 				field.Invalid(syncCompletionAnnotationsPath, "true", "should not be enabled for NonIndexed jobs"),
 			},
-			serverVersion: "1.27.0",
 		},
 		{
 			name: "valid sync completions annotation, wrong job completions type",
@@ -195,32 +156,6 @@ func TestValidateCreate(t *testing.T) {
 			wantErr: field.ErrorList{
 				field.Invalid(syncCompletionAnnotationsPath, "true", "should not be enabled for NonIndexed jobs"),
 			},
-			serverVersion: "1.27.0",
-		},
-		{
-			name: "valid sync completions annotation, server version less then 1.27",
-			job: testingutil.MakeJob("job", "default").
-				Parallelism(4).
-				Completions(4).
-				SetAnnotation(JobCompletionsEqualParallelismAnnotation, "true").
-				Indexed(true).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(syncCompletionAnnotationsPath, "true", "only supported in Kubernetes 1.27 or newer"),
-			},
-			serverVersion: "1.26.3",
-		},
-		{
-			name: "valid sync completions annotation, server version wasn't specified",
-			job: testingutil.MakeJob("job", "default").
-				Parallelism(4).
-				Completions(4).
-				SetAnnotation(JobCompletionsEqualParallelismAnnotation, "true").
-				Indexed(true).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(syncCompletionAnnotationsPath, "true", "only supported in Kubernetes 1.27 or newer"),
-			},
 		},
 		{
 			name: "valid sync completions annotation",
@@ -230,20 +165,118 @@ func TestValidateCreate(t *testing.T) {
 				SetAnnotation(JobCompletionsEqualParallelismAnnotation, "true").
 				Indexed(true).
 				Obj(),
-			wantErr:       nil,
-			serverVersion: "1.27.0",
+			wantErr: nil,
+		},
+		{
+			name: "invalid prebuilt workload",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.PrebuiltWorkloadLabel, "workload name").
+				Indexed(true).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(prebuiltWlNameLabelPath, "workload name", invalidRFC1123Message),
+			},
+		},
+		{
+			name: "valid prebuilt workload",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.PrebuiltWorkloadLabel, "workload-name").
+				Indexed(true).
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "invalid maximum execution time",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.MaxExecTimeSecondsLabel, "NaN").
+				Indexed(true).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(maxExecTimeLabelPath, "NaN", `strconv.Atoi: parsing "NaN": invalid syntax`),
+			},
+		},
+		{
+			name: "zero maximum execution time",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.MaxExecTimeSecondsLabel, "0").
+				Indexed(true).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(maxExecTimeLabelPath, 0, "should be greater than 0"),
+			},
+		},
+		{
+			name: "negative maximum execution time",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.MaxExecTimeSecondsLabel, "-10").
+				Indexed(true).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(maxExecTimeLabelPath, -10, "should be greater than 0"),
+			},
+		},
+		{
+			name: "valid maximum execution time",
+			job: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(4).
+				Label(constants.MaxExecTimeSecondsLabel, "10").
+				Indexed(true).
+				Obj(),
+		},
+		{
+			name: "valid topology request",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "invalid topology request - both annotations",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations"), field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`),
+			},
+		},
+		{
+			name: "invalid topology request - invalid required",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "some required value").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-required-topology"), "some required value",
+					invalidLabelKeyMessage),
+			},
+		},
+		{
+			name: "invalid topology request - invalid preferred",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetPreferredTopologyAnnotation, "some preferred value").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-preferred-topology"), "some preferred value",
+					invalidLabelKeyMessage),
+			},
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			jw := &JobWebhook{}
-			fakeDiscoveryClient, _ := fakeclient.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
-			fakeDiscoveryClient.FakedServerVersion = &version.Info{GitVersion: tc.serverVersion}
-			jw.kubeServerVersion = kubeversion.NewServerVersionFetcher(fakeDiscoveryClient)
-			if err := jw.kubeServerVersion.FetchServerVersion(); err != nil && tc.serverVersion != "" {
-				t.Fatalf("Failed fetching server version: %v", err)
-			}
 
 			gotErr := jw.validateCreate((*Job)(tc.job))
 
@@ -272,7 +305,7 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob: testingutil.MakeJob("job", "default").Obj(),
 			newJob: testingutil.MakeJob("job", "default").Queue("queue").Suspend(false).Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(queueNameLabelPath, "", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(queueNameLabelPath, "queue", apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -286,7 +319,7 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob: testingutil.MakeJob("job", "default").Queue("queue").Obj(),
 			newJob: testingutil.MakeJob("job", "default").Queue("queue2").Suspend(false).Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(queueNameLabelPath, "queue", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(queueNameLabelPath, "queue2", apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -300,38 +333,6 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob:  testingutil.MakeJob("job", "default").Obj(),
 			newJob:  testingutil.MakeJob("job", "default").Queue("queue name").Suspend(true).Obj(),
 			wantErr: field.ErrorList{field.Invalid(queueNameLabelPath, "queue name", invalidRFC1123Message)},
-		},
-		{
-			name:   "update the nil parent workload to non-empty",
-			oldJob: testingutil.MakeJob("job", "default").Obj(),
-			newJob: testingutil.MakeJob("job", "default").
-				ParentWorkload("parent").
-				OwnerReference("parent", kubeflow.SchemeGroupVersionKind).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(parentWorkloadKeyPath, "parent", apivalidation.FieldImmutableErrorMsg),
-			},
-		},
-		{
-			name:   "update the non-empty parent workload to nil",
-			oldJob: testingutil.MakeJob("job", "default").ParentWorkload("parent").Obj(),
-			newJob: testingutil.MakeJob("job", "default").Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(parentWorkloadKeyPath, "", apivalidation.FieldImmutableErrorMsg),
-			},
-		},
-		{
-			name:   "invalid queue name and immutable parent",
-			oldJob: testingutil.MakeJob("job", "default").Obj(),
-			newJob: testingutil.MakeJob("job", "default").
-				Queue("queue name").
-				ParentWorkload("parent").
-				OwnerReference("parent", kubeflow.SchemeGroupVersionKind).
-				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(queueNameLabelPath, "queue name", invalidRFC1123Message),
-				field.Invalid(parentWorkloadKeyPath, "parent", apivalidation.FieldImmutableErrorMsg),
-			},
 		},
 		{
 			name: "immutable parallelism while unsuspended with partial admission enabled",
@@ -357,6 +358,7 @@ func TestValidateUpdate(t *testing.T) {
 				Parallelism(4).
 				Completions(6).
 				SetAnnotation(JobMinParallelismAnnotation, "3").
+				SetAnnotation(StoppingAnnotation, "true").
 				Obj(),
 			newJob: testingutil.MakeJob("job", "default").
 				Parallelism(5).
@@ -404,7 +406,129 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-1").Obj(),
 			newJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-2").Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(workloadPriorityClassNamePath, "test-1", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(workloadPriorityClassNamePath, "test-2", apivalidation.FieldImmutableErrorMsg),
+			},
+		},
+		{
+			name: "immutable prebuilt workload ",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.PrebuiltWorkloadLabel, "old-workload").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.PrebuiltWorkloadLabel, "new-workload").
+				Obj(),
+			wantErr: apivalidation.ValidateImmutableField("new-workload", "old-workload", prebuiltWlNameLabelPath),
+		},
+		{
+			name: "immutable queue name not suspend",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.QueueLabel, "old-queue").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.QueueLabel, "new-queue").
+				Obj(),
+			wantErr: apivalidation.ValidateImmutableField("new-queue", "old-queue", queueNameLabelPath),
+		},
+		{
+			name: "queue name can changes when it is  suspend",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.QueueLabel, "old-queue").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.QueueLabel, "new-queue").
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "can update the kueue.x-k8s.io/job-min-parallelism  annotation",
+			oldJob: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(6).
+				SetAnnotation(JobMinParallelismAnnotation, "3").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(6).
+				SetAnnotation(JobMinParallelismAnnotation, "2").
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "validates kueue.x-k8s.io/job-min-parallelism annotation value (bad format)",
+			oldJob: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(6).
+				SetAnnotation(JobMinParallelismAnnotation, "3").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Parallelism(4).
+				Completions(6).
+				SetAnnotation(JobMinParallelismAnnotation, "NaN").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(minPodsCountAnnotationsPath, "NaN", "strconv.Atoi: parsing \"NaN\": invalid syntax"),
+			},
+		},
+		{
+			name: "immutable max exec time while unsuspended",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.MaxExecTimeSecondsLabel, "20").
+				Obj(),
+			wantErr: apivalidation.ValidateImmutableField("20", "10", maxExecTimeLabelPath),
+		},
+		{
+			name: "immutable max exec time while transitioning to unsuspended",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(false).
+				Label(constants.MaxExecTimeSecondsLabel, "20").
+				Obj(),
+			wantErr: apivalidation.ValidateImmutableField("20", "10", maxExecTimeLabelPath),
+		},
+		{
+			name: "mutable max exec time while suspended",
+			oldJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				Suspend(true).
+				Label(constants.MaxExecTimeSecondsLabel, "20").
+				Obj(),
+		},
+		{
+			name: "set valid TAS request",
+			oldJob: testingutil.MakeJob("job", "default").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+		},
+		{
+			name: "attempt to set invalid TAS request",
+			oldJob: testingutil.MakeJob("job", "default").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations"), field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`),
 			},
 		},
 	}
@@ -421,19 +545,16 @@ func TestValidateUpdate(t *testing.T) {
 
 func TestDefault(t *testing.T) {
 	testcases := map[string]struct {
-		job                        *batchv1.Job
-		manageJobsWithoutQueueName bool
-		want                       *batchv1.Job
+		job                                    *batchv1.Job
+		queues                                 []kueue.LocalQueue
+		clusterQueues                          []kueue.ClusterQueue
+		admissionCheck                         *kueue.AdmissionCheck
+		manageJobsWithoutQueueName             bool
+		multiKueueEnabled                      bool
+		multiKueueBatchJobWithManagedByEnabled bool
+		want                                   *batchv1.Job
+		wantErr                                error
 	}{
-		"add a parent job name to annotations": {
-			job: testingutil.MakeJob("child-job", "default").
-				OwnerReference("parent-job", kubeflow.SchemeGroupVersionKind).
-				Obj(),
-			want: testingutil.MakeJob("child-job", "default").
-				OwnerReference("parent-job", kubeflow.SchemeGroupVersionKind).
-				ParentWorkload(jobframework.GetWorkloadNameForOwnerWithGVK("parent-job", kubeflow.SchemeGroupVersionKind)).
-				Obj(),
-		},
 		"update the suspend field with 'manageJobsWithoutQueueName=false'": {
 			job:  testingutil.MakeJob("job", "default").Queue("queue").Suspend(false).Obj(),
 			want: testingutil.MakeJob("job", "default").Queue("queue").Obj(),
@@ -443,12 +564,122 @@ func TestDefault(t *testing.T) {
 			manageJobsWithoutQueueName: true,
 			want:                       testingutil.MakeJob("job", "default").Obj(),
 		},
+		"no change in managed by: features.MultiKueueBatchJobWithManagedBy disabled": {
+			job:                                    testingutil.MakeJob("job", "default").Queue("queue").Suspend(false).Obj(),
+			multiKueueBatchJobWithManagedByEnabled: false,
+			want:                                   testingutil.MakeJob("job", "default").Queue("queue").Obj(),
+		},
+		"no change in managed by: features.MultiKueue disabled": {
+			job:               testingutil.MakeJob("job", "default").Queue("queue").Suspend(false).Obj(),
+			multiKueueEnabled: false,
+			want:              testingutil.MakeJob("job", "default").Queue("queue").Obj(),
+		},
+		"managed by is defaulted: queue label was set": {
+			job: testingutil.MakeJob("job", "default").
+				Queue("local-queue").
+				Suspend(false).
+				Obj(),
+			queues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("local-queue", "default").
+					ClusterQueue("cluster-queue").
+					Obj(),
+			},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("cluster-queue").
+					AdmissionChecks("admission-check").
+					Obj(),
+			},
+			admissionCheck: utiltesting.MakeAdmissionCheck("admission-check").
+				ControllerName(kueue.MultiKueueControllerName).
+				Active(metav1.ConditionTrue).
+				Obj(),
+			want: testingutil.MakeJob("job", "default").
+				Queue("local-queue").
+				ManagedBy(kueue.MultiKueueControllerName).
+				Obj(),
+			multiKueueEnabled:                      true,
+			multiKueueBatchJobWithManagedByEnabled: true,
+		},
+		"no change in managed by: user specified managed by": {
+			job: testingutil.MakeJob("job", "default").
+				Queue("local-queue").
+				ManagedBy("example.com/foo").
+				Suspend(false).
+				Obj(),
+			queues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("local-queue", "default").
+					ClusterQueue("cluster-queue").
+					Obj(),
+			},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("cluster-queue").
+					AdmissionChecks("admission-check").
+					Obj(),
+			},
+			admissionCheck: utiltesting.MakeAdmissionCheck("admission-check").
+				ControllerName(kueue.MultiKueueControllerName).
+				Active(metav1.ConditionTrue).
+				Obj(),
+			want: testingutil.MakeJob("job", "default").
+				Queue("local-queue").
+				ManagedBy("example.com/foo").
+				Obj(),
+			multiKueueEnabled:                      true,
+			multiKueueBatchJobWithManagedByEnabled: true,
+		},
+		"invalid queue name": {
+			job: testingutil.MakeJob("job", "default").
+				Queue("invalid-local-queue").
+				Suspend(false).
+				Obj(),
+			want: testingutil.MakeJob("job", "default").
+				Queue("invalid-local-queue").
+				Obj(),
+			multiKueueEnabled:                      true,
+			multiKueueBatchJobWithManagedByEnabled: true,
+		},
 	}
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
-			w := &JobWebhook{manageJobsWithoutQueueName: tc.manageJobsWithoutQueueName}
-			if err := w.Default(context.Background(), tc.job); err != nil {
-				t.Errorf("set defaults to a batch/job by a Defaulter")
+			features.SetFeatureGateDuringTest(t, features.MultiKueue, tc.multiKueueEnabled)
+			features.SetFeatureGateDuringTest(t, features.MultiKueueBatchJobWithManagedBy, tc.multiKueueBatchJobWithManagedByEnabled)
+
+			ctx, _ := utiltesting.ContextWithLog(t)
+
+			clientBuilder := utiltesting.NewClientBuilder().
+				WithObjects(
+					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+				)
+			cl := clientBuilder.Build()
+			cqCache := cache.New(cl)
+			queueManager := queue.NewManager(cl, cqCache)
+
+			for _, q := range tc.queues {
+				if err := queueManager.AddLocalQueue(ctx, &q); err != nil {
+					t.Fatalf("Inserting queue %s/%s in manager: %v", q.Namespace, q.Name, err)
+				}
+			}
+			for _, cq := range tc.clusterQueues {
+				if err := cqCache.AddClusterQueue(ctx, &cq); err != nil {
+					t.Fatalf("Inserting clusterQueue %s in cache: %v", cq.Name, err)
+				}
+				if tc.admissionCheck != nil {
+					cqCache.AddOrUpdateAdmissionCheck(tc.admissionCheck)
+					if err := queueManager.AddClusterQueue(ctx, &cq); err != nil {
+						t.Fatalf("Inserting clusterQueue %s in manager: %v", cq.Name, err)
+					}
+				}
+			}
+			w := &JobWebhook{
+				client:                       cl,
+				manageJobsWithoutQueueName:   tc.manageJobsWithoutQueueName,
+				managedJobsNamespaceSelector: labels.Everything(),
+				queues:                       queueManager,
+				cache:                        cqCache,
+			}
+			gotErr := w.Default(ctx, tc.job)
+			if diff := cmp.Diff(tc.wantErr, gotErr, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("Default() error mismatch (-want +got):\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want, tc.job); len(diff) != 0 {
 				t.Errorf("Default() mismatch (-want,+got):\n%s", diff)

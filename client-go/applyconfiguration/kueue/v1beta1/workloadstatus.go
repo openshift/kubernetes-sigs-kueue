@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,19 +18,22 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// WorkloadStatusApplyConfiguration represents an declarative configuration of the WorkloadStatus type for use
+// WorkloadStatusApplyConfiguration represents a declarative configuration of the WorkloadStatus type for use
 // with apply.
 type WorkloadStatusApplyConfiguration struct {
-	Admission       *AdmissionApplyConfiguration            `json:"admission,omitempty"`
-	Conditions      []v1.Condition                          `json:"conditions,omitempty"`
-	ReclaimablePods []ReclaimablePodApplyConfiguration      `json:"reclaimablePods,omitempty"`
-	AdmissionChecks []AdmissionCheckStateApplyConfiguration `json:"admissionChecks,omitempty"`
+	Admission                            *AdmissionApplyConfiguration            `json:"admission,omitempty"`
+	RequeueState                         *RequeueStateApplyConfiguration         `json:"requeueState,omitempty"`
+	Conditions                           []v1.ConditionApplyConfiguration        `json:"conditions,omitempty"`
+	ReclaimablePods                      []ReclaimablePodApplyConfiguration      `json:"reclaimablePods,omitempty"`
+	AdmissionChecks                      []AdmissionCheckStateApplyConfiguration `json:"admissionChecks,omitempty"`
+	ResourceRequests                     []PodSetRequestApplyConfiguration       `json:"resourceRequests,omitempty"`
+	AccumulatedPastExexcutionTimeSeconds *int32                                  `json:"accumulatedPastExexcutionTimeSeconds,omitempty"`
 }
 
-// WorkloadStatusApplyConfiguration constructs an declarative configuration of the WorkloadStatus type for use with
+// WorkloadStatusApplyConfiguration constructs a declarative configuration of the WorkloadStatus type for use with
 // apply.
 func WorkloadStatus() *WorkloadStatusApplyConfiguration {
 	return &WorkloadStatusApplyConfiguration{}
@@ -44,12 +47,23 @@ func (b *WorkloadStatusApplyConfiguration) WithAdmission(value *AdmissionApplyCo
 	return b
 }
 
+// WithRequeueState sets the RequeueState field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the RequeueState field is set to the value of the last call.
+func (b *WorkloadStatusApplyConfiguration) WithRequeueState(value *RequeueStateApplyConfiguration) *WorkloadStatusApplyConfiguration {
+	b.RequeueState = value
+	return b
+}
+
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *WorkloadStatusApplyConfiguration) WithConditions(values ...v1.Condition) *WorkloadStatusApplyConfiguration {
+func (b *WorkloadStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *WorkloadStatusApplyConfiguration {
 	for i := range values {
-		b.Conditions = append(b.Conditions, values[i])
+		if values[i] == nil {
+			panic("nil value passed to WithConditions")
+		}
+		b.Conditions = append(b.Conditions, *values[i])
 	}
 	return b
 }
@@ -77,5 +91,26 @@ func (b *WorkloadStatusApplyConfiguration) WithAdmissionChecks(values ...*Admiss
 		}
 		b.AdmissionChecks = append(b.AdmissionChecks, *values[i])
 	}
+	return b
+}
+
+// WithResourceRequests adds the given value to the ResourceRequests field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ResourceRequests field.
+func (b *WorkloadStatusApplyConfiguration) WithResourceRequests(values ...*PodSetRequestApplyConfiguration) *WorkloadStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithResourceRequests")
+		}
+		b.ResourceRequests = append(b.ResourceRequests, *values[i])
+	}
+	return b
+}
+
+// WithAccumulatedPastExexcutionTimeSeconds sets the AccumulatedPastExexcutionTimeSeconds field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AccumulatedPastExexcutionTimeSeconds field is set to the value of the last call.
+func (b *WorkloadStatusApplyConfiguration) WithAccumulatedPastExexcutionTimeSeconds(value int32) *WorkloadStatusApplyConfiguration {
+	b.AccumulatedPastExexcutionTimeSeconds = &value
 	return b
 }

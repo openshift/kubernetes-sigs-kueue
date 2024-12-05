@@ -102,3 +102,96 @@ func TestToCmpNoOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestPick(t *testing.T) {
+	cases := map[string]struct {
+		testSlice []int
+		want      []int
+	}{
+		"nil input": {
+			testSlice: nil,
+			want:      nil,
+		},
+		"empty input": {
+			testSlice: []int{},
+			want:      nil,
+		},
+		"no match": {
+			testSlice: []int{1, 3, 5, 7, 9},
+			want:      nil,
+		},
+		"match": {
+			testSlice: []int{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			want:      []int{2, 4, 6, 8},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := Pick(tc.testSlice, func(i *int) bool { return (*i)%2 == 0 })
+			if diff := cmp.Diff(tc.want, result); diff != "" {
+				t.Errorf("Unexpected result (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestOrderStringSlices(t *testing.T) {
+	// Define test cases as a map
+	testCases := map[string]struct {
+		a        []string
+		b        []string
+		expected int
+	}{
+		"A smaller": {
+			a:        []string{"a", "b", "c"},
+			b:        []string{"a", "b", "d"},
+			expected: -1,
+		},
+		"A greater": {
+			a:        []string{"a", "c", "b"},
+			b:        []string{"a", "b", "d"},
+			expected: 1,
+		},
+		"Equal": {
+			a:        []string{"a", "b", "c"},
+			b:        []string{"a", "b", "c"},
+			expected: 0,
+		},
+		"A shorter": {
+			a:        []string{"a", "b"},
+			b:        []string{"a", "b", "c"},
+			expected: -1,
+		},
+		"A longer": {
+			a:        []string{"a", "b", "c"},
+			b:        []string{"a", "b"},
+			expected: 1,
+		},
+		"Empty A": {
+			a:        []string{},
+			b:        []string{"a"},
+			expected: -1,
+		},
+		"Empty B": {
+			a:        []string{"a"},
+			b:        []string{},
+			expected: 1,
+		},
+		"Both Empty": {
+			a:        []string{},
+			b:        []string{},
+			expected: 0,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			gotResult := OrderStringSlices(tc.a, tc.b)
+
+			if diff := cmp.Diff(tc.expected, gotResult); diff != "" {
+				t.Errorf("unexpected result (-want,+got): %s", diff)
+			}
+		})
+	}
+}
