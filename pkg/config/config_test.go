@@ -19,7 +19,6 @@ package config
 import (
 	"errors"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,12 +26,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	corev1 "k8s.io/api/core/v1"
-	resourcev1 "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
-	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -42,18 +38,21 @@ import (
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/job"
-
-	_ "sigs.k8s.io/kueue/pkg/controller/jobs"
 )
 
 func TestLoad(t *testing.T) {
-	testScheme := runtime.NewScheme()
-	err := configapi.AddToScheme(testScheme)
+	test_scheme := runtime.NewScheme()
+	err := configapi.AddToScheme(test_scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tmpDir := t.TempDir()
+	// temp dir
+	tmpDir, err := os.MkdirTemp("", "temp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
 
 	namespaceOverWriteConfig := filepath.Join(tmpDir, "namespace-overwrite.yaml")
 	if err := os.WriteFile(namespaceOverWriteConfig, []byte(`
@@ -156,13 +155,6 @@ apiVersion: config.kueue.x-k8s.io/v1beta1
 kind: Configuration
 waitForPodsReady:
   enable: true
-  timeout: 50s
-  blockAdmission: false
-  requeuingStrategy:
-    timestamp: Creation
-    backoffLimitCount: 10
-    backoffBaseSeconds: 30
-    backoffMaxSeconds: 1800
 `), os.FileMode(0600)); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +191,7 @@ health:
   livenessEndpointName: live
 metrics:
   bindAddress: :8080
-pprofBindAddress: :8083
+pprofBindAddress: :8082
 leaderElection:
   leaderElect: true
   resourceName: c1f6bfd2.kueue.x-k8s.io
@@ -222,20 +214,16 @@ clientConnection:
 `), os.FileMode(0600)); err != nil {
 		t.Fatal(err)
 	}
-
 	integrationsConfig := filepath.Join(tmpDir, "integrations.yaml")
 	if err := os.WriteFile(integrationsConfig, []byte(`
 apiVersion: config.kueue.x-k8s.io/v1beta1
 kind: Configuration
 integrations:
-  frameworks:
+  frameworks: 
   - batch/job
-  externalFrameworks:
-  - Foo.v1.example.com
 `), os.FileMode(0600)); err != nil {
 		t.Fatal(err)
 	}
-
 	queueVisibilityConfig := filepath.Join(tmpDir, "queueVisibility.yaml")
 	if err := os.WriteFile(queueVisibilityConfig, []byte(`
 apiVersion: config.kueue.x-k8s.io/v1beta1
@@ -247,13 +235,12 @@ queueVisibility:
 `), os.FileMode(0600)); err != nil {
 		t.Fatal(err)
 	}
-
 	podIntegrationOptionsConfig := filepath.Join(tmpDir, "podIntegrationOptions.yaml")
 	if err := os.WriteFile(podIntegrationOptionsConfig, []byte(`
 apiVersion: config.kueue.x-k8s.io/v1beta1
 kind: Configuration
 integrations:
-  frameworks:
+  frameworks: 
   - pod
   podOptions:
     namespaceSelector:
@@ -270,75 +257,13 @@ integrations:
 		t.Fatal(err)
 	}
 
-	multiKueueConfig := filepath.Join(tmpDir, "multiKueue.yaml")
-	if err := os.WriteFile(multiKueueConfig, []byte(`
-apiVersion: config.kueue.x-k8s.io/v1beta1
-kind: Configuration
-namespace: kueue-system
-multiKueue:
-  gcInterval: 1m30s
-  origin: multikueue-manager1
-  workerLostTimeout: 10m
-`), os.FileMode(0600)); err != nil {
-		t.Fatal(err)
-	}
-
-	resourceTransformConfig := filepath.Join(tmpDir, "resourceXForm.yaml")
-	if err := os.WriteFile(resourceTransformConfig, []byte(`
-apiVersion: config.kueue.x-k8s.io/v1beta1
-kind: Configuration
-namespace: kueue-system
-resources:
-  transformations:
-  - input: nvidia.com/mig-1g.5gb
-    strategy: Replace
-    outputs:
-      example.com/accelerator-memory: 5Gi
-      example.com/credits: 10
-  - input: nvidia.com/mig-2g.10gb
-    strategy: Replace
-    outputs:
-      example.com/accelerator-memory: 10Gi
-      example.com/credits: 15
-  - input: cpu
-    strategy: Retain
-    outputs:
-      example.com/credits: 1
-`), os.FileMode(0600)); err != nil {
-		t.Fatal(err)
-	}
-
-	invalidConfig := filepath.Join(tmpDir, "invalid-config.yaml")
-	if err := os.WriteFile(invalidConfig, []byte(`
-apiVersion: config.kueue.x-k8s.io/v1beta1
-kind: Configuration
-namespaces: kueue-system
-invalidField: invalidValue
-health:
-  healthProbeBindAddress: :8081
-metrics:
-  bindAddress: :8080
-leaderElection:
-  leaderElect: true
-  resourceName: c1f6bfd2.kueue.x-k8s.io
-webhook:
-  port: 9443
-`), os.FileMode(0600)); err != nil {
-		t.Fatal(err)
-	}
-
 	defaultControlOptions := ctrl.Options{
 		HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 		Metrics: metricsserver.Options{
 			BindAddress: configapi.DefaultMetricsBindAddress,
 		},
-		LeaderElection:                true,
-		LeaderElectionID:              configapi.DefaultLeaderElectionID,
-		LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-		LeaderElectionReleaseOnCancel: true,
-		LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-		RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-		RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
+		LeaderElectionID: configapi.DefaultLeaderElectionID,
+		LeaderElection:   true,
 		WebhookServer: &webhook.DefaultServer{
 			Options: webhook.Options{
 				Port: configapi.DefaultWebhookPort,
@@ -356,7 +281,6 @@ webhook:
 		cmpopts.IgnoreUnexported(ctrl.Options{}),
 		cmpopts.IgnoreUnexported(webhook.DefaultServer{}),
 		cmpopts.IgnoreUnexported(ctrlcache.Options{}),
-		cmpopts.IgnoreUnexported(net.ListenConfig{}),
 		cmpopts.IgnoreFields(ctrl.Options{}, "Scheme", "Logger"),
 	}
 
@@ -394,12 +318,6 @@ webhook:
 		},
 	}
 
-	defaultMultiKueue := &configapi.MultiKueue{
-		GCInterval:        &metav1.Duration{Duration: configapi.DefaultMultiKueueGCInterval},
-		Origin:            ptr.To(configapi.DefaultMultiKueueOrigin),
-		WorkerLostTimeout: &metav1.Duration{Duration: configapi.DefaultMultiKueueWorkerLostTimeout},
-	}
-
 	testcases := []struct {
 		name              string
 		configFile        string
@@ -416,20 +334,14 @@ webhook:
 				ClientConnection:       defaultClientConnection,
 				Integrations:           defaultIntegrations,
 				QueueVisibility:        defaultQueueVisibility,
-				MultiKueue:             defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
+				LeaderElectionID: "",
+				LeaderElection:   false,
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -474,7 +386,6 @@ webhook:
 					},
 				},
 				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
 			},
 			wantOptions: defaultControlOptions,
 		},
@@ -492,20 +403,14 @@ webhook:
 				ClientConnection:           defaultClientConnection,
 				Integrations:               defaultIntegrations,
 				QueueVisibility:            defaultQueueVisibility,
-				MultiKueue:                 defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: ":38081",
 				Metrics: metricsserver.Options{
 					BindAddress: ":38080",
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              "test-id",
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
+				LeaderElection:   true,
+				LeaderElectionID: "test-id",
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: 9444,
@@ -531,7 +436,6 @@ webhook:
 				ClientConnection: defaultClientConnection,
 				Integrations:     defaultIntegrations,
 				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
 			},
 			wantOptions: defaultControlOptions,
 		},
@@ -551,7 +455,6 @@ webhook:
 				ClientConnection: defaultClientConnection,
 				Integrations:     defaultIntegrations,
 				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
 			},
 			wantOptions: defaultControlOptions,
 		},
@@ -569,20 +472,14 @@ webhook:
 				ClientConnection:           defaultClientConnection,
 				Integrations:               defaultIntegrations,
 				QueueVisibility:            defaultQueueVisibility,
-				MultiKueue:                 defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: false,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
-				LeaderElection:                false,
+				LeaderElectionID: "",
+				LeaderElection:   false,
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -603,32 +500,18 @@ webhook:
 				InternalCertManagement:     enableDefaultInternalCertManagement,
 				WaitForPodsReady: &configapi.WaitForPodsReady{
 					Enable:         true,
-					BlockAdmission: ptr.To(false),
-					Timeout:        &metav1.Duration{Duration: 50 * time.Second},
-					RequeuingStrategy: &configapi.RequeuingStrategy{
-						Timestamp:          ptr.To(configapi.CreationTimestamp),
-						BackoffLimitCount:  ptr.To[int32](10),
-						BackoffBaseSeconds: ptr.To[int32](30),
-						BackoffMaxSeconds:  ptr.To[int32](1800),
-					},
+					BlockAdmission: ptr.To(true),
+					Timeout:        &metav1.Duration{Duration: 5 * time.Minute},
 				},
 				ClientConnection: defaultClientConnection,
 				Integrations:     defaultIntegrations,
 				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -653,7 +536,6 @@ webhook:
 				},
 				Integrations:    defaultIntegrations,
 				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
 			},
 			wantOptions: defaultControlOptions,
 		},
@@ -674,7 +556,6 @@ webhook:
 				},
 				Integrations:    defaultIntegrations,
 				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
@@ -683,15 +564,14 @@ webhook:
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				PprofBindAddress:              ":8083",
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionNamespace:       "namespace",
-				LeaderElectionResourceLock:    "lock",
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(time.Second * 100),
-				RenewDeadline:                 ptr.To(time.Second * 15),
-				RetryPeriod:                   ptr.To(time.Second * 30),
+				PprofBindAddress:           ":8082",
+				LeaderElection:             true,
+				LeaderElectionID:           configapi.DefaultLeaderElectionID,
+				LeaderElectionNamespace:    "namespace",
+				LeaderElectionResourceLock: "lock",
+				LeaseDuration:              ptr.To(time.Second * 100),
+				RenewDeadline:              ptr.To(time.Second * 15),
+				RetryPeriod:                ptr.To(time.Second * 30),
 				Controller: runtimeconfig.Controller{
 					GroupKindConcurrency: map[string]int{
 						"workload": 5,
@@ -722,8 +602,7 @@ webhook:
 				Integrations: &configapi.Integrations{
 					// referencing job.FrameworkName ensures the link of job package
 					// therefore the batch/framework should be registered
-					Frameworks:         []string{job.FrameworkName},
-					ExternalFrameworks: []string{"Foo.v1.example.com"},
+					Frameworks: []string{job.FrameworkName},
 					PodOptions: &configapi.PodIntegrationOptions{
 						NamespaceSelector: &metav1.LabelSelector{
 							MatchExpressions: []metav1.LabelSelectorRequirement{
@@ -738,20 +617,12 @@ webhook:
 					},
 				},
 				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -778,20 +649,12 @@ webhook:
 						MaxCount: 0,
 					},
 				},
-				MultiKueue: defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -837,20 +700,12 @@ webhook:
 						},
 					},
 				},
-				MultiKueue: defaultMultiKueue,
 			},
 			wantOptions: ctrl.Options{
 				HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 				Metrics: metricsserver.Options{
 					BindAddress: configapi.DefaultMetricsBindAddress,
 				},
-				LeaderElection:                true,
-				LeaderElectionID:              configapi.DefaultLeaderElectionID,
-				LeaderElectionResourceLock:    resourcelock.LeasesResourceLock,
-				LeaderElectionReleaseOnCancel: true,
-				LeaseDuration:                 ptr.To(configapi.DefaultLeaderElectionLeaseDuration),
-				RenewDeadline:                 ptr.To(configapi.DefaultLeaderElectionRenewDeadline),
-				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
 						Port: configapi.DefaultWebhookPort,
@@ -858,86 +713,11 @@ webhook:
 				},
 			},
 		},
-		{
-			name:       "multiKueue config",
-			configFile: multiKueueConfig,
-			wantConfiguration: configapi.Configuration{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: configapi.GroupVersion.String(),
-					Kind:       "Configuration",
-				},
-				Namespace:                  ptr.To(configapi.DefaultNamespace),
-				ManageJobsWithoutQueueName: false,
-				InternalCertManagement:     enableDefaultInternalCertManagement,
-				ClientConnection:           defaultClientConnection,
-				Integrations:               defaultIntegrations,
-				QueueVisibility:            defaultQueueVisibility,
-				MultiKueue: &configapi.MultiKueue{
-					GCInterval:        &metav1.Duration{Duration: 90 * time.Second},
-					Origin:            ptr.To("multikueue-manager1"),
-					WorkerLostTimeout: &metav1.Duration{Duration: 10 * time.Minute},
-				},
-			},
-			wantOptions: defaultControlOptions,
-		},
-		{
-			name:       "resourceTransform config",
-			configFile: resourceTransformConfig,
-			wantConfiguration: configapi.Configuration{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: configapi.GroupVersion.String(),
-					Kind:       "Configuration",
-				},
-				Namespace:                  ptr.To(configapi.DefaultNamespace),
-				ManageJobsWithoutQueueName: false,
-				InternalCertManagement:     enableDefaultInternalCertManagement,
-				ClientConnection:           defaultClientConnection,
-				Integrations:               defaultIntegrations,
-				QueueVisibility:            defaultQueueVisibility,
-				MultiKueue:                 defaultMultiKueue,
-				Resources: &configapi.Resources{
-					Transformations: []configapi.ResourceTransformation{
-						{
-							Input:    corev1.ResourceName("nvidia.com/mig-1g.5gb"),
-							Strategy: ptr.To(configapi.Replace),
-							Outputs: corev1.ResourceList{
-								corev1.ResourceName("example.com/accelerator-memory"): resourcev1.MustParse("5Gi"),
-								corev1.ResourceName("example.com/credits"):            resourcev1.MustParse("10"),
-							},
-						},
-						{
-							Input:    corev1.ResourceName("nvidia.com/mig-2g.10gb"),
-							Strategy: ptr.To(configapi.Replace),
-							Outputs: corev1.ResourceList{
-								corev1.ResourceName("example.com/accelerator-memory"): resourcev1.MustParse("10Gi"),
-								corev1.ResourceName("example.com/credits"):            resourcev1.MustParse("15"),
-							},
-						},
-						{
-							Input:    corev1.ResourceCPU,
-							Strategy: ptr.To(configapi.Retain),
-							Outputs: corev1.ResourceList{
-								corev1.ResourceName("example.com/credits"): resourcev1.MustParse("1"),
-							},
-						},
-					},
-				},
-			},
-			wantOptions: defaultControlOptions,
-		},
-		{
-			name:       "invalid config",
-			configFile: invalidConfig,
-			wantError: runtime.NewStrictDecodingError([]error{
-				errors.New("unknown field \"invalidField\""),
-				errors.New("unknown field \"namespaces\""),
-			}),
-		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			options, cfg, err := Load(testScheme, tc.configFile)
+			options, cfg, err := Load(test_scheme, tc.configFile)
 			if tc.wantError == nil {
 				if err != nil {
 					t.Errorf("Unexpected error:%s", err)
@@ -958,14 +738,14 @@ webhook:
 }
 
 func TestEncode(t *testing.T) {
-	testScheme := runtime.NewScheme()
-	err := configapi.AddToScheme(testScheme)
+	test_scheme := runtime.NewScheme()
+	err := configapi.AddToScheme(test_scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	defaultConfig := &configapi.Configuration{}
-	testScheme.Default(defaultConfig)
+	test_scheme.Default(defaultConfig)
 
 	testcases := []struct {
 		name       string
@@ -976,7 +756,7 @@ func TestEncode(t *testing.T) {
 
 		{
 			name:   "empty",
-			scheme: testScheme,
+			scheme: test_scheme,
 			cfg:    &configapi.Configuration{},
 			wantResult: map[string]any{
 				"apiVersion":                 "config.kueue.x-k8s.io/v1beta1",
@@ -989,7 +769,7 @@ func TestEncode(t *testing.T) {
 		},
 		{
 			name:   "default",
-			scheme: testScheme,
+			scheme: test_scheme,
 			cfg:    defaultConfig,
 			wantResult: map[string]any{
 				"apiVersion": "config.kueue.x-k8s.io/v1beta1",
@@ -1003,15 +783,6 @@ func TestEncode(t *testing.T) {
 				},
 				"health": map[string]any{
 					"healthProbeBindAddress": configapi.DefaultHealthProbeBindAddress,
-				},
-				"leaderElection": map[string]any{
-					"leaderElect":       true,
-					"leaseDuration":     configapi.DefaultLeaderElectionLeaseDuration.String(),
-					"renewDeadline":     configapi.DefaultLeaderElectionRenewDeadline.String(),
-					"retryPeriod":       configapi.DefaultLeaderElectionRetryPeriod.String(),
-					"resourceLock":      resourcelock.LeasesResourceLock,
-					"resourceName":      configapi.DefaultLeaderElectionID,
-					"resourceNamespace": "",
 				},
 				"internalCertManagement": map[string]any{
 					"enable":             true,
@@ -1040,11 +811,6 @@ func TestEncode(t *testing.T) {
 					"updateIntervalSeconds": int64(configapi.DefaultQueueVisibilityUpdateIntervalSeconds),
 					"clusterQueues":         map[string]any{"maxCount": int64(10)},
 				},
-				"multiKueue": map[string]any{
-					"gcInterval":        "1m0s",
-					"origin":            "multikueue",
-					"workerLostTimeout": "15m0s",
-				},
 			},
 		},
 	}
@@ -1061,38 +827,6 @@ func TestEncode(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.wantResult, gotMap); diff != "" {
 				t.Errorf("Unexpected result (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestWaitForPodsReadyIsEnabled(t *testing.T) {
-	cases := map[string]struct {
-		cfg  *configapi.Configuration
-		want bool
-	}{
-		"cfg.waitForPodsReady is null": {
-			cfg: &configapi.Configuration{},
-		},
-		"cfg.WaitForPodsReadyIsEnabled.enable is false": {
-			cfg: &configapi.Configuration{
-				WaitForPodsReady: &configapi.WaitForPodsReady{},
-			},
-		},
-		"waitForPodsReady is true": {
-			cfg: &configapi.Configuration{
-				WaitForPodsReady: &configapi.WaitForPodsReady{
-					Enable: true,
-				},
-			},
-			want: true,
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := WaitForPodsReadyIsEnabled(tc.cfg)
-			if tc.want != got {
-				t.Errorf("Unexpected result from WaitForPodsReadyIsEnabled\nwant:\n%v\ngot:%v\n", tc.want, got)
 			}
 		})
 	}

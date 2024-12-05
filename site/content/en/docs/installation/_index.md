@@ -16,11 +16,9 @@ description: >
   - [Uninstall](#uninstall-1)
 - [Build and install from source](#build-and-install-from-source)
   - [Add metrics scraping for prometheus-operator](#add-metrics-scraping-for-prometheus-operator-1)
-  - [Add API Priority and Fairness configuration for the visibility API](#add-api-priority-and-fairness-configuration-for-the-visibility-api)
   - [Uninstall](#uninstall-2)
 - [Install via Helm](#install-via-helm)
 - [Change the feature gates configuration](#change-the-feature-gates-configuration)
-- [What's next](#whats-next)
 
 <!-- /toc -->
 
@@ -28,7 +26,7 @@ description: >
 
 Make sure the following conditions are met:
 
-- A Kubernetes cluster with version 1.25 or newer is running. Learn how to [install the Kubernetes tools](https://kubernetes.io/docs/tasks/tools/).
+- A Kubernetes cluster with version 1.21 or newer is running. Learn how to [install the Kubernetes tools](https://kubernetes.io/docs/tasks/tools/).
 - The `SuspendJob` [feature gate][feature_gate] is enabled. In Kubernetes 1.22 or newer, the feature gate is enabled by default.
 - (Optional) The `JobMutableNodeSchedulingDirectives` [feature gate][feature_gate] (available in Kubernetes 1.22 or newer) is enabled.
   In Kubernetes 1.23 or newer, the feature gate is enabled by default.
@@ -51,40 +49,30 @@ The webhook server in kueue uses an internal cert management for provisioning ce
 ## Install a released version
 
 To install a released version of Kueue in your cluster, run the following command:
-```shell
-kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/{{< param "version" >}}/manifests.yaml
-```
 
-To wait for Kueue to be fully available, run:
 ```shell
-kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=available --timeout=5m
+VERSION={{< param "version" >}}
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/$VERSION/manifests.yaml
 ```
 
 ### Add metrics scraping for prometheus-operator
 
+> _Available in Kueue v0.2.1 and later_
+
 To allow [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator)
 to scrape metrics from kueue components, run the following command:
 
-{{% alert title="Note" color="primary" %}}
-This feature depends on [servicemonitor CRD](https://github.com/prometheus-operator/kube-prometheus/blob/main/manifests/setup/0servicemonitorCustomResourceDefinition.yaml), please ensure that CRD is installed first.
-
-We can follow `https://prometheus-operator.dev/docs/prologue/quick-start/` to install it.
-{{% /alert %}}
-
 ```shell
-kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/{{< param "version" >}}/prometheus.yaml
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/kueue/releases/download/$VERSION/prometheus.yaml
 ```
-
-### Add API Priority and Fairness configuration for the visibility API
-
-See [Configure API Priority and Fairness](/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/#configure-api-priority-and-fairness) for more details.
 
 ### Uninstall
 
 To uninstall a released version of Kueue from your cluster, run the following command:
 
 ```shell
-kubectl delete -f https://github.com/kubernetes-sigs/kueue/releases/download/{{< param "version" >}}/manifests.yaml
+VERSION={{< param "version" >}}
+kubectl delete -f https://github.com/kubernetes-sigs/kueue/releases/download/$VERSION/manifests.yaml
 ```
 
 ## Install a custom-configured released version
@@ -93,15 +81,19 @@ To install a custom-configured released version of Kueue in your cluster, execut
 
 1. Download the release's `manifests.yaml` file:
 
-```shell
-wget https://github.com/kubernetes-sigs/kueue/releases/download/{{< param "version" >}}/manifests.yaml
-```
+    ```shell
+    VERSION={{< param "version" >}}
+    wget https://github.com/kubernetes-sigs/kueue/releases/download/$VERSION/manifests.yaml
+    ```
 
 2. With an editor of your preference, open `manifests.yaml`.
 3. In the `kueue-manager-config` ConfigMap manifest, edit the
 `controller_manager_config.yaml` data entry. The entry represents
-the default [KueueConfiguration](/docs/reference/kueue-config.v1beta1).
+the default Kueue Configuration
+struct ([v1beta1@main](https://pkg.go.dev/sigs.k8s.io/kueue@main/apis/config/v1beta1#Configuration)).
 The contents of the ConfigMap are similar to the following:
+
+> __The `namespace` and `internalCertManagement` fields are available in Kueue v0.3.0 and later__
 
 ```yaml
 apiVersion: v1
@@ -129,23 +121,19 @@ data:
     waitForPodsReady:
       enable: true
       timeout: 10m
+    # pprofBindAddress: :8082
     integrations:
       frameworks:
       - "batch/job"
+    # - "kubeflow.org/mpijob"
+    # - "ray.io/rayjob"
 ```
 
-__The `integrations.externalFrameworks` field is available in Kueue v0.7.0 and later.__
+__The `namespace`, `waitForPodsReady`, and `internalCertManagement` fields are available in Kueue v0.3.0 and later__
 
-{{% alert title="Note" color="primary" %}}
-See [All-or-nothing with ready Pods](/docs/tasks/manage/setup_wait_for_pods_ready) to learn
+> **Note**
+> See [Sequential Admission with Ready Pods](/docs/tasks/setup_sequential_admission) to learn
 more about using `waitForPodsReady` for Kueue.
-{{% /alert %}}
-
-{{% alert title="Note" color="primary" %}}
-Certain Kubernetes distributions might use batch/jobs to perform maintenance operations.
-For these distributions, setting `manageJobsWithoutQueueName` to `true` without disabling the
-`batch/job` integration may prevent system-created jobs from executing.
-{{% /alert %}}
 
 4. Apply the customized manifests to the cluster:
 
@@ -185,6 +173,8 @@ IMAGE_REGISTRY=registry.example.com/my-user make image-local-push deploy
 
 ### Add metrics scraping for prometheus-operator
 
+> _Available in Kueue v0.2.0 and later_
+
 To allow [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator)
 to scrape metrics from kueue components, run the following command:
 
@@ -207,7 +197,7 @@ To install and configure Kueue with [Helm](https://helm.sh/), follow the [instru
 
 Kueue uses a similar mechanism to configure features as described in [Kubernetes Feature Gates](https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates).
 
-In order to change the default of a feature, you need to edit the `kueue-controller-manager` deployment within the kueue installation namespace and change the `manager` container arguments to include
+In order to change the default of a feature, you need to edit the `kueue-controller-manager` deployment within the kueue installation namespace and change the `manager` container arguments to include 
 
 ```
 --feature-gates=...,<FeatureName>=<true|false>
@@ -233,29 +223,13 @@ spec:
 
 The currently supported features are:
 
-| Feature                               | Default | Stage      | Since | Until |
-|---------------------------------------|---------|------------|-------|-------|
-| `FlavorFungibility`                   | `true`  | Beta       | 0.5   |       |
-| `MultiKueue`                          | `false` | Alpha      | 0.6   | 0.8   |
-| `MultiKueue`                          | `true`  | Beta       | 0.9   |       |
-| `MultiKueueBatchJobWithManagedBy`     | `false` | Alpha      | 0.8   |       |
-| `PartialAdmission`                    | `false` | Alpha      | 0.4   | 0.4   |
-| `PartialAdmission`                    | `true`  | Beta       | 0.5   |       |
-| `ProvisioningACC`                     | `false` | Alpha      | 0.5   | 0.6   |
-| `ProvisioningACC`                     | `true`  | Beta       | 0.7   |       |
-| `QueueVisibility`                     | `false` | Alpha      | 0.5   | 0.9   |
-| `QueueVisibility`                     | `false` | Deprecated | 0.9   |       |
-| `VisibilityOnDemand`                  | `false` | Alpha      | 0.6   |  0.8  |
-| `VisibilityOnDemand`                  | `true`  | Beta       | 0.9   |       |
-| `PrioritySortingWithinCohort`         | `true`  | Beta       | 0.6   |       |
-| `LendingLimit`                        | `false` | Alpha      | 0.6   | 0.8   |
-| `LendingLimit`                        | `true`  | Beta       | 0.9   |       |
-| `MultiplePreemptions`                 | `false` | Alpha      | 0.8   | 0.8   |
-| `MultiplePreemptions`                 | `true`  | Beta       | 0.9   |       |
-| `TopologyAwareScheduling`             | `false` | Alpha      | 0.9   |       |
-| `ConfigurableResourceTransformations` | `false` | Alpha      | 0.9   |       |
-| `WorkloadResourceRequestsSummary`     | `false` | Alpha      | 0.9   |       |
-| `AdmissionCheckValidationRules`       | `false` | Deprecated | 0.9   | 0.9   |
+| Feature | Default | Stage | Since | Until |
+|---------|---------|-------|-------|-------|
+| `FlavorFungibility` | `true` | beta | 0.5 |  |
+| `PartialAdmission` | `false` | Alpha | 0.4 | 0.4 |
+| `PartialAdmission` | `true` | Beta | 0.5 |  |
+| `ProvisioningACC` | `false` | Alpha | 0.5 |  |
+| `QueueVisibility` | `false` | Alpha | 0.5 |  |
 
 ## What's next
 

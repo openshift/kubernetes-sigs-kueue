@@ -17,16 +17,19 @@ limitations under the License.
 package pytorchjob
 
 import (
+	"github.com/google/go-cmp/cmp/cmpopts"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
@@ -36,6 +39,7 @@ import (
 	testingpytorchjob "sigs.k8s.io/kueue/pkg/util/testingjobs/pytorchjob"
 	"sigs.k8s.io/kueue/pkg/workload"
 	kftesting "sigs.k8s.io/kueue/test/integration/controller/jobs/kubeflow"
+	"sigs.k8s.io/kueue/test/integration/framework"
 	"sigs.k8s.io/kueue/test/util"
 )
 
@@ -47,19 +51,29 @@ const (
 	jobQueueName      = "test-queue"
 )
 
+var (
+	ignoreConditionTimestamps = cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")
+)
+
 // +kubebuilder:docs-gen:collapse=Imports
 
 var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
-	ginkgo.BeforeAll(func() {
-		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true)))
-	})
 
+	ginkgo.BeforeAll(func() {
+		fwk = &framework.Framework{
+			CRDPath:     crdPath,
+			DepCRDPaths: []string{pytorchCrdPath},
+		}
+		cfg = fwk.Init()
+		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true)))
+	})
 	ginkgo.AfterAll(func() {
-		fwk.StopManager(ctx)
+		fwk.Teardown()
 	})
 
 	var (
-		ns *corev1.Namespace
+		ns          *corev1.Namespace
+		wlLookupKey types.NamespacedName
 	)
 	ginkgo.BeforeEach(func() {
 		ns = &corev1.Namespace{
@@ -68,21 +82,22 @@ var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailu
 			},
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		wlLookupKey = types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(jobName), Namespace: ns.Name}
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
 	})
 
 	ginkgo.It("Should reconcile PyTorchJobs", func() {
-		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(testingpytorchjob.MakePyTorchJob(jobName, ns.Name).PyTorchReplicaSpecsDefault().Obj())}
+		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(testingpytorchjob.MakePyTorchJob(jobName, ns.Name).Obj())}
 		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(&kftraining.PyTorchJob{})}
-		kftesting.ShouldReconcileJob(ctx, k8sClient, kfJob, createdJob, []kftesting.PodSetsResource{
+		kftesting.ShouldReconcileJob(ctx, k8sClient, kfJob, createdJob, ns, wlLookupKey, []kftesting.PodSetsResource{
 			{
-				RoleName:    kftraining.PyTorchJobReplicaTypeMaster,
+				NodeName:    kftraining.PyTorchJobReplicaTypeMaster,
 				ResourceCPU: "on-demand",
 			},
 			{
-				RoleName:    kftraining.PyTorchJobReplicaTypeWorker,
+				NodeName:    kftraining.PyTorchJobReplicaTypeWorker,
 				ResourceCPU: "spot",
 			},
 		})
@@ -91,11 +106,15 @@ var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailu
 
 var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue are managed", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	ginkgo.BeforeAll(func() {
-		fwk.StartManager(ctx, cfg, managerSetup())
+		fwk = &framework.Framework{
+			CRDPath:     crdPath,
+			DepCRDPaths: []string{pytorchCrdPath},
+		}
+		cfg := fwk.Init()
+		ctx, k8sClient = fwk.RunManager(cfg, managerSetup())
 	})
-
 	ginkgo.AfterAll(func() {
-		fwk.StopManager(ctx)
+		fwk.Teardown()
 	})
 
 	var (
@@ -115,25 +134,23 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 
 	ginkgo.It("Should reconcile jobs only when queue is set", func() {
 		ginkgo.By("checking the workload is not created when queue name is not set")
-		job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).
-			PyTorchReplicaSpecsDefault().
-			Obj()
+		job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).Obj()
 		gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
 		lookupKey := types.NamespacedName{Name: jobName, Namespace: ns.Name}
 		createdJob := &kftraining.PyTorchJob{}
 		gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
 
 		createdWorkload := &kueue.Workload{}
-		wlLookupKey := types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(job.Name, job.UID), Namespace: ns.Name}
-		gomega.Eventually(func(g gomega.Gomega) {
-			g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(testing.BeNotFoundError())
-		}, util.Timeout, util.Interval).Should(gomega.Succeed())
+		wlLookupKey := types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(jobName), Namespace: ns.Name}
+		gomega.Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, wlLookupKey, createdWorkload))
+		}, util.Timeout, util.Interval).Should(gomega.BeTrue())
 
 		ginkgo.By("checking the workload is created when queue name is set")
 		createdJob.Annotations = map[string]string{constants.QueueAnnotation: jobQueueName}
 		gomega.Expect(k8sClient.Update(ctx, createdJob)).Should(gomega.Succeed())
-		gomega.Eventually(func(g gomega.Gomega) {
-			g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+		gomega.Eventually(func() error {
+			return k8sClient.Get(ctx, wlLookupKey, createdWorkload)
 		}, util.Timeout, util.Interval).Should(gomega.Succeed())
 	})
 
@@ -143,6 +160,7 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 			localQueue     *kueue.LocalQueue
 			testFlavor     *kueue.ResourceFlavor
 			jobLookupKey   *types.NamespacedName
+			wlLookupKey    *types.NamespacedName
 			admissionCheck *kueue.AdmissionCheck
 		)
 
@@ -157,51 +175,50 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 			gomega.Expect(k8sClient.Create(ctx, clusterQueueAc)).Should(gomega.Succeed())
 			localQueue = testing.MakeLocalQueue("queue", ns.Name).ClusterQueue(clusterQueueAc.Name).Obj()
 			gomega.Expect(k8sClient.Create(ctx, localQueue)).To(gomega.Succeed())
-			testFlavor = testing.MakeResourceFlavor("test-flavor").NodeLabel(instanceKey, "test-flavor").Obj()
+			testFlavor = testing.MakeResourceFlavor("test-flavor").Label(instanceKey, "test-flavor").Obj()
 			gomega.Expect(k8sClient.Create(ctx, testFlavor)).Should(gomega.Succeed())
 
 			jobLookupKey = &types.NamespacedName{Name: jobName, Namespace: ns.Name}
+			wlLookupKey = &types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(jobName), Namespace: ns.Name}
 		})
 
 		ginkgo.AfterEach(func() {
-			gomega.Expect(util.DeleteObject(ctx, k8sClient, admissionCheck)).To(gomega.Succeed())
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, testFlavor, true)
+			gomega.Expect(util.DeleteAdmissionCheck(ctx, k8sClient, admissionCheck)).To(gomega.Succeed())
+			util.ExpectResourceFlavorToBeDeleted(ctx, k8sClient, testFlavor, true)
 			gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueueAc, true)
+			util.ExpectClusterQueueToBeDeleted(ctx, k8sClient, clusterQueueAc, true)
 		})
 
 		ginkgo.It("labels and annotations should be propagated from admission check to job", func() {
 			createdJob := &kftraining.PyTorchJob{}
 			createdWorkload := &kueue.Workload{}
-			job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).
-				PyTorchReplicaSpecsDefault().
-				PodAnnotation(kftraining.PyTorchJobReplicaTypeWorker, "old-ann-key", "old-ann-value").
-				PodLabel(kftraining.PyTorchJobReplicaTypeWorker, "old-label-key", "old-label-value").
-				Queue(localQueue.Name).
-				Obj()
 
 			ginkgo.By("creating the job with pod labels & annotations", func() {
+				job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).
+					PodAnnotation(kftraining.PyTorchJobReplicaTypeWorker, "old-ann-key", "old-ann-value").
+					PodLabel(kftraining.PyTorchJobReplicaTypeWorker, "old-label-key", "old-label-value").
+					Queue(localQueue.Name).
+					Obj()
 				gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("fetch the job and verify it is suspended as the checks are not ready", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(createdJob.Spec.RunPolicy.Suspend).Should(gomega.Equal(ptr.To(true)))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() *bool {
+					gomega.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
+					return createdJob.Spec.RunPolicy.Suspend
+				}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(true)))
 			})
 
-			wlLookupKey := &types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(job.Name, job.UID), Namespace: ns.Name}
 			ginkgo.By("fetch the created workload", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, *wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+				gomega.Eventually(func() error {
+					return k8sClient.Get(ctx, *wlLookupKey, createdWorkload)
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("add labels & annotations to the admission check", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
+				gomega.Eventually(func() error {
 					var newWL kueue.Workload
-					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(createdWorkload), &newWL)).To(gomega.Succeed())
+					gomega.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(createdWorkload), &newWL)).To(gomega.Succeed())
 					workload.SetAdmissionCheckState(&newWL.Status.AdmissionChecks, kueue.AdmissionCheckState{
 						Name:  "check",
 						State: kueue.CheckStateReady,
@@ -231,7 +248,7 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 							},
 						},
 					})
-					g.Expect(k8sClient.Status().Update(ctx, &newWL)).Should(gomega.Succeed())
+					return k8sClient.Status().Update(ctx, &newWL)
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
 			})
 
@@ -260,10 +277,10 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 			})
 
 			ginkgo.By("await for the job to start", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(createdJob.Spec.RunPolicy.Suspend).Should(gomega.Equal(ptr.To(false)))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() *bool {
+					gomega.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
+					return createdJob.Spec.RunPolicy.Suspend
+				}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
 			})
 
 			ginkgo.By("verify the PodSetUpdates are propagated to the running job", func() {
@@ -287,7 +304,7 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 			})
 
 			ginkgo.By("delete the localQueue to prevent readmission", func() {
-				gomega.Expect(util.DeleteObject(ctx, k8sClient, localQueue)).Should(gomega.Succeed())
+				gomega.Expect(util.DeleteLocalQueue(ctx, k8sClient, localQueue)).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("clear the workload's admission to stop the job", func() {
@@ -297,10 +314,10 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 			})
 
 			ginkgo.By("await for the job to be suspended", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(createdJob.Spec.RunPolicy.Suspend).Should(gomega.Equal(ptr.To(true)))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() *bool {
+					gomega.Expect(k8sClient.Get(ctx, *jobLookupKey, createdJob)).Should(gomega.Succeed())
+					return createdJob.Spec.RunPolicy.Suspend
+				}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(true)))
 			})
 
 			ginkgo.By("verify the PodSetUpdates are restored", func() {
@@ -319,19 +336,24 @@ var _ = ginkgo.Describe("Job controller for workloads when only jobs with queue 
 var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	var (
 		ns            *corev1.Namespace
-		defaultFlavor = testing.MakeResourceFlavor("default").NodeLabel(instanceKey, "default").Obj()
+		wlLookupKey   types.NamespacedName
+		defaultFlavor = testing.MakeResourceFlavor("default").Label(instanceKey, "default").Obj()
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true})))
+		fwk = &framework.Framework{
+			CRDPath:     crdPath,
+			DepCRDPaths: []string{pytorchCrdPath},
+		}
+		cfg := fwk.Init()
+		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithWaitForPodsReady(true)))
 
 		ginkgo.By("Create a resource flavor")
 		gomega.Expect(k8sClient.Create(ctx, defaultFlavor)).Should(gomega.Succeed())
 	})
-
 	ginkgo.AfterAll(func() {
-		util.ExpectObjectToBeDeleted(ctx, k8sClient, defaultFlavor, true)
-		fwk.StopManager(ctx)
+		util.ExpectResourceFlavorToBeDeleted(ctx, k8sClient, defaultFlavor, true)
+		fwk.Teardown()
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -341,6 +363,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 			},
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		wlLookupKey = types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(jobName), Namespace: ns.Name}
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -348,19 +371,88 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 
 	ginkgo.DescribeTable("Single job at different stages of progress towards completion",
 		func(podsReadyTestSpec kftesting.PodsReadyTestSpec) {
-			kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(testingpytorchjob.MakePyTorchJob(jobName, ns.Name).PyTorchReplicaSpecsDefault().Parallelism(2).Obj())}
-			createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(&kftraining.PyTorchJob{})}
+			ginkgo.By("Create a job")
+			job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).Parallelism(2).Obj()
+			jobQueueName := "test-queue"
+			job.Annotations = map[string]string{constants.QueueAnnotation: jobQueueName}
+			gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
+			lookupKey := types.NamespacedName{Name: jobName, Namespace: ns.Name}
+			createdJob := &kftraining.PyTorchJob{}
+			gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
 
-			kftesting.JobControllerWhenWaitForPodsReadyEnabled(ctx, k8sClient, kfJob, createdJob, podsReadyTestSpec, []kftesting.PodSetsResource{
-				{
-					RoleName:    kftraining.PyTorchJobReplicaTypeMaster,
-					ResourceCPU: "default",
-				},
-				{
-					RoleName:    kftraining.PyTorchJobReplicaTypeWorker,
-					ResourceCPU: "default",
-				},
-			})
+			ginkgo.By("Fetch the workload created for the job")
+			createdWorkload := &kueue.Workload{}
+			gomega.Eventually(func() error {
+				return k8sClient.Get(ctx, wlLookupKey, createdWorkload)
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+
+			ginkgo.By("Admit the workload created for the job")
+			admission := testing.MakeAdmission("foo").
+				PodSets(
+					kueue.PodSetAssignment{
+						Name: "Master",
+						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+							corev1.ResourceCPU: "default",
+						},
+						Count: ptr.To(createdWorkload.Spec.PodSets[0].Count),
+					},
+					kueue.PodSetAssignment{
+						Name: "Worker",
+						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+							corev1.ResourceCPU: "default",
+						},
+						Count: ptr.To(createdWorkload.Spec.PodSets[1].Count),
+					},
+				).
+				Obj()
+			gomega.Expect(util.SetQuotaReservation(ctx, k8sClient, createdWorkload, admission)).Should(gomega.Succeed())
+			util.SyncAdmittedConditionForWorkloads(ctx, k8sClient, createdWorkload)
+			gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+
+			ginkgo.By("Await for the job to be unsuspended")
+			gomega.Eventually(func() *bool {
+				gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+				return createdJob.Spec.RunPolicy.Suspend
+			}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
+
+			if podsReadyTestSpec.BeforeJobStatus != nil {
+				ginkgo.By("Update the job status to simulate its initial progress towards completion")
+				createdJob.Status = *podsReadyTestSpec.BeforeJobStatus
+				gomega.Expect(k8sClient.Status().Update(ctx, createdJob)).Should(gomega.Succeed())
+				gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+			}
+
+			if podsReadyTestSpec.BeforeCondition != nil {
+				ginkgo.By("Update the workload status")
+				gomega.Eventually(func() *metav1.Condition {
+					gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+					return apimeta.FindStatusCondition(createdWorkload.Status.Conditions, kueue.WorkloadPodsReady)
+				}, util.Timeout, util.Interval).Should(gomega.BeComparableTo(podsReadyTestSpec.BeforeCondition, ignoreConditionTimestamps))
+			}
+
+			ginkgo.By("Update the job status to simulate its progress towards completion")
+			createdJob.Status = podsReadyTestSpec.JobStatus
+			gomega.Expect(k8sClient.Status().Update(ctx, createdJob)).Should(gomega.Succeed())
+			gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+
+			if podsReadyTestSpec.Suspended {
+				ginkgo.By("Unset admission of the workload to suspend the job")
+				gomega.Eventually(func() error {
+					// the update may need to be retried due to a conflict as the workload gets
+					// also updated due to setting of the job status.
+					if err := k8sClient.Get(ctx, wlLookupKey, createdWorkload); err != nil {
+						return err
+					}
+					return util.SetQuotaReservation(ctx, k8sClient, createdWorkload, nil)
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				util.SyncAdmittedConditionForWorkloads(ctx, k8sClient, createdWorkload)
+			}
+
+			ginkgo.By("Verify the PodsReady condition is added")
+			gomega.Eventually(func() *metav1.Condition {
+				gomega.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+				return apimeta.FindStatusCondition(createdWorkload.Status.Conditions, kueue.WorkloadPodsReady)
+			}, util.Timeout, util.Interval).Should(gomega.BeComparableTo(podsReadyTestSpec.WantCondition, ignoreConditionTimestamps))
 		},
 		ginkgo.Entry("No progress", kftesting.PodsReadyTestSpec{
 			WantCondition: &metav1.Condition{
@@ -456,11 +548,15 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk.StartManager(ctx, cfg, managerAndSchedulerSetup())
+		fwk = &framework.Framework{
+			CRDPath:     crdPath,
+			DepCRDPaths: []string{pytorchCrdPath},
+		}
+		cfg := fwk.Init()
+		ctx, k8sClient = fwk.RunManager(cfg, managerAndSchedulerSetup())
 	})
-
 	ginkgo.AfterAll(func() {
-		fwk.StopManager(ctx)
+		fwk.Teardown()
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -471,10 +567,10 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 		}
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
 
-		onDemandFlavor = testing.MakeResourceFlavor("on-demand").NodeLabel(instanceKey, "on-demand").Obj()
+		onDemandFlavor = testing.MakeResourceFlavor("on-demand").Label(instanceKey, "on-demand").Obj()
 		gomega.Expect(k8sClient.Create(ctx, onDemandFlavor)).Should(gomega.Succeed())
 
-		spotUntaintedFlavor = testing.MakeResourceFlavor("spot-untainted").NodeLabel(instanceKey, "spot-untainted").Obj()
+		spotUntaintedFlavor = testing.MakeResourceFlavor("spot-untainted").Label(instanceKey, "spot-untainted").Obj()
 		gomega.Expect(k8sClient.Create(ctx, spotUntaintedFlavor)).Should(gomega.Succeed())
 
 		clusterQueue = testing.MakeClusterQueue("dev-clusterqueue").
@@ -486,9 +582,9 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
-		util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sClient, onDemandFlavor, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sClient, spotUntaintedFlavor, true)
+		util.ExpectClusterQueueToBeDeleted(ctx, k8sClient, clusterQueue, true)
+		util.ExpectResourceFlavorToBeDeleted(ctx, k8sClient, onDemandFlavor, true)
+		gomega.Expect(util.DeleteResourceFlavor(ctx, k8sClient, spotUntaintedFlavor)).To(gomega.Succeed())
 	})
 
 	ginkgo.It("Should schedule jobs as they fit in their ClusterQueue", func() {
@@ -496,34 +592,29 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
 		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
 
-		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(
-			testingpytorchjob.MakePyTorchJob(jobName, ns.Name).
-				PyTorchReplicaSpecsDefault().
-				Queue(localQueue.Name).
-				Request(kftraining.PyTorchJobReplicaTypeMaster, corev1.ResourceCPU, "3").
-				Request(kftraining.PyTorchJobReplicaTypeWorker, corev1.ResourceCPU, "4").
-				Obj(),
-		)}
-		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadpytorchjob.JobControl)(&kftraining.PyTorchJob{})}
-
-		kftesting.ShouldScheduleJobsAsTheyFitInTheirClusterQueue(ctx, k8sClient, kfJob, createdJob, clusterQueue, []kftesting.PodSetsResource{
-			{
-				RoleName:    kftraining.PyTorchJobReplicaTypeMaster,
-				ResourceCPU: kueue.ResourceFlavorReference(spotUntaintedFlavor.Name),
-			},
-			{
-				RoleName:    kftraining.PyTorchJobReplicaTypeWorker,
-				ResourceCPU: kueue.ResourceFlavorReference(onDemandFlavor.Name),
-			},
-		})
+		ginkgo.By("checking a dev job starts")
+		job := testingpytorchjob.MakePyTorchJob("dev-job", ns.Name).Queue(localQueue.Name).
+			Request(kftraining.PyTorchJobReplicaTypeMaster, corev1.ResourceCPU, "3").
+			Request(kftraining.PyTorchJobReplicaTypeWorker, corev1.ResourceCPU, "4").
+			Obj()
+		gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
+		createdJob := &kftraining.PyTorchJob{}
+		gomega.Eventually(func() *bool {
+			gomega.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: job.Name, Namespace: job.Namespace}, createdJob)).
+				Should(gomega.Succeed())
+			return createdJob.Spec.RunPolicy.Suspend
+		}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
+		gomega.Expect(createdJob.Spec.PyTorchReplicaSpecs[kftraining.PyTorchJobReplicaTypeMaster].Template.Spec.NodeSelector[instanceKey]).Should(gomega.Equal(spotUntaintedFlavor.Name))
+		gomega.Expect(createdJob.Spec.PyTorchReplicaSpecs[kftraining.PyTorchJobReplicaTypeWorker].Template.Spec.NodeSelector[instanceKey]).Should(gomega.Equal(onDemandFlavor.Name))
+		util.ExpectPendingWorkloadsMetric(clusterQueue, 0, 0)
+		util.ExpectReservingActiveWorkloadsMetric(clusterQueue, 1)
 	})
 
 	ginkgo.When("The workload's admission is removed", func() {
 		ginkgo.It("Should restore the original node selectors", func() {
+
 			localQueue := testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
-			job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).
-				PyTorchReplicaSpecsDefault().
-				Queue(localQueue.Name).
+			job := testingpytorchjob.MakePyTorchJob(jobName, ns.Name).Queue(localQueue.Name).
 				Request(kftraining.PyTorchJobReplicaTypeMaster, corev1.ResourceCPU, "3").
 				Request(kftraining.PyTorchJobReplicaTypeWorker, corev1.ResourceCPU, "4").
 				Obj()
@@ -543,10 +634,10 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 			})
 
 			ginkgo.By("job should be suspend", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(createdJob.Spec.RunPolicy.Suspend).Should(gomega.Equal(ptr.To(true)))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() *bool {
+					gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+					return createdJob.Spec.RunPolicy.Suspend
+				}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(true)))
 			})
 
 			// backup the node selectors
@@ -557,36 +648,36 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 			})
 
 			ginkgo.By("job should be unsuspended", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(createdJob.Spec.RunPolicy.Suspend).Should(gomega.Equal(ptr.To(false)))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() *bool {
+					gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+					return createdJob.Spec.RunPolicy.Suspend
+				}, util.Timeout, util.Interval).Should(gomega.Equal(ptr.To(false)))
 			})
 
 			ginkgo.By("the node selectors should be updated", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(nodeSelectors(createdJob)).ShouldNot(gomega.Equal(originalNodeSelectors))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() map[kftraining.ReplicaType]map[string]string {
+					gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+					return nodeSelectors(createdJob)
+				}, util.Timeout, util.Interval).ShouldNot(gomega.Equal(originalNodeSelectors))
 			})
 
 			ginkgo.By("delete the localQueue to prevent readmission", func() {
-				gomega.Expect(util.DeleteObject(ctx, k8sClient, localQueue)).Should(gomega.Succeed())
+				gomega.Expect(util.DeleteLocalQueue(ctx, k8sClient, localQueue)).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("clear the workload's admission to stop the job", func() {
 				wl := &kueue.Workload{}
-				wlKey := types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(job.Name, job.UID), Namespace: job.Namespace}
+				wlKey := types.NamespacedName{Name: workloadpytorchjob.GetWorkloadNameForPyTorchJob(job.Name), Namespace: job.Namespace}
 				gomega.Expect(k8sClient.Get(ctx, wlKey, wl)).Should(gomega.Succeed())
 				gomega.Expect(util.SetQuotaReservation(ctx, k8sClient, wl, nil)).Should(gomega.Succeed())
 				util.SyncAdmittedConditionForWorkloads(ctx, k8sClient, wl)
 			})
 
 			ginkgo.By("the node selectors should be restored", func() {
-				gomega.Eventually(func(g gomega.Gomega) {
-					g.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
-					g.Expect(nodeSelectors(createdJob)).Should(gomega.Equal(originalNodeSelectors))
-				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+				gomega.Eventually(func() map[kftraining.ReplicaType]map[string]string {
+					gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
+					return nodeSelectors(createdJob)
+				}, util.Timeout, util.Interval).Should(gomega.Equal(originalNodeSelectors))
 			})
 		})
 	})

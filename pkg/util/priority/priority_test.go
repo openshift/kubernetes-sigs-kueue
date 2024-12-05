@@ -23,7 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -77,7 +77,7 @@ func TestGetPriorityFromPriorityClass(t *testing.T) {
 			priorityClassList: &schedulingv1.PriorityClassList{
 				Items: []schedulingv1.PriorityClass{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "test"},
+						ObjectMeta: v1.ObjectMeta{Name: "test"},
 						Value:      50,
 					},
 				},
@@ -98,7 +98,7 @@ func TestGetPriorityFromPriorityClass(t *testing.T) {
 			priorityClassList: &schedulingv1.PriorityClassList{
 				Items: []schedulingv1.PriorityClass{
 					{
-						ObjectMeta:    metav1.ObjectMeta{Name: "globalDefault"},
+						ObjectMeta:    v1.ObjectMeta{Name: "globalDefault"},
 						GlobalDefault: true,
 						Value:         40,
 					},
@@ -112,17 +112,17 @@ func TestGetPriorityFromPriorityClass(t *testing.T) {
 			priorityClassList: &schedulingv1.PriorityClassList{
 				Items: []schedulingv1.PriorityClass{
 					{
-						ObjectMeta:    metav1.ObjectMeta{Name: "globalDefault1"},
+						ObjectMeta:    v1.ObjectMeta{Name: "globalDefault1"},
 						GlobalDefault: true,
 						Value:         90,
 					},
 					{
-						ObjectMeta:    metav1.ObjectMeta{Name: "globalDefault2"},
+						ObjectMeta:    v1.ObjectMeta{Name: "globalDefault2"},
 						GlobalDefault: true,
 						Value:         20,
 					},
 					{
-						ObjectMeta:    metav1.ObjectMeta{Name: "globalDefault3"},
+						ObjectMeta:    v1.ObjectMeta{Name: "globalDefault3"},
 						GlobalDefault: true,
 						Value:         50,
 					},
@@ -135,6 +135,7 @@ func TestGetPriorityFromPriorityClass(t *testing.T) {
 	}
 
 	for desc, tt := range tests {
+		tt := tt
 		t.Run(desc, func(t *testing.T) {
 			t.Parallel()
 
@@ -179,7 +180,7 @@ func TestGetPriorityFromWorkloadPriorityClass(t *testing.T) {
 			workloadPriorityClassList: &kueue.WorkloadPriorityClassList{
 				Items: []kueue.WorkloadPriorityClass{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "test"},
+						ObjectMeta: v1.ObjectMeta{Name: "test"},
 						Value:      50,
 					},
 				},
@@ -199,6 +200,7 @@ func TestGetPriorityFromWorkloadPriorityClass(t *testing.T) {
 	}
 
 	for desc, tt := range tests {
+		tt := tt
 		t.Run(desc, func(t *testing.T) {
 			t.Parallel()
 

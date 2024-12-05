@@ -7,7 +7,7 @@ description: >
 ---
 
 A _workload_ is an application that will run to completion. It can be composed
-by one or multiple Pods that, loosely or tightly coupled, as a whole,
+by one or multiple Pods that, loosely or tightly coupled, that, as a whole,
 complete a task. A workload is the unit of [admission](/docs/concepts#admission) in Kueue.
 
 The prototypical workload can be represented with a
@@ -29,7 +29,6 @@ metadata:
   name: sample-job
   namespace: team-a
 spec:
-  active: true
   queueName: team-a-queue
   podSets:
   - count: 3
@@ -46,10 +45,6 @@ spec:
               memory: 200Mi
         restartPolicy: Never
 ```
-## Active
-
-You can stop or resume a running workload by setting the [Active](/docs/reference/kueue.v1beta1#kueue-x-k8s-io-v1beta1-WorkloadSpec) field. The active field determines if a workload can be admitted into a queue or continue running, if already admitted.
-Changing `.spec.Active` from true to false will cause a running workload to be evicted and not be requeued.
 
 ## Queue name
 
@@ -89,7 +84,7 @@ Kueue will mark the workload as `Inadmissible` if the range validation fails.
 
 #### Reserved resource names
 
-In addition to the usual resource naming restrictions, you cannot use the `pods` resource name in a Pod spec, as it is reserved for internal Kueue use. You can use the `pods` resource name in a [ClusterQueue](/docs/concepts/cluster_queue#resources) to set quotas on the maximum number of pods.
+In addition to the usual resource naming restrictions, you cannot use the `pods` resource name in a Pod spec, as it is reserved for internal Kueue use. You can use the `pods` resource name in a [ClusterQueue](/docs/concepts/cluster_queue#resources) to set quotas on the maximum number of pods. 
 
 ## Priority
 
@@ -124,40 +119,12 @@ status:
     count: 2
   - name: podset2
     count: 2
-
+    
 ```
 The `count` can only increase while the workload holds a Quota Reservation.
-
-## All-or-nothing semantics for Job Resource Assignment
-
-This mechanism allows a Job to be evicted and re-queued if the job doesn't become ready.
-Please refer to the [All-or-nothing with ready Pods](/docs/tasks/manage/setup_wait_for_pods_ready/) for more details.
-
-### Exponential Backoff Requeueing
-
-Once evictions with `PodsReadyTimeout` reasons occur, a Workload will be re-queued with backoff.
-The Workload status allows you to know the following:
-
-- `.status.requeueState.count` indicates the numbers of times a Workload has already been backoff re-queued by Eviction with PodsReadyTimeout reason
-- `.status.requeueState.requeueAt` indicates the time when a Workload will be re-queued the next time
-
-```yaml
-status:
-  requeueState:
-    count: 5
-    requeueAt: 2024-02-11T04:51:03Z
-```
-
-When a Workload deactivated by All-or-nothing with ready Pods is re-activated,
-the requeueState (`.status.requeueState`) will be reset to null.
-
-## Replicate labels from Jobs into Workloads
-You can configure Kueue to copy labels, at Workload creation, into the new Workload from the underlying Job or Pod objects. This can be useful for Workload identification and debugging.
-You can specify which labels should be copied by setting the `labelKeysToCopy` field in the configuration API (under `integrations`). By default, Kueue does not copy any Job or Pod label into the Workload. 
-
 
 ## What's next
 
 - Learn about [workload priority class](/docs/concepts/workload_priority_class).
-- Learn how to [run jobs](/docs/tasks/run/jobs)
+- Learn how to [run jobs](/docs/tasks/run_jobs)
 - Read the [API reference](/docs/reference/kueue.v1beta1/#kueue-x-k8s-io-v1beta1-Workload) for `Workload`

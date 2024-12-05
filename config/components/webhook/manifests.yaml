@@ -10,25 +10,6 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-apps-v1-deployment
-  failurePolicy: Fail
-  name: mdeployment.kb.io
-  rules:
-  - apiGroups:
-    - apps
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    resources:
-    - deployments
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
       path: /mutate-batch-v1-job
   failurePolicy: Fail
   name: mjob.kb.io
@@ -200,56 +181,18 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-ray-io-v1-raycluster
-  failurePolicy: Fail
-  name: mraycluster.kb.io
-  rules:
-  - apiGroups:
-    - ray.io
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    resources:
-    - rayclusters
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /mutate-ray-io-v1-rayjob
+      path: /mutate-ray-io-v1alpha1-rayjob
   failurePolicy: Fail
   name: mrayjob.kb.io
   rules:
   - apiGroups:
     - ray.io
     apiVersions:
-    - v1
+    - v1alpha1
     operations:
     - CREATE
     resources:
     - rayjobs
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /mutate-apps-v1-statefulset
-  failurePolicy: Fail
-  name: mstatefulset.kb.io
-  rules:
-  - apiGroups:
-    - apps
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    resources:
-    - statefulsets
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -305,6 +248,7 @@ webhooks:
     - v1beta1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - workloads
   sideEffects: None
@@ -314,26 +258,6 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: validating-webhook-configuration
 webhooks:
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-apps-v1-deployment
-  failurePolicy: Fail
-  name: vdeployment.kb.io
-  rules:
-  - apiGroups:
-    - apps
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - deployments
-  sideEffects: None
 - admissionReviewVersions:
   - v1
   clientConfig:
@@ -520,34 +444,14 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-ray-io-v1-raycluster
-  failurePolicy: Fail
-  name: vraycluster.kb.io
-  rules:
-  - apiGroups:
-    - ray.io
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - rayclusters
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-ray-io-v1-rayjob
+      path: /validate-ray-io-v1alpha1-rayjob
   failurePolicy: Fail
   name: vrayjob.kb.io
   rules:
   - apiGroups:
     - ray.io
     apiVersions:
-    - v1
+    - v1alpha1
     operations:
     - CREATE
     - UPDATE
@@ -560,19 +464,19 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-apps-v1-statefulset
+      path: /validate-kueue-x-k8s-io-v1beta1-admissioncheck
   failurePolicy: Fail
-  name: vstatefulset.kb.io
+  name: vadmissioncheck.kb.io
   rules:
   - apiGroups:
-    - apps
+    - kueue.x-k8s.io
     apiVersions:
-    - v1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE
     resources:
-    - statefulsets
+    - admissionchecks
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -600,19 +504,19 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-kueue-x-k8s-io-v1alpha1-cohort
+      path: /validate-kueue-x-k8s-io-v1beta1-localqueue
   failurePolicy: Fail
-  name: vcohort.kb.io
+  name: vlocalqueue.kb.io
   rules:
   - apiGroups:
     - kueue.x-k8s.io
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE
     resources:
-    - cohorts
+    - localqueues
   sideEffects: None
 - admissionReviewVersions:
   - v1

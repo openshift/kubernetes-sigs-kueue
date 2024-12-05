@@ -19,51 +19,56 @@ set -o nounset
 set -o pipefail
 
 SOURCE_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-ROOT_DIR="$SOURCE_DIR/.."
-
-# shellcheck source=hack/e2e-common.sh
-source "${SOURCE_DIR}/e2e-common.sh"
+ROOT_DIR=$SOURCE_DIR/..
+export KUSTOMIZE=$ROOT_DIR/bin/kustomize
+export GINKGO=$ROOT_DIR/bin/ginkgo
+export KIND=$ROOT_DIR/bin/kind
+export E2E_TEST_IMAGE=gcr.io/k8s-staging-perf-tests/sleep:v0.0.3
 
 function cleanup {
-    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
+    if [ $CREATE_KIND_CLUSTER == 'true' ]
     then
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-	cluster_cleanup "$KIND_CLUSTER_NAME"
+        kubectl logs -n kube-system kube-scheduler-kind-control-plane > $ARTIFACTS/kube-scheduler.log || true
+        kubectl logs -n kube-system kube-controller-manager-kind-control-plane > $ARTIFACTS/kube-controller-manager.log || true
+        kubectl logs -n kueue-system deployment/kueue-controller-manager > $ARTIFACTS/kueue-controller-manager.log || true
+        kubectl describe pods -n kueue-system > $ARTIFACTS/kueue-system-pods.log || true
+        $KIND delete cluster --name $KIND_CLUSTER_NAME
     fi
-    #do the image restore here for the case when an error happened during deploy
-    restore_managers_image
+    (cd config/components/manager && $KUSTOMIZE edit set image controller=gcr.io/k8s-staging-kueue/kueue:main)
 }
 
 function startup {
-    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
+    if [ $CREATE_KIND_CLUSTER == 'true' ]
     then
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-	cluster_create "$KIND_CLUSTER_NAME"  "$SOURCE_DIR/kind-cluster.yaml" 
+        $KIND create cluster --name $KIND_CLUSTER_NAME --image $E2E_KIND_VERSION --config $SOURCE_DIR/kind-cluster.yaml --wait 1m -v 5  > $ARTIFACTS/kind-create.log 2>&1 \
+		||  { echo "unable to start the kind cluster "; cat $ARTIFACTS/kind-create.log ; }
+        kubectl get nodes > $ARTIFACTS/kind-nodes.log || true
+        kubectl describe pods -n kube-system > $ARTIFACTS/kube-system-pods.log || true
     fi
 }
 
 function kind_load {
-    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
+    if [ $CREATE_KIND_CLUSTER == 'true' ]
     then
-        docker pull "$E2E_TEST_IMAGE"
-	cluster_kind_load "$KIND_CLUSTER_NAME"
+        docker pull $E2E_TEST_IMAGE
+        $KIND load docker-image $E2E_TEST_IMAGE --name $KIND_CLUSTER_NAME
+        $KIND load docker-image $IMAGE_TAG --name $KIND_CLUSTER_NAME
     fi
-    docker pull "registry.k8s.io/jobset/jobset:$JOBSET_VERSION"
-    install_jobset "$KIND_CLUSTER_NAME"
 }
 
 function kueue_deploy {
-    (cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
-    cluster_kueue_deploy "$KIND_CLUSTER_NAME"
+    (cd config/components/manager && $KUSTOMIZE edit set image controller=$IMAGE_TAG)
+    kubectl apply --server-side -k test/e2e/config
 }
 
 trap cleanup EXIT
 startup
 kind_load
 kueue_deploy
-# shellcheck disable=SC2086
-$GINKGO $GINKGO_ARGS --junit-report=junit.xml --json-report=e2e.json --output-dir="$ARTIFACTS" -v ./test/e2e/singlecluster/...
+$GINKGO --junit-report=junit.xml --output-dir=$ARTIFACTS -v ./test/e2e/...

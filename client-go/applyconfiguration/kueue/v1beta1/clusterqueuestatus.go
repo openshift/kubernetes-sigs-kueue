@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2022 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ClusterQueueStatusApplyConfiguration represents a declarative configuration of the ClusterQueueStatus type for use
+// ClusterQueueStatusApplyConfiguration represents an declarative configuration of the ClusterQueueStatus type for use
 // with apply.
 type ClusterQueueStatusApplyConfiguration struct {
 	FlavorsReservation     []FlavorUsageApplyConfiguration                       `json:"flavorsReservation,omitempty"`
@@ -29,12 +29,11 @@ type ClusterQueueStatusApplyConfiguration struct {
 	PendingWorkloads       *int32                                                `json:"pendingWorkloads,omitempty"`
 	ReservingWorkloads     *int32                                                `json:"reservingWorkloads,omitempty"`
 	AdmittedWorkloads      *int32                                                `json:"admittedWorkloads,omitempty"`
-	Conditions             []v1.ConditionApplyConfiguration                      `json:"conditions,omitempty"`
+	Conditions             []v1.Condition                                        `json:"conditions,omitempty"`
 	PendingWorkloadsStatus *ClusterQueuePendingWorkloadsStatusApplyConfiguration `json:"pendingWorkloadsStatus,omitempty"`
-	FairSharing            *FairSharingStatusApplyConfiguration                  `json:"fairSharing,omitempty"`
 }
 
-// ClusterQueueStatusApplyConfiguration constructs a declarative configuration of the ClusterQueueStatus type for use with
+// ClusterQueueStatusApplyConfiguration constructs an declarative configuration of the ClusterQueueStatus type for use with
 // apply.
 func ClusterQueueStatus() *ClusterQueueStatusApplyConfiguration {
 	return &ClusterQueueStatusApplyConfiguration{}
@@ -93,12 +92,9 @@ func (b *ClusterQueueStatusApplyConfiguration) WithAdmittedWorkloads(value int32
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *ClusterQueueStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *ClusterQueueStatusApplyConfiguration {
+func (b *ClusterQueueStatusApplyConfiguration) WithConditions(values ...v1.Condition) *ClusterQueueStatusApplyConfiguration {
 	for i := range values {
-		if values[i] == nil {
-			panic("nil value passed to WithConditions")
-		}
-		b.Conditions = append(b.Conditions, *values[i])
+		b.Conditions = append(b.Conditions, values[i])
 	}
 	return b
 }
@@ -108,13 +104,5 @@ func (b *ClusterQueueStatusApplyConfiguration) WithConditions(values ...*v1.Cond
 // If called multiple times, the PendingWorkloadsStatus field is set to the value of the last call.
 func (b *ClusterQueueStatusApplyConfiguration) WithPendingWorkloadsStatus(value *ClusterQueuePendingWorkloadsStatusApplyConfiguration) *ClusterQueueStatusApplyConfiguration {
 	b.PendingWorkloadsStatus = value
-	return b
-}
-
-// WithFairSharing sets the FairSharing field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the FairSharing field is set to the value of the last call.
-func (b *ClusterQueueStatusApplyConfiguration) WithFairSharing(value *FairSharingStatusApplyConfiguration) *ClusterQueueStatusApplyConfiguration {
-	b.FairSharing = value
 	return b
 }

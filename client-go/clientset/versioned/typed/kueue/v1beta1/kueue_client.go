@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2022 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,8 +30,6 @@ type KueueV1beta1Interface interface {
 	AdmissionChecksGetter
 	ClusterQueuesGetter
 	LocalQueuesGetter
-	MultiKueueClustersGetter
-	MultiKueueConfigsGetter
 	ProvisioningRequestConfigsGetter
 	ResourceFlavorsGetter
 	WorkloadsGetter
@@ -53,14 +51,6 @@ func (c *KueueV1beta1Client) ClusterQueues() ClusterQueueInterface {
 
 func (c *KueueV1beta1Client) LocalQueues(namespace string) LocalQueueInterface {
 	return newLocalQueues(c, namespace)
-}
-
-func (c *KueueV1beta1Client) MultiKueueClusters() MultiKueueClusterInterface {
-	return newMultiKueueClusters(c)
-}
-
-func (c *KueueV1beta1Client) MultiKueueConfigs() MultiKueueConfigInterface {
-	return newMultiKueueConfigs(c)
 }
 
 func (c *KueueV1beta1Client) ProvisioningRequestConfigs() ProvisioningRequestConfigInterface {

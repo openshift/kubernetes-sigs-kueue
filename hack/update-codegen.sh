@@ -19,33 +19,32 @@ set -o nounset
 set -o pipefail
 
 GO_CMD=${1:-go}
-CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
-KUEUE_ROOT=$(realpath "${CURRENT_DIR}/..")
-KUEUE_PKG="sigs.k8s.io/kueue"
-CODEGEN_PKG=$(cd "${TOOLS_DIR}"; $GO_CMD list -m -mod=readonly -f "{{.Dir}}" k8s.io/code-generator)
+KUEUE_ROOT=$(realpath $(dirname ${BASH_SOURCE[0]})/..)
+CODEGEN_PKG=$($GO_CMD list -m -f "{{.Dir}}" k8s.io/code-generator)
 
-cd "$CURRENT_DIR/.."
+cd $(dirname ${BASH_SOURCE[0]})/..
 
-# shellcheck source=/dev/null
 source "${CODEGEN_PKG}/kube_codegen.sh"
 
-# Generating conversion and defaults functions
-kube::codegen::gen_helpers \
-  --boilerplate "${KUEUE_ROOT}/hack/boilerplate.go.txt" \
-  "${KUEUE_ROOT}/apis"
+# TODO: remove the workaround when the issue is solved in the code-generator
+# (https://github.com/kubernetes/code-generator/issues/165).
+# Here, we create the soft link named "sigs.k8s.io" to the parent directory of
+# Kueue to ensure the layout required by the kube_codegen.sh script.
+ln -s .. sigs.k8s.io
+trap "rm sigs.k8s.io" EXIT
 
-# Generating OpenAPI for Kueue API extensions
-kube::codegen::gen_openapi \
-  --boilerplate "${KUEUE_ROOT}/hack/boilerplate.go.txt" \
-  --output-dir "${KUEUE_ROOT}/apis/visibility/openapi" \
-  --output-pkg "${KUEUE_PKG}/apis/visibility/openapi" \
-  --update-report \
-  "${KUEUE_ROOT}/apis/visibility"
+kube::codegen::gen_helpers \
+  --input-pkg-root sigs.k8s.io/kueue/apis \
+  --output-base "${KUEUE_ROOT}" \
+  --boilerplate ${KUEUE_ROOT}/hack/boilerplate.go.txt
 
 kube::codegen::gen_client \
-  --boilerplate "${KUEUE_ROOT}/hack/boilerplate.go.txt" \
-  --output-dir "${KUEUE_ROOT}/client-go" \
-  --output-pkg "${KUEUE_PKG}/client-go" \
+  --input-pkg-root sigs.k8s.io/kueue/apis \
+  --output-pkg-root sigs.k8s.io/kueue/client-go \
+  --output-base "${KUEUE_ROOT}" \
+  --boilerplate ${KUEUE_ROOT}/hack/boilerplate.go.txt \
   --with-watch \
-  --with-applyconfig \
-  "${KUEUE_ROOT}/apis"
+  --with-applyconfig
+
+# We need to clean up the go.mod file since code-generator adds temporary library to the go.mod file.
+"${GO_CMD}" mod tidy

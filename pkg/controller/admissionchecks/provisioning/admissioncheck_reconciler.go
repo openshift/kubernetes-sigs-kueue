@@ -30,29 +30,32 @@ import (
 
 type acReconciler struct {
 	client client.Client
-	helper *provisioningConfigHelper
+	helper *storeHelper
 }
 
 var _ reconcile.Reconciler = (*acReconciler)(nil)
 
 func (a *acReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	ac := &kueue.AdmissionCheck{}
-	if err := a.client.Get(ctx, req.NamespacedName, ac); err != nil || ac.Spec.ControllerName != kueue.ProvisioningRequestControllerName {
+	if err := a.client.Get(ctx, req.NamespacedName, ac); err != nil || ac.Spec.ControllerName != ControllerName {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
 	currentCondition := ptr.Deref(apimeta.FindStatusCondition(ac.Status.Conditions, kueue.AdmissionCheckActive), metav1.Condition{})
 	newCondition := metav1.Condition{
-		Type:               kueue.AdmissionCheckActive,
-		Status:             metav1.ConditionTrue,
-		Reason:             "Active",
-		Message:            "The admission check is active",
-		ObservedGeneration: ac.Generation,
+		Type:    kueue.AdmissionCheckActive,
+		Status:  metav1.ConditionTrue,
+		Reason:  "Active",
+		Message: "The admission check is active",
 	}
 
-	if _, err := a.helper.ConfigFromRef(ctx, ac.Spec.Parameters); err != nil {
+	if !parametersRefValid(ac.Spec.Parameters) {
 		newCondition.Status = metav1.ConditionFalse
 		newCondition.Reason = "BadParametersRef"
+		newCondition.Message = "Unexpected parameters reference"
+	} else if _, err := a.helper.ProvReqConfig(ctx, ac.Spec.Parameters.Name); err != nil {
+		newCondition.Status = metav1.ConditionFalse
+		newCondition.Reason = "UnknownParametersRef"
 		newCondition.Message = err.Error()
 	}
 
