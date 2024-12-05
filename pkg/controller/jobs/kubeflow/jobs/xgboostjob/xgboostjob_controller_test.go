@@ -22,10 +22,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -55,15 +54,15 @@ func TestPriorityClass(t *testing.T) {
 					},
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeMaster: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "master-priority",
 								},
 							},
 						},
 						kftraining.XGBoostJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -81,8 +80,8 @@ func TestPriorityClass(t *testing.T) {
 					},
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeMaster: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "master-priority",
 								},
 							},
@@ -97,15 +96,15 @@ func TestPriorityClass(t *testing.T) {
 				Spec: kftraining.XGBoostJobSpec{
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeMaster: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "master-priority",
 								},
 							},
 						},
 						kftraining.XGBoostJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -120,13 +119,13 @@ func TestPriorityClass(t *testing.T) {
 				Spec: kftraining.XGBoostJobSpec{
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeMaster: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{},
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{},
 							},
 						},
 						kftraining.XGBoostJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -141,8 +140,8 @@ func TestPriorityClass(t *testing.T) {
 				Spec: kftraining.XGBoostJobSpec{
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{
 									PriorityClassName: "worker-priority",
 								},
 							},
@@ -158,8 +157,8 @@ func TestPriorityClass(t *testing.T) {
 					XGBReplicaSpecs: map[kftraining.ReplicaType]*kftraining.ReplicaSpec{
 						kftraining.XGBoostJobReplicaTypeMaster: {},
 						kftraining.XGBoostJobReplicaTypeWorker: {
-							Template: corev1.PodTemplateSpec{
-								Spec: corev1.PodSpec{},
+							Template: v1.PodTemplateSpec{
+								Spec: v1.PodSpec{},
 							},
 						},
 					},
@@ -253,8 +252,8 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
 			},
-			job:     testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").XGBReplicaSpecsDefault().Parallelism(2).Obj(),
-			wantJob: testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").XGBReplicaSpecsDefault().Parallelism(2).Obj(),
+			job:     testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").Parallelism(2).Obj(),
+			wantJob: testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").Parallelism(2).Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("xgboostjob", "ns").
 					PodSets(
@@ -268,20 +267,19 @@ func TestReconciler(t *testing.T) {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(false),
 			},
-			job:           testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").XGBReplicaSpecsDefault().Parallelism(2).Obj(),
-			wantJob:       testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").XGBReplicaSpecsDefault().Parallelism(2).Obj(),
+			job:           testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").Parallelism(2).Obj(),
+			wantJob:       testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").Parallelism(2).Obj(),
 			wantWorkloads: []kueue.Workload{},
 		},
 		"when workload is evicted, suspended is reset, restore node affinity": {
 			job: testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").
-				XGBReplicaSpecsDefault().
 				Image("").
 				Args(nil).
 				Queue("foo").
 				Suspend(false).
 				Parallelism(10).
-				Request(kftraining.XGBoostJobReplicaTypeMaster, corev1.ResourceCPU, "1").
-				Request(kftraining.XGBoostJobReplicaTypeWorker, corev1.ResourceCPU, "5").
+				Request(kftraining.XGBoostJobReplicaTypeMaster, v1.ResourceCPU, "1").
+				Request(kftraining.XGBoostJobReplicaTypeWorker, v1.ResourceCPU, "5").
 				NodeSelector("provisioning", "spot").
 				Active(kftraining.XGBoostJobReplicaTypeMaster, 1).
 				Active(kftraining.XGBoostJobReplicaTypeWorker, 10).
@@ -289,26 +287,12 @@ func TestReconciler(t *testing.T) {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("a", "ns").
 					PodSets(
-						*utiltesting.MakePodSet("master", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("worker", 10).Request(corev1.ResourceCPU, "5").Obj(),
+						*utiltesting.MakePodSet("master", 1).Request(v1.ResourceCPU, "1").Obj(),
+						*utiltesting.MakePodSet("worker", 10).Request(v1.ResourceCPU, "5").Obj(),
 					).
 					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "master",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](1),
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](10),
-							},
-						).
+						AssignmentPodCount(1).
+						AssignmentPodCount(10).
 						Obj()).
 					Admitted(true).
 					Condition(metav1.Condition{
@@ -318,40 +302,25 @@ func TestReconciler(t *testing.T) {
 					Obj(),
 			},
 			wantJob: testingxgboostjob.MakeXGBoostJob("xgboostjob", "ns").
-				XGBReplicaSpecsDefault().
 				Image("").
 				Args(nil).
 				Queue("foo").
 				Suspend(true).
 				Parallelism(10).
-				Request(kftraining.XGBoostJobReplicaTypeMaster, corev1.ResourceCPU, "1").
-				Request(kftraining.XGBoostJobReplicaTypeWorker, corev1.ResourceCPU, "5").
+				Request(kftraining.XGBoostJobReplicaTypeMaster, v1.ResourceCPU, "1").
+				Request(kftraining.XGBoostJobReplicaTypeWorker, v1.ResourceCPU, "5").
 				Active(kftraining.XGBoostJobReplicaTypeMaster, 1).
 				Active(kftraining.XGBoostJobReplicaTypeWorker, 10).
 				Obj(),
 			wantWorkloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("a", "ns").
 					PodSets(
-						*utiltesting.MakePodSet("master", 1).Request(corev1.ResourceCPU, "1").Obj(),
-						*utiltesting.MakePodSet("worker", 10).Request(corev1.ResourceCPU, "5").Obj(),
+						*utiltesting.MakePodSet("master", 1).Request(v1.ResourceCPU, "1").Obj(),
+						*utiltesting.MakePodSet("worker", 10).Request(v1.ResourceCPU, "5").Obj(),
 					).
 					ReserveQuota(utiltesting.MakeAdmission("cq").
-						PodSets(
-							kueue.PodSetAssignment{
-								Name: "master",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](1),
-							},
-							kueue.PodSetAssignment{
-								Name: "worker",
-								Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-									corev1.ResourceCPU: "default",
-								},
-								Count: ptr.To[int32](10),
-							},
-						).
+						AssignmentPodCount(1).
+						AssignmentPodCount(10).
 						Obj()).
 					Admitted(true).
 					Condition(metav1.Condition{
@@ -369,7 +338,6 @@ func TestReconciler(t *testing.T) {
 			if err := SetupIndexes(ctx, utiltesting.AsIndexer(kcBuilder)); err != nil {
 				t.Fatalf("Failed to setup indexes: %v", err)
 			}
-			kcBuilder = kcBuilder.WithObjects(utiltesting.MakeResourceFlavor("default").Obj())
 			kcBuilder = kcBuilder.WithObjects(tc.job)
 			for i := range tc.workloads {
 				kcBuilder = kcBuilder.WithStatusSubresource(&tc.workloads[i])
@@ -384,7 +352,7 @@ func TestReconciler(t *testing.T) {
 					t.Fatalf("Could not create Workload: %v", err)
 				}
 			}
-			recorder := record.NewBroadcaster().NewRecorder(kClient.Scheme(), corev1.EventSource{Component: "test"})
+			recorder := record.NewBroadcaster().NewRecorder(kClient.Scheme(), v1.EventSource{Component: "test"})
 			reconciler := NewReconciler(kClient, recorder, tc.reconcilerOptions...)
 
 			jobKey := client.ObjectKeyFromObject(tc.job)

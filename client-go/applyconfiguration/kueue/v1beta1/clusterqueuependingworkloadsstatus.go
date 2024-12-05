@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2022 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,14 +21,14 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ClusterQueuePendingWorkloadsStatusApplyConfiguration represents a declarative configuration of the ClusterQueuePendingWorkloadsStatus type for use
+// ClusterQueuePendingWorkloadsStatusApplyConfiguration represents an declarative configuration of the ClusterQueuePendingWorkloadsStatus type for use
 // with apply.
 type ClusterQueuePendingWorkloadsStatusApplyConfiguration struct {
 	Head           []ClusterQueuePendingWorkloadApplyConfiguration `json:"clusterQueuePendingWorkload,omitempty"`
 	LastChangeTime *v1.Time                                        `json:"lastChangeTime,omitempty"`
 }
 
-// ClusterQueuePendingWorkloadsStatusApplyConfiguration constructs a declarative configuration of the ClusterQueuePendingWorkloadsStatus type for use with
+// ClusterQueuePendingWorkloadsStatusApplyConfiguration constructs an declarative configuration of the ClusterQueuePendingWorkloadsStatus type for use with
 // apply.
 func ClusterQueuePendingWorkloadsStatus() *ClusterQueuePendingWorkloadsStatusApplyConfiguration {
 	return &ClusterQueuePendingWorkloadsStatusApplyConfiguration{}

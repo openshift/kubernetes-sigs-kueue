@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/webhooks"
 	"sigs.k8s.io/kueue/test/integration/framework"
+	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -53,17 +54,7 @@ func TestAPIs(t *testing.T) {
 	)
 }
 
-var _ = ginkgo.BeforeSuite(func() {
-	fwk = &framework.Framework{CRDPath: crdPath, WebhookPath: webhookPath}
-	cfg = fwk.Init()
-	ctx, k8sClient = fwk.SetupClient(cfg)
-})
-
-var _ = ginkgo.AfterSuite(func() {
-	fwk.Teardown()
-})
-
-func managerSetup(ctx context.Context, mgr manager.Manager) {
+func managerSetup(mgr manager.Manager, ctx context.Context) {
 	err := indexer.Setup(ctx, mgr.GetFieldIndexer())
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
@@ -71,8 +62,6 @@ func managerSetup(ctx context.Context, mgr manager.Manager) {
 	gomega.Expect(err).ToNot(gomega.HaveOccurred(), "webhook", failedWebhook)
 
 	controllersCfg := &config.Configuration{}
-	mgr.GetScheme().Default(controllersCfg)
-
 	controllersCfg.Metrics.EnableClusterQueueResources = true
 	controllersCfg.QueueVisibility = &config.QueueVisibility{
 		UpdateIntervalSeconds: 2,

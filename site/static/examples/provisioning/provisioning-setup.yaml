@@ -20,10 +20,8 @@ spec:
         nominalQuota: 36Gi
       - name: "nvidia.com/gpu"
         nominalQuota: 9
-  admissionChecksStrategy:
-    admissionChecks:
-      - name: "sample-prov"
-        onFlavors: [default-flavor] # optional if the admission check targets all flavors.
+  admissionChecks:
+  - sample-prov
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
 kind: LocalQueue

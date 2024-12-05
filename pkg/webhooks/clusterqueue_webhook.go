@@ -21,7 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	apimachineryvalidation "k8s.io/apimachinery/pkg/api/validation"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -33,12 +33,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
-	"sigs.k8s.io/kueue/pkg/features"
 )
 
 const (
-	limitIsEmptyErrorMsg string = `must be nil when cohort is empty`
-	lendingLimitErrorMsg string = `must be less than or equal to the nominalQuota`
+	isNegativeErrorMsg string = `must be greater than or equal to 0`
 )
 
 type ClusterQueueWebhook struct{}
@@ -63,6 +61,18 @@ func (w *ClusterQueueWebhook) Default(ctx context.Context, obj runtime.Object) e
 	if !controllerutil.ContainsFinalizer(cq, kueue.ResourceInUseFinalizerName) {
 		controllerutil.AddFinalizer(cq, kueue.ResourceInUseFinalizerName)
 	}
+	if cq.Spec.Preemption == nil {
+		cq.Spec.Preemption = &kueue.ClusterQueuePreemption{
+			WithinClusterQueue:  kueue.PreemptionPolicyNever,
+			ReclaimWithinCohort: kueue.PreemptionPolicyNever,
+		}
+	}
+	if cq.Spec.FlavorFungibility == nil {
+		cq.Spec.FlavorFungibility = &kueue.FlavorFungibility{
+			WhenCanBorrow:  kueue.Borrow,
+			WhenCanPreempt: kueue.TryNextFlavor,
+		}
+	}
 	return nil
 }
 
@@ -82,15 +92,16 @@ func (w *ClusterQueueWebhook) ValidateCreate(ctx context.Context, obj runtime.Ob
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type
 func (w *ClusterQueueWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	newCQ := newObj.(*kueue.ClusterQueue)
+	oldCQ := oldObj.(*kueue.ClusterQueue)
 
 	log := ctrl.LoggerFrom(ctx).WithName("clusterqueue-webhook")
 	log.V(5).Info("Validating update", "clusterQueue", klog.KObj(newCQ))
-	allErrs := ValidateClusterQueueUpdate(newCQ)
+	allErrs := ValidateClusterQueueUpdate(newCQ, oldCQ)
 	return nil, allErrs.ToAggregate()
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type
-func (w *ClusterQueueWebhook) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
+func (w *ClusterQueueWebhook) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
@@ -98,47 +109,28 @@ func ValidateClusterQueue(cq *kueue.ClusterQueue) field.ErrorList {
 	path := field.NewPath("spec")
 
 	var allErrs field.ErrorList
-	config := validationConfig{
-		hasParent:                        cq.Spec.Cohort != "",
-		enforceNominalGreaterThanLending: true,
+	if len(cq.Spec.Cohort) != 0 {
+		allErrs = append(allErrs, validateNameReference(cq.Spec.Cohort, path.Child("cohort"))...)
 	}
-	allErrs = append(allErrs, validateResourceGroups(cq.Spec.ResourceGroups, config, path.Child("resourceGroups"))...)
+	allErrs = append(allErrs, validateResourceGroups(cq.Spec.ResourceGroups, path.Child("resourceGroups"))...)
 	allErrs = append(allErrs,
 		validation.ValidateLabelSelector(cq.Spec.NamespaceSelector, validation.LabelSelectorValidationOptions{}, path.Child("namespaceSelector"))...)
-	allErrs = append(allErrs, validateCQAdmissionChecks(&cq.Spec, path)...)
-	if cq.Spec.Preemption != nil {
-		allErrs = append(allErrs, validatePreemption(cq.Spec.Preemption, path.Child("preemption"))...)
-	}
-	if cq.Spec.FairSharing != nil {
-		allErrs = append(allErrs, validateFairSharing(cq.Spec.FairSharing, path.Child("fairSharing"))...)
-	}
+
 	return allErrs
 }
 
-func ValidateClusterQueueUpdate(newObj *kueue.ClusterQueue) field.ErrorList {
-	return ValidateClusterQueue(newObj)
-}
-
-func validatePreemption(preemption *kueue.ClusterQueuePreemption, path *field.Path) field.ErrorList {
+// Since Kubernetes 1.25, we can use CEL validation rules to implement
+// a few common immutability patterns directly in the manifest for a CRD.
+// ref: https://kubernetes.io/blog/2022/09/29/enforce-immutability-using-cel/
+// We need to validate the spec.queueingStrategy immutable manually before Kubernetes 1.25.
+func ValidateClusterQueueUpdate(newObj, oldObj *kueue.ClusterQueue) field.ErrorList {
 	var allErrs field.ErrorList
-	if preemption.ReclaimWithinCohort == kueue.PreemptionPolicyNever &&
-		preemption.BorrowWithinCohort != nil &&
-		preemption.BorrowWithinCohort.Policy != kueue.BorrowWithinCohortPolicyNever {
-		allErrs = append(allErrs, field.Invalid(path, preemption, "reclaimWithinCohort=Never and borrowWithinCohort.Policy!=Never"))
-	}
+	allErrs = append(allErrs, ValidateClusterQueue(newObj)...)
+	allErrs = append(allErrs, apivalidation.ValidateImmutableField(newObj.Spec.QueueingStrategy, oldObj.Spec.QueueingStrategy, field.NewPath("spec", "queueingStrategy"))...)
 	return allErrs
 }
 
-func validateCQAdmissionChecks(spec *kueue.ClusterQueueSpec, path *field.Path) field.ErrorList {
-	var allErrs field.ErrorList
-	if spec.AdmissionChecksStrategy != nil && len(spec.AdmissionChecks) != 0 {
-		allErrs = append(allErrs, field.Invalid(path, spec, "Either AdmissionChecks or AdmissionCheckStrategy can be set, but not both"))
-	}
-
-	return allErrs
-}
-
-func validateResourceGroups(resourceGroups []kueue.ResourceGroup, config validationConfig, path *field.Path) field.ErrorList {
+func validateResourceGroups(resourceGroups []kueue.ResourceGroup, path *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 	seenResources := sets.New[corev1.ResourceName]()
 	seenFlavors := sets.New[kueue.ResourceFlavorReference]()
@@ -156,7 +148,7 @@ func validateResourceGroups(resourceGroups []kueue.ResourceGroup, config validat
 		}
 		for j, fqs := range rg.Flavors {
 			path := path.Child("flavors").Index(j)
-			allErrs = append(allErrs, validateFlavorQuotas(fqs, rg.CoveredResources, config, path)...)
+			allErrs = append(allErrs, validateFlavorQuotas(fqs, rg.CoveredResources, path)...)
 			if seenFlavors.Has(fqs.Name) {
 				allErrs = append(allErrs, field.Duplicate(path.Child("name"), fqs.Name))
 			} else {
@@ -167,8 +159,11 @@ func validateResourceGroups(resourceGroups []kueue.ResourceGroup, config validat
 	return allErrs
 }
 
-func validateFlavorQuotas(flavorQuotas kueue.FlavorQuotas, coveredResources []corev1.ResourceName, config validationConfig, path *field.Path) field.ErrorList {
-	var allErrs field.ErrorList
+func validateFlavorQuotas(flavorQuotas kueue.FlavorQuotas, coveredResources []corev1.ResourceName, path *field.Path) field.ErrorList {
+	allErrs := validateNameReference(string(flavorQuotas.Name), path.Child("name"))
+	if len(flavorQuotas.Resources) != len(coveredResources) {
+		allErrs = append(allErrs, field.Invalid(path.Child("resources"), field.OmitValueType{}, "must have the same number of resources as the coveredResources"))
+	}
 
 	for i, rq := range flavorQuotas.Resources {
 		if i >= len(coveredResources) {
@@ -180,15 +175,7 @@ func validateFlavorQuotas(flavorQuotas kueue.FlavorQuotas, coveredResources []co
 		}
 		allErrs = append(allErrs, validateResourceQuantity(rq.NominalQuota, path.Child("nominalQuota"))...)
 		if rq.BorrowingLimit != nil {
-			borrowingLimitPath := path.Child("borrowingLimit")
-			allErrs = append(allErrs, validateLimit(*rq.BorrowingLimit, config, borrowingLimitPath)...)
-			allErrs = append(allErrs, validateResourceQuantity(*rq.BorrowingLimit, borrowingLimitPath)...)
-		}
-		if features.Enabled(features.LendingLimit) && rq.LendingLimit != nil {
-			lendingLimitPath := path.Child("lendingLimit")
-			allErrs = append(allErrs, validateResourceQuantity(*rq.LendingLimit, lendingLimitPath)...)
-			allErrs = append(allErrs, validateLimit(*rq.LendingLimit, config, lendingLimitPath)...)
-			allErrs = append(allErrs, validateLendingLimit(*rq.LendingLimit, rq.NominalQuota, config, lendingLimitPath)...)
+			allErrs = append(allErrs, validateResourceQuantity(*rq.BorrowingLimit, path.Child("borrowingLimit"))...)
 		}
 	}
 	return allErrs
@@ -198,36 +185,7 @@ func validateFlavorQuotas(flavorQuotas kueue.FlavorQuotas, coveredResources []co
 func validateResourceQuantity(value resource.Quantity, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 	if value.Cmp(resource.Quantity{}) < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, value.String(), apimachineryvalidation.IsNegativeErrorMsg))
-	}
-	return allErrs
-}
-
-// validateLimit enforces that BorrowingLimit or LendingLimit must be nil when cohort is empty
-func validateLimit(limit resource.Quantity, config validationConfig, fldPath *field.Path) field.ErrorList {
-	var allErrs field.ErrorList
-	if !config.hasParent {
-		allErrs = append(allErrs, field.Invalid(fldPath, limit.String(), limitIsEmptyErrorMsg))
-	}
-	return allErrs
-}
-
-// validateLendingLimit enforces that LendingLimit is not greater than NominalQuota
-func validateLendingLimit(lend, nominal resource.Quantity, config validationConfig, fldPath *field.Path) field.ErrorList {
-	var allErrs field.ErrorList
-	if config.enforceNominalGreaterThanLending && lend.Cmp(nominal) > 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, lend.String(), lendingLimitErrorMsg))
-	}
-	return allErrs
-}
-
-func validateFairSharing(fs *kueue.FairSharing, fldPath *field.Path) field.ErrorList {
-	if fs == nil {
-		return nil
-	}
-	var allErrs field.ErrorList
-	if fs.Weight != nil && fs.Weight.Cmp(resource.Quantity{}) < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, fs.Weight.String(), apimachineryvalidation.IsNegativeErrorMsg))
+		allErrs = append(allErrs, field.Invalid(fldPath, value.String(), isNegativeErrorMsg))
 	}
 	return allErrs
 }

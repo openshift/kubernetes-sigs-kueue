@@ -4,8 +4,6 @@ kind: Role
 metadata:
   name: {{ include "kueue.fullname" . }}-prometheus-k8s
   namespace: '{{ .Release.Namespace }}'
-  labels:
-  {{- include "kueue.labels" . | nindent 4 }}
 rules:
 - apiGroups:
   - ""
@@ -39,8 +37,6 @@ kind: RoleBinding
 metadata:
   name: {{ include "kueue.fullname" . }}-prometheus-k8s
   namespace: '{{ .Release.Namespace }}'
-  labels:
-  {{- include "kueue.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

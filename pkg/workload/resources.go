@@ -88,20 +88,15 @@ func handlePodLimitRange(ctx context.Context, cl client.Client, wl *kueue.Worklo
 
 func handleLimitsToRequests(wl *kueue.Workload) {
 	for pi := range wl.Spec.PodSets {
-		UseLimitsAsMissingRequestsInPod(&wl.Spec.PodSets[pi].Template.Spec)
-	}
-}
-
-// UseLimitsAsMissingRequestsInPod adjust the resource requests to the limits value
-// for resources that only set limits.
-func UseLimitsAsMissingRequestsInPod(pod *corev1.PodSpec) {
-	for ci := range pod.InitContainers {
-		res := &pod.InitContainers[ci].Resources
-		res.Requests = resource.MergeResourceListKeepFirst(res.Requests, res.Limits)
-	}
-	for ci := range pod.Containers {
-		res := &pod.Containers[ci].Resources
-		res.Requests = resource.MergeResourceListKeepFirst(res.Requests, res.Limits)
+		pod := &wl.Spec.PodSets[pi].Template.Spec
+		for ci := range pod.InitContainers {
+			res := &pod.InitContainers[ci].Resources
+			res.Requests = resource.MergeResourceListKeepFirst(res.Requests, res.Limits)
+		}
+		for ci := range pod.Containers {
+			res := &pod.Containers[ci].Resources
+			res.Requests = resource.MergeResourceListKeepFirst(res.Requests, res.Limits)
+		}
 	}
 }
 
