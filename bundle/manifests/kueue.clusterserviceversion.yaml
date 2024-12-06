@@ -399,7 +399,7 @@ spec:
                 - --zap-log-level=2
                 command:
                 - /manager
-                image: quay.io/redhat-user-workloads/kueue-workloads-tenant/kubernetes-sigs-kueue@sha256:b647c10ebebae5c0cbd0f6ebd457ae18af8e40da00cbbc4ce72ab67e95b7f69e
+                image: quay.io/redhat-user-workloads/kueue-workloads-tenant/kubernetes-sigs-kueue@sha256:91c05d727feb8f71967dd97ce4b30ad6913d9e59d890ed1de0e2d0e9e626a799
                 imagePullPolicy: Always
                 livenessProbe:
                   httpGet:
