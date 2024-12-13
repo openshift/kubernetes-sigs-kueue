@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,9 +37,11 @@ import (
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	"sigs.k8s.io/kueue/pkg/constants"
+	ctrlconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework/webhook"
 	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/queue"
 	utilpod "sigs.k8s.io/kueue/pkg/util/pod"
 )
 
@@ -50,6 +53,7 @@ const (
 	GroupTotalCountAnnotation    = "kueue.x-k8s.io/pod-group-total-count"
 	GroupFastAdmissionAnnotation = "kueue.x-k8s.io/pod-group-fast-admission"
 	GroupServingAnnotation       = "kueue.x-k8s.io/pod-group-serving"
+	SuspendedByParentAnnotation  = "kueue.x-k8s.io/pod-suspending-parent"
 	RoleHashAnnotation           = "kueue.x-k8s.io/role-hash"
 	RetriableInGroupAnnotation   = "kueue.x-k8s.io/retriable-in-group"
 )
@@ -68,6 +72,7 @@ var (
 
 type PodWebhook struct {
 	client                       client.Client
+	queues                       *queue.Manager
 	manageJobsWithoutQueueName   bool
 	managedJobsNamespaceSelector labels.Selector
 	namespaceSelector            *metav1.LabelSelector
@@ -83,6 +88,7 @@ func SetupWebhook(mgr ctrl.Manager, opts ...jobframework.Option) error {
 	}
 	wh := &PodWebhook{
 		client:                       mgr.GetClient(),
+		queues:                       options.Queues,
 		manageJobsWithoutQueueName:   options.ManageJobsWithoutQueueName,
 		managedJobsNamespaceSelector: options.ManagedJobsNamespaceSelector,
 		namespaceSelector:            podOpts.NamespaceSelector,
@@ -146,44 +152,66 @@ func (w *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 	log := ctrl.LoggerFrom(ctx).WithName("pod-webhook")
 	log.V(5).Info("Applying defaults")
 
-	if IsPodOwnerManagedByKueue(pod) {
-		log.V(5).Info("Pod owner is managed by kueue, skipping")
-		return nil
-	}
-
-	// Check for pod label selector match
-	podSelector, err := metav1.LabelSelectorAsSelector(w.podSelector)
-	if err != nil {
-		return fmt.Errorf("failed to parse pod selector: %w", err)
-	}
-	if !podSelector.Matches(labels.Set(pod.pod.GetLabels())) {
-		return nil
-	}
-
-	// Get pod namespace and check for namespace label selector match
-	ns := corev1.Namespace{}
-	err = w.client.Get(ctx, client.ObjectKey{Name: pod.pod.GetNamespace()}, &ns)
-	if err != nil {
-		return fmt.Errorf("failed to run mutating webhook on pod %s, error while getting namespace: %w",
-			pod.pod.GetName(),
-			err,
-		)
-	}
-	log.V(5).Info("Found pod namespace", "Namespace.Name", ns.GetName())
-	if features.Enabled(features.ManagedJobsNamespaceSelector) {
-		if !w.managedJobsNamespaceSelector.Matches(labels.Set(ns.GetLabels())) {
+	_, suspend := pod.pod.GetAnnotations()[SuspendedByParentAnnotation]
+	if !suspend {
+		// Namespace filtering
+		ns := corev1.Namespace{}
+		err := w.client.Get(ctx, client.ObjectKey{Name: pod.pod.GetNamespace()}, &ns)
+		if err != nil {
+			return fmt.Errorf("failed to get namespace: %w", err)
+		}
+		if features.Enabled(features.ManagedJobsNamespaceSelector) && !w.managedJobsNamespaceSelector.Matches(labels.Set(ns.GetLabels())) {
 			return nil
 		}
-	}
-	nsSelector, err := metav1.LabelSelectorAsSelector(w.namespaceSelector)
-	if err != nil {
-		return fmt.Errorf("failed to parse namespace selector: %w", err)
-	}
-	if !nsSelector.Matches(labels.Set(ns.GetLabels())) {
-		return nil
+
+		// Backwards compatibility: podOptions.podSelector
+		podSelector, err := metav1.LabelSelectorAsSelector(w.podSelector)
+		if err != nil {
+			return fmt.Errorf("failed to parse pod selector: %w", err)
+		}
+		if !podSelector.Matches(labels.Set(pod.pod.GetLabels())) {
+			return nil
+		}
+
+		// Backwards compatibility: podOptions.namespaceSelector
+		nsSelector, err := metav1.LabelSelectorAsSelector(w.namespaceSelector)
+		if err != nil {
+			return fmt.Errorf("failed to parse namespace selector: %w", err)
+		}
+		if !nsSelector.Matches(labels.Set(ns.GetLabels())) {
+			return nil
+		}
+
+		// Do not suspend a Pod whose owner is already managed by Kueue
+		if owner := metav1.GetControllerOf(pod.Object()); owner != nil {
+			if owner.Kind == "ReplicaSet" && owner.APIVersion == "apps/v1" {
+				// ReplicaSet is an implementation detail; skip over it to the user-facing framework
+				rs := &appsv1.ReplicaSet{}
+				err := w.client.Get(ctx, client.ObjectKey{Name: owner.Name, Namespace: pod.pod.GetNamespace()}, rs)
+				if err != nil {
+					return fmt.Errorf("failed to get replicaset: %w", err)
+				}
+				owner = metav1.GetControllerOf(rs)
+			}
+			if owner != nil && jobframework.IsOwnerIntegrationEnabled(owner) {
+				return nil
+			}
+		}
+
+		// Local queue defaulting
+		if features.Enabled(features.LocalQueueDefaulting) &&
+			jobframework.QueueNameForObject(pod.Object()) == "" &&
+			w.queues.DefaultLocalQueueExist(pod.pod.GetNamespace()) {
+			if pod.pod.Labels == nil {
+				pod.pod.Labels = make(map[string]string)
+			}
+			pod.pod.Labels[ctrlconstants.QueueLabel] = ctrlconstants.DefaultLocalQueueName
+		}
+
+		suspend = jobframework.QueueNameForObject(pod.Object()) != "" || w.manageJobsWithoutQueueName
 	}
 
-	if jobframework.QueueName(pod) != "" || w.manageJobsWithoutQueueName {
+	if suspend {
 		controllerutil.AddFinalizer(pod.Object(), PodFinalizer)
 
 		if pod.pod.Labels == nil {
@@ -193,9 +221,15 @@ func (w *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 
 		gate(&pod.pod)
 
-		if features.Enabled(features.TopologyAwareScheduling) && jobframework.PodSetTopologyRequest(&pod.pod.ObjectMeta, ptr.To(kueuealpha.PodGroupPodIndexLabel), nil, nil) != nil {
-			pod.pod.Labels[kueuealpha.TASLabel] = "true"
-			utilpod.Gate(&pod.pod, kueuealpha.TopologySchedulingGate)
+		if features.Enabled(features.TopologyAwareScheduling) {
+			if val, ok := pod.pod.Annotations[kueuealpha.PodGroupPodIndexLabelAnnotation]; ok {
+				pod.pod.Labels[kueuealpha.PodGroupPodIndexLabel] = pod.pod.Labels[val]
+			}
+
+			if jobframework.PodSetTopologyRequest(&pod.pod.ObjectMeta, ptr.To(kueuealpha.PodGroupPodIndexLabel), nil, nil) != nil {
+				pod.pod.Labels[kueuealpha.TASLabel] = "true"
+				utilpod.Gate(&pod.pod, kueuealpha.TopologySchedulingGate)
+			}
 		}
 
 		if podGroupName(pod.pod) != "" {
@@ -203,10 +237,10 @@ func (w *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 				return err
 			}
 		}
+		// copy back changes to the object
+		pod.pod.DeepCopyInto(obj.(*corev1.Pod))
 	}
 
-	// copy back to the object
-	pod.pod.DeepCopyInto(obj.(*corev1.Pod))
 	return nil
 }
 

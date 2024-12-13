@@ -21,6 +21,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -30,15 +31,24 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework/webhook"
+	"sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	"sigs.k8s.io/kueue/pkg/queue"
 )
 
 type Webhook struct {
-	client client.Client
+	client                       client.Client
+	manageJobsWithoutQueueName   bool
+	managedJobsNamespaceSelector labels.Selector
+	queues                       *queue.Manager
 }
 
-func SetupWebhook(mgr ctrl.Manager, _ ...jobframework.Option) error {
+func SetupWebhook(mgr ctrl.Manager, opts ...jobframework.Option) error {
+	options := jobframework.ProcessOptions(opts...)
 	wh := &Webhook{
-		client: mgr.GetClient(),
+		client:                       mgr.GetClient(),
+		manageJobsWithoutQueueName:   options.ManageJobsWithoutQueueName,
+		managedJobsNamespaceSelector: options.ManagedJobsNamespaceSelector,
+		queues:                       options.Queues,
 	}
 	obj := &appsv1.Deployment{}
 	return webhook.WebhookManagedBy(mgr).
@@ -56,13 +66,25 @@ func (wh *Webhook) Default(ctx context.Context, obj runtime.Object) error {
 	deployment := fromObject(obj)
 
 	log := ctrl.LoggerFrom(ctx).WithName("deployment-webhook")
-	log.V(5).Info("Applying defaults")
+	log.V(5).Info("Propagating queue-name")
 
-	if queueName := jobframework.QueueNameForObject(deployment.Object()); queueName != "" {
+	jobframework.ApplyDefaultLocalQueue(deployment.Object(), wh.queues.DefaultLocalQueueExist)
+	suspend, err := jobframework.WorkloadShouldBeSuspended(ctx, deployment.Object(), wh.client, wh.manageJobsWithoutQueueName, wh.managedJobsNamespaceSelector)
+	if err != nil {
+		return err
+	}
+	if suspend {
+		if deployment.Spec.Template.Annotations == nil {
+			deployment.Spec.Template.Annotations = make(map[string]string, 1)
+		}
+		deployment.Spec.Template.Annotations[pod.SuspendedByParentAnnotation] = FrameworkName
 		if deployment.Spec.Template.Labels == nil {
 			deployment.Spec.Template.Labels = make(map[string]string, 1)
 		}
-		deployment.Spec.Template.Labels[constants.QueueLabel] = queueName
+		queueName := jobframework.QueueNameForObject(deployment.Object())
+		if queueName != "" {
+			deployment.Spec.Template.Labels[constants.QueueLabel] = queueName
+		}
 	}
 
 	return nil

@@ -3815,11 +3815,9 @@ func TestScheduleForTAS(t *testing.T) {
 			Ready().
 			Obj(),
 	}
-	defaultSingleLevelTopology := *utiltesting.MakeTopology("tas-single-level").
-		Levels([]string{corev1.LabelHostname}).
-		Obj()
+	defaultSingleLevelTopology := *utiltesting.MakeDefaultOneLevelTopology("tas-single-level")
 	defaultTwoLevelTopology := *utiltesting.MakeTopology("tas-two-level").
-		Levels([]string{tasRackLabel, corev1.LabelHostname}).
+		Levels(tasRackLabel, corev1.LabelHostname).
 		Obj()
 	defaultFlavor := *utiltesting.MakeResourceFlavor("default").Obj()
 	defaultTASFlavor := *utiltesting.MakeResourceFlavor("tas-default").
@@ -4119,7 +4117,7 @@ func TestScheduleForTAS(t *testing.T) {
 			},
 			topologies: []kueuealpha.Topology{defaultSingleLevelTopology,
 				*utiltesting.MakeTopology("tas-custom-topology").
-					Levels([]string{"cloud.com/custom-level"}).
+					Levels("cloud.com/custom-level").
 					Obj(),
 			},
 			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor,
