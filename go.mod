@@ -46,6 +46,9 @@ require (
 	sigs.k8s.io/yaml v1.4.0
 )
 
+// TODO: Once https://github.com/kubernetes-sigs/kueue/issues/4470 is resolved, we should upgrade this.
+replace sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.19.4
+
 require (
 	cel.dev/expr v0.19.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
