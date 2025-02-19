@@ -46,9 +46,6 @@ require (
 	sigs.k8s.io/yaml v1.4.0
 )
 
-// TODO: Once https://github.com/kubernetes-sigs/kueue/issues/4470 is resolved, we should upgrade this.
-replace sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.19.4
-
 require (
 	cel.dev/expr v0.19.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
@@ -106,7 +103,7 @@ require (
 	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/moby/spdystream v0.5.0 // indirect
