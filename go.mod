@@ -21,12 +21,12 @@ require (
 	github.com/spf13/pflag v1.0.6
 	go.uber.org/zap v1.27.0
 	gomodules.xyz/jsonpatch/v2 v2.4.0
-	k8s.io/api v0.32.1
-	k8s.io/apimachinery v0.32.1
+	k8s.io/api v0.33.0-alpha.0
+	k8s.io/apimachinery v0.33.0-alpha.0
 	k8s.io/apiserver v0.32.1
-	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20240813092541-aec7b75bb683
+	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20250222073826-4af31633220f
 	k8s.io/cli-runtime v0.32.1
-	k8s.io/client-go v0.32.1
+	k8s.io/client-go v0.33.0-alpha.0
 	k8s.io/component-base v0.32.1
 	k8s.io/component-helpers v0.32.1
 	k8s.io/klog/v2 v2.130.1
@@ -156,7 +156,7 @@ require (
 	gopkg.in/op/go-logging.v1 v1.0.0-20160211212156-b2cb9fa56473 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.31.4 // indirect
-	k8s.io/code-generator v0.32.1 // indirect
+	k8s.io/code-generator v0.33.0-alpha.0 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250106234829-0359904fc2a6 // indirect
 	k8s.io/kms v0.32.1 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.0 // indirect
