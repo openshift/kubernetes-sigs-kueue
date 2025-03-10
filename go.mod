@@ -162,11 +162,7 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
-<<<<<<< HEAD
 	gopkg.in/op/go-logging.v1 v1.0.0-20160211212156-b2cb9fa56473 // indirect
-=======
-	gopkg.in/yaml.v3 v3.0.1 // indirect
->>>>>>> b4b013128 (update jobset to 0.8 but force controller runtime to 19.4 (#4467))
 	k8s.io/apiextensions-apiserver v0.32.1 // indirect
 	k8s.io/code-generator v0.32.2 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250106234829-0359904fc2a6 // indirect
