@@ -11,12 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build darwin && !ios && !cgo
+//go:build darwin && cgo
 
 package prometheus
 
+/*
+int get_memory_info(unsigned long long *rss, unsigned long long *vs);
+*/
+import "C"
+import "fmt"
+
 func getMemory() (*memoryInfo, error) {
-	return nil, notImplementedErr
+	var rss, vsize C.ulonglong
+
+	if err := C.get_memory_info(&rss, &vsize); err != 0 {
+		return nil, fmt.Errorf("task_info() failed with 0x%x", int(err))
+	}
+
+	return &memoryInfo{vsize: uint64(vsize), rss: uint64(rss)}, nil
 }
 
 // describe returns all descriptions of the collector for Darwin.
@@ -29,10 +41,10 @@ func (c *processCollector) describe(ch chan<- *Desc) {
 	ch <- c.maxFDs
 	ch <- c.maxVsize
 	ch <- c.startTime
-
-	/* the process could be collected but not implemented yet
 	ch <- c.rss
 	ch <- c.vsize
+
+	/* the process could be collected but not implemented yet
 	ch <- c.inBytes
 	ch <- c.outBytes
 	*/
