@@ -1,8 +1,5 @@
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-<<<<<<< HEAD
 EXTERNAL_CRDS_DIR ?= $(PROJECT_DIR)/dep-crds
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))
 ARTIFACTS ?= $(PROJECT_DIR)/bin
 
 ifeq ($(shell uname),Darwin)
@@ -21,7 +18,6 @@ version_pkg = sigs.k8s.io/kueue/pkg/version
 LD_FLAGS += -X '$(version_pkg).GitVersion=$(GIT_TAG)'
 LD_FLAGS += -X '$(version_pkg).GitCommit=$(shell git rev-parse HEAD)'
 
-<<<<<<< HEAD
 # test flags
 
 # ENVTEST_OCP_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -43,16 +39,11 @@ ifneq ($(INTEGRATION_RUN_ALL),true)
 	INTEGRATION_FILTERS= --label-filter="!slow && !redundant"
 endif
 
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))
 # Use go.mod go version as source.
 KUSTOMIZE_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/kustomize/kustomize/v5)
 GINKGO_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/onsi/ginkgo/v2)
 YQ_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/mikefarah/yq/v4)
-<<<<<<< HEAD
 ENVTEST_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/controller-runtime/tools/setup-envtest)
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))
 
 KUSTOMIZE = $(PROJECT_DIR)/bin/kustomize
 .PHONY: kustomize-ocp
@@ -64,20 +55,16 @@ GINKGO = $(PROJECT_DIR)/bin/ginkgo
 ginkgo-ocp: ## Download ginkgo locally if necessary.
 	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod github.com/onsi/ginkgo/v2/ginkgo@$(GINKGO_OCP_VERSION)
 
-<<<<<<< HEAD
 ENVTEST = $(PROJECT_DIR)/bin/setup-envtest
 .PHONY: envtest
 envtest-ocp: ## Download envtest-setup locally if necessary.
 	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_OCP_VERSION)
 
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))
 YQ = $(PROJECT_DIR)/bin/yq
 .PHONY: yq-ocp
 yq-ocp: ## Download yq locally if necessary.
 	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod github.com/mikefarah/yq/v4@$(YQ_OCP_VERSION)
 
-<<<<<<< HEAD
 .PHONY: test-ocp
 test-ocp: ## Run tests.
 # Configs were filtered out due to a failure
@@ -99,8 +86,6 @@ test-integration-ocp: envtest-ocp ginkgo-ocp kueuectl-ocp ginkgo-top-ocp ## Run 
 	$(GINKGO) $(INTEGRATION_FILTERS) $(GINKGO_ARGS) -procs=$(INTEGRATION_NPROCS) --race --junit-report=junit.xml --json-report=integration.json --output-dir=$(ARTIFACTS) -v $(INTEGRATION_TARGET)
 	$(PROJECT_DIR)/bin/ginkgo-top -i $(ARTIFACTS)/integration.json > $(ARTIFACTS)/integration-top.yaml
 
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))
 .PHONY: test-e2e-ocp
 test-e2e-ocp: kustomize-ocp ginkgo-ocp yq-ocp kueuectl-ocp ginkgo-top-ocp run-test-e2e-ocp-singlecluster
 run-test-e2e-ocp-singlecluster:
@@ -117,7 +102,6 @@ ginkgo-top-ocp:
 .PHONY: kueuectl-ocp
 kueuectl-ocp:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/kubectl-kueue cmd/kueuectl/main.go
-<<<<<<< HEAD
 
 ##@ External CRDs
 
@@ -205,5 +189,3 @@ leaderworkerset-operator-crd-ocp: ## Copy the CRDs from the leaderworkerset-oper
 .PHONY: dep-crds-ocp
 dep-crds-ocp: mpi-operator-crd-ocp kf-training-operator-crd-ocp ray-operator-crd-ocp jobset-operator-crd-ocp leaderworkerset-operator-crd-ocp cluster-autoscaler-crd-ocp appwrapper-crd-ocp appwrapper-manifests-ocp kf-training-operator-manifests-ocp ray-operator-manifests-ocp## Copy the CRDs from the external operators to the dep-crds directory.
 	@echo "Copying CRDs from external operators to dep-crds directory"
-=======
->>>>>>> 605a33842 (<carry>: add tekton pipelines (#26))

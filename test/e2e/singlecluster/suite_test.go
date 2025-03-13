@@ -66,6 +66,7 @@ var _ = ginkgo.BeforeSuite(func() {
 
 	waitForAvailableStart := time.Now()
 	util.WaitForKueueAvailability(ctx, k8sClient)
-	util.WaitForJobSetAvailability(ctx, k8sClient)
+	// disable jobset check as it is not yet available in OCP
+	// util.WaitForJobSetAvailability(ctx, k8sClient)
 	ginkgo.GinkgoLogr.Info("Kueue and JobSet oprators are available in the cluster", "waitingTime", time.Since(waitForAvailableStart))
 })
