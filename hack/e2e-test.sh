@@ -53,6 +53,9 @@ function kind_load {
 	      cluster_kind_load "$KIND_CLUSTER_NAME"
     fi
 
+    if [[ -n ${APPWRAPPER_VERSION:-} ]]; then
+        install_appwrapper "$KIND_CLUSTER_NAME"
+    fi
     if [[ -n ${JOBSET_VERSION:-} ]]; then
         install_jobset "$KIND_CLUSTER_NAME"
     fi
@@ -62,8 +65,8 @@ function kind_load {
     if [[ -n ${KUBEFLOW_MPI_VERSION:-} ]]; then
         install_mpi "$KIND_CLUSTER_NAME"
     fi
-    if [[ -n ${KUBERAY_VERSION:-} ]]; then
-        install_kuberay "$KIND_CLUSTER_NAME"
+    if [[ -n ${LEADERWORKERSET_VERSION:-} ]]; then
+        install_lws "$KIND_CLUSTER_NAME"
     fi
 }
 
