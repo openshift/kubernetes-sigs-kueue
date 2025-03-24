@@ -37,7 +37,7 @@ IMAGE_REGISTRY ?= $(STAGING_IMAGE_REGISTRY)/kueue
 IMAGE_NAME := kueue
 IMAGE_REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME)
 IMAGE_TAG ?= $(IMAGE_REPO):$(GIT_TAG)
-HELM_CHART_REPO := $(STAGING_IMAGE_REGISTRY)/charts
+HELM_CHART_REPO := $(STAGING_IMAGE_REGISTRY)/kueue/charts
 
 ifdef EXTRA_TAG
 IMAGE_EXTRA_TAG ?= $(IMAGE_REPO):$(EXTRA_TAG)
@@ -91,8 +91,10 @@ LD_FLAGS += -X '$(version_pkg).GitCommit=$(shell git rev-parse HEAD)'
 
 # Update these variables when preparing a new release or a release branch.
 # Then run `make prepare-release-branch`
-RELEASE_VERSION=v0.10.2
+RELEASE_VERSION=v0.10.3
 RELEASE_BRANCH=release-0.10
+# Version used form Helm which is not using the leading "v"
+CHART_VERSION := $(shell echo $(RELEASE_VERSION) | cut -c2-)
 
 .PHONY: all
 all: generate fmt vet build
@@ -295,7 +297,8 @@ artifacts: kustomize yq helm ## Generate release artifacts.
 .PHONY: prepare-release-branch
 prepare-release-branch: yq kustomize ## Prepare the release branch with the release version.
 	$(SED) -r 's/v[0-9]+\.[0-9]+\.[0-9]+/$(RELEASE_VERSION)/g' -i README.md -i site/hugo.toml
-	$(SED) -r 's/--version="v[0-9]+\.[0-9]+\.[0-9]+/--version="$(RELEASE_VERSION)/g' -i charts/kueue/README.md
+	$(SED) -r 's/chart_version = "[0-9]+\.[0-9]+\.[0-9]+/chart_version = "$(CHART_VERSION)/g' -i README.md -i site/hugo.toml
+	$(SED) -r 's/--version="v?[0-9]+\.[0-9]+\.[0-9]+/--version="$(CHART_VERSION)/g' -i charts/kueue/README.md
 	$(YQ) e '.appVersion = "$(RELEASE_VERSION)"' -i charts/kueue/Chart.yaml
 	@$(call clean-manifests)
 
