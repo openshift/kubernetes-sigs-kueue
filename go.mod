@@ -1,6 +1,6 @@
 module sigs.k8s.io/kueue
 
-go 1.24.0
+go 1.23.0
 
 require (
 	github.com/cert-manager/cert-manager v1.17.1
@@ -24,21 +24,21 @@ require (
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	gopkg.in/yaml.v3 v3.0.1
 	gotest.tools/gotestsum v1.12.1
-	k8s.io/api v0.32.3
-	k8s.io/apimachinery v0.33.0-beta.0
-	k8s.io/apiserver v0.32.3
+	k8s.io/api v0.32.2
+	k8s.io/apimachinery v0.32.2
+	k8s.io/apiserver v0.32.2
 	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20240813092541-aec7b75bb683
-	k8s.io/cli-runtime v0.32.3
-	k8s.io/client-go v0.32.3
-	k8s.io/component-base v0.32.3
-	k8s.io/component-helpers v0.32.3
+	k8s.io/cli-runtime v0.32.2
+	k8s.io/client-go v0.32.2
+	k8s.io/component-base v0.32.2
+	k8s.io/component-helpers v0.32.2
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-openapi v0.0.0-20250304201544-e5f78fe3ede9
-	k8s.io/kubectl v0.32.3
-	k8s.io/metrics v0.32.3
+	k8s.io/kubectl v0.32.2
+	k8s.io/metrics v0.32.2
 	k8s.io/utils v0.0.0-20241210054802-24370beab758
 	sigs.k8s.io/controller-runtime v0.20.3
-	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20250321163032-f1741e38ecce
+	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20250203100659-bbc9711d9b2d
 	sigs.k8s.io/jobset v0.8.0
 	sigs.k8s.io/kustomize/kustomize/v5 v5.5.0
 	sigs.k8s.io/lws v0.5.1
@@ -91,6 +91,7 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/cel-go v0.22.1 // indirect
 	github.com/google/gnostic-models v0.6.9 // indirect
+	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/pprof v0.0.0-20241210010833-40e02aabc2ad // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -124,7 +125,7 @@ require (
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/spf13/afero v1.12.0 // indirect
+	github.com/spf13/afero v1.14.0 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
@@ -163,8 +164,8 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/op/go-logging.v1 v1.0.0-20160211212156-b2cb9fa56473 // indirect
-	k8s.io/apiextensions-apiserver v0.32.3 // indirect
-	k8s.io/code-generator v0.32.3 // indirect
+	k8s.io/apiextensions-apiserver v0.32.2 // indirect
+	k8s.io/code-generator v0.32.2 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250106234829-0359904fc2a6 // indirect
 	k8s.io/kms v0.32.3 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.1 // indirect
