@@ -8,7 +8,7 @@ metadata:
     {{- if .Values.enableCertManager }}
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kueue.fullname" . }}-serving-cert
     {{- end }}
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.17.3
   name: clusterqueues.kueue.x-k8s.io
 spec:
   conversion:
@@ -307,11 +307,11 @@ spec:
                         Workloads in the cohort that have lower priority than the pending
                         Workload. **Fair Sharing** only preempt Workloads in the cohort that
                         have lower priority than the pending Workload and that satisfy the
-                        fair sharing preemptionStategies.
+                        Fair Sharing preemptionStategies.
                       - `Any`: **Classic Preemption** if the pending Workload fits within
                          the nominal quota of its ClusterQueue, preempt any Workload in the
                          cohort, irrespective of priority. **Fair Sharing** preempt Workloads
-                         in the cohort that satisfy the fair sharing preemptionStrategies.
+                         in the cohort that satisfy the Fair Sharing preemptionStrategies.
                     enum:
                     - Never
                     - LowerPriority
@@ -582,18 +582,20 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               fairSharing:
-                description: FairSharing contains the information about the current
-                  status of fair sharing.
+                description: |-
+                  fairSharing contains the current state for this ClusterQueue
+                  when participating in Fair Sharing.
+                  This is recorded only when Fair Sharing is enabled in the Kueue configuration.
                 properties:
                   weightedShare:
                     description: |-
-                      WeightedShare represent the maximum of the ratios of usage
+                      WeightedShare represents the maximum of the ratios of usage
                       above nominal quota to the lendable resources in the
                       Cohort, among all the resources provided by the Node, and
                       divided by the weight.  If zero, it means that the usage of
                       the Node is below the nominal quota.  If the Node has a
-                      weight of zero, this will return 9223372036854775807, the
-                      maximum possible share value.
+                      weight of zero and is borrowing, this will return
+                      9223372036854775807, the maximum possible share value.
                     format: int64
                     type: integer
                 required:

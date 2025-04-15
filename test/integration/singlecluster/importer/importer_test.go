@@ -20,7 +20,6 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -44,25 +43,20 @@ var _ = ginkgo.Describe("Importer", func() {
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "import-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "import-")
 
 		flavor = utiltesting.MakeResourceFlavor("f1").Obj()
-		gomega.Expect(k8sClient.Create(ctx, flavor)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, flavor)
 
 		cq = utiltesting.MakeClusterQueue("cq1").
 			ResourceGroup(
 				*utiltesting.MakeFlavorQuotas("f1").Resource(corev1.ResourceCPU, "4").Obj(),
 			).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, cq)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, cq)
 
 		lq = utiltesting.MakeLocalQueue("lq1", ns.Name).ClusterQueue("cq1").Obj()
-		gomega.Expect(k8sClient.Create(ctx, lq)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lq)
 	})
 
 	ginkgo.AfterEach(func() {
@@ -83,8 +77,8 @@ var _ = ginkgo.Describe("Importer", func() {
 				Obj()
 
 			ginkgo.By("Creating the initial pods", func() {
-				gomega.Expect(k8sClient.Create(ctx, pod1)).To(gomega.Succeed())
-				gomega.Expect(k8sClient.Create(ctx, pod2)).To(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod1)
+				util.MustCreate(ctx, k8sClient, pod2)
 			})
 
 			ginkgo.By("Running the import", func() {
@@ -130,7 +124,7 @@ var _ = ginkgo.Describe("Importer", func() {
 				Obj()
 
 			ginkgo.By("Creating a new pod", func() {
-				gomega.Expect(k8sClient.Create(ctx, pod3)).To(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod3)
 			})
 
 			wl3LookupKey := types.NamespacedName{Name: pod.GetWorkloadNameForPod(pod3.Name, pod3.UID), Namespace: ns.Name}

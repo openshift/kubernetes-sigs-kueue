@@ -227,10 +227,18 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 
 		if mode == flavorassigner.Preempt && len(e.preemptionTargets) == 0 {
 			log.V(2).Info("Workload requires preemption, but there are no candidate workloads allowed for preemption", "preemption", cq.Preemption)
-			// we use resourcesToReserve to block capacity up to either the nominal capacity,
-			// or the borrowing limit when borrowing, so that a lower priority workload cannot
-			// admit before us.
-			cq.AddUsage(resourcesToReserve(e, cq))
+			// we reserve capacity if we are uncertain
+			// whether we can reclaim the capacity
+			// later. Otherwise, we allow other workloads
+			// in the Cohort to borrow this capacity,
+			// confident we can reclaim it later.
+			if !preemption.CanAlwaysReclaim(cq) {
+				// reserve capacity up to the
+				// borrowing limit, so that
+				// lower-priority workloads in another
+				// Cohort cannot admit before us.
+				cq.AddUsage(resourcesToReserve(e, cq))
+			}
 			continue
 		}
 
@@ -374,7 +382,7 @@ func fits(cq *cache.ClusterQueueSnapshot, usage *workload.Usage, preemptedWorklo
 	for _, target := range newTargets {
 		workloads = append(workloads, target.WorkloadInfo)
 	}
-	revertUsage := cq.SimulateUsageRemoval(workloads)
+	revertUsage := cq.SimulateWorkloadRemoval(workloads)
 	defer revertUsage()
 	return cq.Fits(*usage)
 }
@@ -468,7 +476,7 @@ func updateAssignmentForTAS(cq *cache.ClusterQueueSnapshot, wl *workload.Info, a
 			for _, target := range targets {
 				targetWorkloads = append(targetWorkloads, target.WorkloadInfo)
 			}
-			revertUsage := cq.SimulateUsageRemoval(targetWorkloads)
+			revertUsage := cq.SimulateWorkloadRemoval(targetWorkloads)
 			tasResult = cq.FindTopologyAssignmentsForWorkload(tasRequests, false)
 			revertUsage()
 		} else {
@@ -606,7 +614,7 @@ func makeIterator(ctx context.Context, entries []entry, workloadOrdering workloa
 
 // classicalIterator returns entries ordered on:
 // 1. request under nominal quota before borrowing.
-// 2. fair sharing: lower DominantResourceShare first.
+// 2. Fair Sharing: lower DominantResourceShare first.
 // 3. higher priority first.
 // 4. FIFO on eviction or creation timestamp.
 type classicalIterator struct {

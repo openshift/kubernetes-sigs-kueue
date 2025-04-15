@@ -64,12 +64,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 			))
 		})
 		ginkgo.BeforeEach(func() {
-			ns = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "pod-",
-				},
-			}
-			gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "pod-")
 		})
 
 		ginkgo.AfterEach(func() {
@@ -91,7 +86,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 			})
 
 			ginkgo.It("Should inject scheduling gate, 'managed' label and finalizer into created pod", func() {
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 
 				createdPod := &corev1.Pod{}
 				gomega.Eventually(func(g gomega.Gomega) {
@@ -114,7 +109,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 
 			ginkgo.It("Should skip a Pod created in the forbidden 'kube-system' namespace", func() {
 				pod.Namespace = "kube-system"
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 
 				lookupKey := types.NamespacedName{Name: pod.Name, Namespace: "kube-system"}
 				createdPod := &corev1.Pod{}
@@ -149,7 +144,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 			})
 
 			ginkgo.It("Should not inject scheduling gate, 'managed' label and finalizer into created pod", func() {
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 
 				createdPod := &corev1.Pod{}
 				gomega.Eventually(func(g gomega.Gomega) {
@@ -199,12 +194,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 			))
 		})
 		ginkgo.BeforeEach(func() {
-			ns = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "pod-",
-				},
-			}
-			gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "pod-")
 		})
 
 		ginkgo.AfterEach(func() {
@@ -222,7 +212,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 			})
 
 			ginkgo.It("Should inject scheduling gate, 'managed' label and finalizer into created pod", func() {
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 
 				lookupKey := types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}
 				createdPod := &corev1.Pod{}
@@ -246,7 +236,7 @@ var _ = ginkgo.Describe("Pod Webhook", func() {
 
 			ginkgo.It("Should skip a Pod created in the forbidden 'kube-system' namespace", func() {
 				pod.Namespace = "kube-system"
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 
 				lookupKey := types.NamespacedName{Name: pod.Name, Namespace: "kube-system"}
 				createdPod := &corev1.Pod{}

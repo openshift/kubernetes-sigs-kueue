@@ -33,6 +33,7 @@ import (
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 )
 
@@ -77,6 +78,7 @@ var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
 type RayCluster rayv1.RayCluster
 
 var _ jobframework.GenericJob = (*RayCluster)(nil)
+var _ jobframework.JobWithManagedBy = (*RayCluster)(nil)
 
 func (j *RayCluster) Object() client.Object {
 	return (*rayv1.RayCluster)(j)
@@ -108,10 +110,16 @@ func (j *RayCluster) PodSets() ([]kueue.PodSet, error) {
 
 	// head
 	podSets[0] = kueue.PodSet{
-		Name:            headGroupPodSetName,
-		Template:        *j.Spec.HeadGroupSpec.Template.DeepCopy(),
-		Count:           1,
-		TopologyRequest: jobframework.PodSetTopologyRequest(&j.Spec.HeadGroupSpec.Template.ObjectMeta, nil, nil, nil),
+		Name:     headGroupPodSetName,
+		Template: *j.Spec.HeadGroupSpec.Template.DeepCopy(),
+		Count:    1,
+	}
+
+	if features.Enabled(features.TopologyAwareScheduling) {
+		podSets[0].TopologyRequest = jobframework.PodSetTopologyRequest(
+			&j.Spec.HeadGroupSpec.Template.ObjectMeta,
+			nil, nil, nil,
+		)
 	}
 
 	// workers
@@ -125,10 +133,15 @@ func (j *RayCluster) PodSets() ([]kueue.PodSet, error) {
 			count *= wgs.NumOfHosts
 		}
 		podSets[index+1] = kueue.PodSet{
-			Name:            kueue.NewPodSetReference(wgs.GroupName),
-			Template:        *wgs.Template.DeepCopy(),
-			Count:           count,
-			TopologyRequest: jobframework.PodSetTopologyRequest(&wgs.Template.ObjectMeta, nil, nil, nil),
+			Name:     kueue.NewPodSetReference(wgs.GroupName),
+			Template: *wgs.Template.DeepCopy(),
+			Count:    count,
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			podSets[index+1].TopologyRequest = jobframework.PodSetTopologyRequest(
+				&wgs.Template.ObjectMeta,
+				nil, nil, nil,
+			)
 		}
 	}
 	return podSets, nil
@@ -202,4 +215,18 @@ func isRayCluster(owner *metav1.OwnerReference) bool {
 
 func fromObject(o runtime.Object) *RayCluster {
 	return (*RayCluster)(o.(*rayv1.RayCluster))
+}
+
+func (j *RayCluster) CanDefaultManagedBy() bool {
+	jobSpecManagedBy := j.Spec.ManagedBy
+	return features.Enabled(features.MultiKueue) &&
+		(jobSpecManagedBy == nil || *jobSpecManagedBy == rayutils.KubeRayController)
+}
+
+func (j *RayCluster) ManagedBy() *string {
+	return j.Spec.ManagedBy
+}
+
+func (j *RayCluster) SetManagedBy(managedBy *string) {
+	j.Spec.ManagedBy = managedBy
 }

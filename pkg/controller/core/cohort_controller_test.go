@@ -22,11 +22,13 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/resources"
@@ -35,7 +37,7 @@ import (
 
 func TestCohortReconcileCohortNotFoundDelete(t *testing.T) {
 	cl := utiltesting.NewClientBuilder().Build()
-	ctx := context.Background()
+	ctx := t.Context()
 	cache := cache.New(cl)
 	qManager := queue.NewManager(cl, cache)
 	reconciler := NewCohortReconciler(cl, cache, qManager)
@@ -70,7 +72,7 @@ func TestCohortReconcileCohortNotFoundDelete(t *testing.T) {
 func TestCohortReconcileCohortNotFoundIdempotentDelete(t *testing.T) {
 	cl := utiltesting.NewClientBuilder().
 		Build()
-	ctx := context.Background()
+	ctx := t.Context()
 	cache := cache.New(cl)
 	qManager := queue.NewManager(cl, cache)
 	reconciler := NewCohortReconciler(cl, cache, qManager)
@@ -105,8 +107,9 @@ func TestCohortReconcileCycleNoError(t *testing.T) {
 	cohortB := utiltesting.MakeCohort("cohort-b").Parent("cohort-a").Obj()
 	cl := utiltesting.NewClientBuilder().
 		WithObjects(cohortA, cohortB).
+		WithStatusSubresource(&kueue.Cohort{}).
 		Build()
-	ctx := context.Background()
+	ctx := t.Context()
 	cache := cache.New(cl)
 	qManager := queue.NewManager(cl, cache)
 	reconciler := NewCohortReconciler(cl, cache, qManager)
@@ -116,7 +119,7 @@ func TestCohortReconcileCycleNoError(t *testing.T) {
 		ctx,
 		reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cohortA)},
 	); err != nil {
-		t.Fatal("unexpected error")
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// cycle added, no error
@@ -144,7 +147,7 @@ func TestCohortReconcileCycleNoError(t *testing.T) {
 }
 
 func TestCohortReconcileErrorOtherThanNotFoundNotDeleted(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	funcs := interceptor.Funcs{
 		Get: func(ctx context.Context, client client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 			return errors.New("error")
@@ -183,11 +186,11 @@ func TestCohortReconcileErrorOtherThanNotFoundNotDeleted(t *testing.T) {
 }
 
 func TestCohortReconcileLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cohort := utiltesting.MakeCohort("cohort").ResourceGroup(
 		utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").FlavorQuotas,
 	).Obj()
-	cl := utiltesting.NewClientBuilder().WithObjects(cohort).Build()
+	cl := utiltesting.NewClientBuilder().WithObjects(cohort).WithStatusSubresource(&kueue.Cohort{}).Build()
 	cache := cache.New(cl)
 	qManager := queue.NewManager(cl, cache)
 	reconciler := NewCohortReconciler(cl, cache, qManager)
@@ -283,38 +286,28 @@ func TestCohortReconcilerFilters(t *testing.T) {
 	reconciler := NewCohortReconciler(cl, cache, qManager)
 
 	t.Run("delete returns true", func(t *testing.T) {
-		if !reconciler.Delete(event.DeleteEvent{}) {
+		if !reconciler.Delete(event.TypedDeleteEvent[*kueue.Cohort]{}) {
 			t.Fatal("expected delete to return true")
 		}
 	})
 
 	t.Run("create returns true", func(t *testing.T) {
-		if !reconciler.Create(event.CreateEvent{}) {
+		if !reconciler.Create(event.TypedCreateEvent[*kueue.Cohort]{}) {
 			t.Fatal("expected create to return true")
 		}
 	})
 
 	t.Run("generic returns true", func(t *testing.T) {
-		if !reconciler.Generic(event.GenericEvent{}) {
+		if !reconciler.Generic(event.TypedGenericEvent[*kueue.Cohort]{}) {
 			t.Fatal("expected generic to return true")
 		}
 	})
 
 	cases := map[string]struct {
-		old  client.Object
-		new  client.Object
+		old  *kueue.Cohort
+		new  *kueue.Cohort
 		want bool
 	}{
-		"old wrong type returns false": {
-			old:  utiltesting.MakeClusterQueue("cq").Obj(),
-			new:  utiltesting.MakeCohort("cohort").Obj(),
-			want: false,
-		},
-		"new wrong type returns false": {
-			old:  utiltesting.MakeCohort("cohort").Obj(),
-			new:  utiltesting.MakeClusterQueue("cq").Obj(),
-			want: false,
-		},
 		"unchanged returns false": {
 			old: utiltesting.MakeCohort("cohort").ResourceGroup(
 				utiltesting.MakeFlavorQuotas("red").Resource("cpu", "5").FlavorQuotas,
@@ -348,14 +341,29 @@ func TestCohortReconcilerFilters(t *testing.T) {
 			new:  utiltesting.MakeCohort("cohort").Obj(),
 			want: true,
 		},
+		"adding weight returns true": {
+			old:  utiltesting.MakeCohort("cohort").Obj(),
+			new:  utiltesting.MakeCohort("cohort").FairWeight(resource.MustParse("1")).Obj(),
+			want: true,
+		},
+		"deleting weight returns true": {
+			old:  utiltesting.MakeCohort("cohort").FairWeight(resource.MustParse("1")).Obj(),
+			new:  utiltesting.MakeCohort("cohort").Obj(),
+			want: true,
+		},
+		"updating weight returns true": {
+			old:  utiltesting.MakeCohort("cohort").FairWeight(resource.MustParse("1")).Obj(),
+			new:  utiltesting.MakeCohort("cohort").FairWeight(resource.MustParse("2")).Obj(),
+			want: true,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			event := event.UpdateEvent{
+			e := event.TypedUpdateEvent[*kueue.Cohort]{
 				ObjectOld: tc.old,
 				ObjectNew: tc.new,
 			}
-			if reconciler.Update(event) != tc.want {
+			if reconciler.Update(e) != tc.want {
 				t.Fatalf("expected %v, got %v", tc.want, !tc.want)
 			}
 		})

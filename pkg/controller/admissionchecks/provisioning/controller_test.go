@@ -52,7 +52,7 @@ var (
 )
 
 var (
-	wlCmpOptions = []cmp.Option{
+	wlCmpOptions = cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(metav1.ObjectMeta{}, metav1.TypeMeta{}),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
@@ -60,13 +60,13 @@ var (
 		cmpopts.IgnoreFields(kueue.AdmissionCheckState{}, "LastTransitionTime"),
 	}
 
-	reqCmpOptions = []cmp.Option{
+	reqCmpOptions = cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(metav1.ObjectMeta{}, metav1.TypeMeta{}),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 	}
 
-	tmplCmpOptions = []cmp.Option{
+	tmplCmpOptions = cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(metav1.TypeMeta{}),
 		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion"),
@@ -74,7 +74,7 @@ var (
 		cmpopts.IgnoreFields(corev1.PodSpec{}, "RestartPolicy"),
 	}
 
-	acCmpOptions = []cmp.Option{
+	acCmpOptions = cmp.Options{
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 	}
 )
@@ -1256,7 +1256,7 @@ func TestReconcile(t *testing.T) {
 				interceptorFuncs.Create = tc.interceptorFuncsCreate
 			}
 
-			builder, ctx := getClientBuilder()
+			builder, ctx := getClientBuilder(t.Context())
 			builder = builder.WithInterceptorFuncs(interceptorFuncs)
 			builder = builder.WithObjects(tc.workload)
 			builder = builder.WithStatusSubresource(tc.workload)
@@ -1441,7 +1441,7 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 				baseCheck.Name: baseConfig.DeepCopy(),
 			}
 
-			builder, ctx := getClientBuilder()
+			builder, ctx := getClientBuilder(t.Context())
 
 			builder = builder.WithObjects(workload)
 			builder = builder.WithStatusSubresource(workload)

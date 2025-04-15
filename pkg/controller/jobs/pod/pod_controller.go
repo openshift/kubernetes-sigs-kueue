@@ -49,6 +49,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	podconstants "sigs.k8s.io/kueue/pkg/controller/jobs/pod/constants"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 	clientutil "sigs.k8s.io/kueue/pkg/util/client"
 	"sigs.k8s.io/kueue/pkg/util/expectations"
@@ -89,13 +90,18 @@ var (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:      SetupIndexes,
-		NewJob:            NewJob,
-		NewReconciler:     NewReconciler,
-		SetupWebhook:      SetupWebhook,
-		JobType:           &corev1.Pod{},
-		MultiKueueAdapter: &multiKueueAdapter{},
+		SetupIndexes:           SetupIndexes,
+		NewJob:                 NewJob,
+		NewReconciler:          NewReconciler,
+		SetupWebhook:           SetupWebhook,
+		JobType:                &corev1.Pod{},
+		MultiKueueAdapter:      &multiKueueAdapter{},
+		IsManagingObjectsOwner: isPod,
 	}))
+}
+
+func isPod(ref *metav1.OwnerReference) bool {
+	return ref.Kind == "Pod" && ref.APIVersion == "v1"
 }
 
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
@@ -160,6 +166,7 @@ var (
 	_ jobframework.JobWithFinalize                 = (*Pod)(nil)
 	_ jobframework.ComposableJob                   = (*Pod)(nil)
 	_ jobframework.JobWithCustomWorkloadConditions = (*Pod)(nil)
+	_ jobframework.TopLevelJob                     = (*Pod)(nil)
 )
 
 type options struct {
@@ -268,8 +275,7 @@ func (p *Pod) Run(ctx context.Context, c client.Client, podSetsInfo []podset.Pod
 		}
 
 		if err := clientutil.Patch(ctx, c, &p.pod, true, func() (bool, error) {
-			ungate(&p.pod)
-			return true, podset.Merge(&p.pod.ObjectMeta, &p.pod.Spec, podSetsInfo[0])
+			return true, prepare(&p.pod, podSetsInfo[0])
 		}); err != nil {
 			return err
 		}
@@ -289,8 +295,6 @@ func (p *Pod) Run(ctx context.Context, c client.Client, podSetsInfo []podset.Pod
 		}
 
 		if err := clientutil.Patch(ctx, c, pod, true, func() (bool, error) {
-			ungate(pod)
-
 			roleHash, err := getRoleHash(*pod)
 			if err != nil {
 				return false, err
@@ -303,7 +307,7 @@ func (p *Pod) Run(ctx context.Context, c client.Client, podSetsInfo []podset.Pod
 				return false, fmt.Errorf("%w: podSetInfo with the name '%s' is not found", podset.ErrInvalidPodsetInfo, roleHash)
 			}
 
-			err = podset.Merge(&pod.ObjectMeta, &pod.Spec, podSetsInfo[podSetIndex])
+			err = prepare(pod, podSetsInfo[podSetIndex])
 			if err != nil {
 				return false, err
 			}
@@ -320,6 +324,10 @@ func (p *Pod) Run(ctx context.Context, c client.Client, podSetsInfo []podset.Pod
 		}
 		return nil
 	})
+}
+
+func (p *Pod) IsTopLevel() bool {
+	return true
 }
 
 // RunWithPodSetsInfo will inject the node affinity and podSet counts extracting from workload to job and unsuspend it.
@@ -644,14 +652,21 @@ func constructPodSets(p *corev1.Pod) []kueue.PodSet {
 }
 
 func constructPodSet(p *corev1.Pod) kueue.PodSet {
-	return kueue.PodSet{
+	podSet := kueue.PodSet{
 		Name:  kueue.DefaultPodSetName,
 		Count: 1,
 		Template: corev1.PodTemplateSpec{
 			Spec: *p.Spec.DeepCopy(),
 		},
-		TopologyRequest: jobframework.PodSetTopologyRequest(&p.ObjectMeta, ptr.To(kueuealpha.PodGroupPodIndexLabel), nil, nil),
 	}
+	if features.Enabled(features.TopologyAwareScheduling) {
+		podSet.TopologyRequest = jobframework.PodSetTopologyRequest(
+			&p.ObjectMeta,
+			ptr.To(kueuealpha.PodGroupPodIndexLabel),
+			nil, nil,
+		)
+	}
+	return podSet
 }
 
 func constructGroupPodSetsFast(pods []corev1.Pod, groupTotalCount int) ([]kueue.PodSet, error) {
@@ -1342,8 +1357,16 @@ func isGated(pod *corev1.Pod) bool {
 	return utilpod.HasGate(pod, podconstants.SchedulingGateName)
 }
 
-func ungate(pod *corev1.Pod) bool {
-	return utilpod.Ungate(pod, podconstants.SchedulingGateName)
+func prepare(pod *corev1.Pod, info podset.PodSetInfo) error {
+	if err := podset.Merge(&pod.ObjectMeta, &pod.Spec, info); err != nil {
+		return err
+	}
+	utilpod.Ungate(pod, podconstants.SchedulingGateName)
+	// Remove the TopologySchedulingGate if the Pod is scheduled without using TAS
+	if _, found := pod.Labels[kueuealpha.TASLabel]; !found {
+		utilpod.Ungate(pod, kueuealpha.TopologySchedulingGate)
+	}
+	return nil
 }
 
 func gate(pod *corev1.Pod) bool {

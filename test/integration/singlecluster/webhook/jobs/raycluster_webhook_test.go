@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,12 +47,7 @@ var _ = ginkgo.Describe("RayCluster Webhook", func() {
 			fwk.StartManager(ctx, cfg, managerSetup(raycluster.SetupRayClusterWebhook))
 		})
 		ginkgo.BeforeEach(func() {
-			ns = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "raycluster-",
-				},
-			}
-			gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "raycluster-")
 		})
 
 		ginkgo.AfterEach(func() {
@@ -106,12 +100,7 @@ var _ = ginkgo.Describe("RayCluster Webhook", func() {
 			}, jobframework.WithManageJobsWithoutQueueName(true), jobframework.WithManagedJobsNamespaceSelector(util.NewNamespaceSelectorExcluding("unmanaged-ns"))))
 		})
 		ginkgo.BeforeEach(func() {
-			ns = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "raycluster-",
-				},
-			}
-			gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "raycluster-")
 		})
 
 		ginkgo.AfterEach(func() {
@@ -127,7 +116,7 @@ var _ = ginkgo.Describe("RayCluster Webhook", func() {
 				Queue("test").
 				Suspend(false).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, parentJob)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, parentJob)
 
 			lookupKey := types.NamespacedName{Name: parentJob.Name, Namespace: ns.Name}
 			gomega.Eventually(func(g gomega.Gomega) {
@@ -172,7 +161,7 @@ var _ = ginkgo.Describe("RayCluster Webhook", func() {
 				Suspend(false).
 				Obj()
 			gomega.Expect(ctrl.SetControllerReference(parentJob, childCluster, k8sClient.Scheme())).To(gomega.Succeed())
-			gomega.Expect(k8sClient.Create(ctx, childCluster)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, childCluster)
 
 			ginkgo.By("Checking that the child cluster is not suspended")
 			childClusterKey := client.ObjectKeyFromObject(childCluster)

@@ -24,6 +24,7 @@ import (
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/constants"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 )
 
@@ -52,6 +53,15 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		fairSharingEnabled = cfg.FairSharing.Enable
 	}
 
+	watchers := []ClusterQueueUpdateWatcher{rfRec, acRec}
+	if features.Enabled(features.HierarchicalCohorts) {
+		cohortRec := NewCohortReconciler(mgr.GetClient(), cc, qManager, CohortReconcilerWithFairSharing(fairSharingEnabled))
+		if err := cohortRec.SetupWithManager(mgr, cfg); err != nil {
+			return "Cohort", err
+		}
+		watchers = append(watchers, cohortRec)
+	}
+
 	cqRec := NewClusterQueueReconciler(
 		mgr.GetClient(),
 		qManager,
@@ -60,7 +70,7 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		WithReportResourceMetrics(cfg.Metrics.EnableClusterQueueResources),
 		WithQueueVisibilityClusterQueuesMaxCount(queueVisibilityClusterQueuesMaxCount(cfg)),
 		WithFairSharing(fairSharingEnabled),
-		WithWatchers(rfRec, acRec),
+		WithWatchers(watchers...),
 	)
 	if err := mgr.Add(cqRec); err != nil {
 		return "Unable to add ClusterQueue to manager", err
@@ -69,11 +79,6 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 	acRec.AddUpdateWatchers(cqRec)
 	if err := cqRec.SetupWithManager(mgr, cfg); err != nil {
 		return "ClusterQueue", err
-	}
-
-	cohortRec := NewCohortReconciler(mgr.GetClient(), cc, qManager)
-	if err := cohortRec.SetupWithManager(mgr, cfg); err != nil {
-		return "Cohort", err
 	}
 
 	if err := NewWorkloadReconciler(mgr.GetClient(), qManager, cc,

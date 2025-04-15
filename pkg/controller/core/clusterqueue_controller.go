@@ -18,6 +18,8 @@ package core
 
 import (
 	"context"
+	"iter"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -33,10 +35,13 @@ import (
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -49,7 +54,7 @@ import (
 	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/util/resource"
-	"sigs.k8s.io/kueue/pkg/util/slices"
+	utilslices "sigs.k8s.io/kueue/pkg/util/slices"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -66,11 +71,8 @@ type ClusterQueueReconciler struct {
 	qManager                             *queue.Manager
 	cache                                *cache.Cache
 	snapshotsQueue                       workqueue.TypedInterface[kueue.ClusterQueueReference]
-	wlUpdateCh                           chan event.GenericEvent
-	rfUpdateCh                           chan event.GenericEvent
-	acUpdateCh                           chan event.GenericEvent
 	snapUpdateCh                         chan event.GenericEvent
-	topologyUpdateCh                     chan event.GenericEvent
+	nonCQObjectUpdateCh                  chan event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]]
 	watchers                             []ClusterQueueUpdateWatcher
 	reportResourceMetrics                bool
 	fairSharingEnabled                   bool
@@ -78,6 +80,9 @@ type ClusterQueueReconciler struct {
 	queueVisibilityClusterQueuesMaxCount int32
 	clock                                clock.Clock
 }
+
+var _ reconcile.Reconciler = (*ClusterQueueReconciler)(nil)
+var _ predicate.TypedPredicate[*kueue.ClusterQueue] = (*ClusterQueueReconciler)(nil)
 
 type ClusterQueueReconcilerOptions struct {
 	Watchers                             []ClusterQueueUpdateWatcher
@@ -145,11 +150,8 @@ func NewClusterQueueReconciler(
 		qManager:                             qMgr,
 		cache:                                cache,
 		snapshotsQueue:                       workqueue.NewTyped[kueue.ClusterQueueReference](),
-		wlUpdateCh:                           make(chan event.GenericEvent, updateChBuffer),
-		rfUpdateCh:                           make(chan event.GenericEvent, updateChBuffer),
-		acUpdateCh:                           make(chan event.GenericEvent, updateChBuffer),
 		snapUpdateCh:                         make(chan event.GenericEvent, updateChBuffer),
-		topologyUpdateCh:                     make(chan event.GenericEvent, updateChBuffer),
+		nonCQObjectUpdateCh:                  make(chan event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]], updateChBuffer),
 		watchers:                             options.Watchers,
 		reportResourceMetrics:                options.ReportResourceMetrics,
 		fairSharingEnabled:                   options.FairSharingEnabled,
@@ -210,32 +212,63 @@ func (r *ClusterQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
-// Only topology Creation or Delete can impact the CQ active state, so we
-// ignore other updates
+// NotifyTopologyUpdate triggers a topology update event only on creation or deletion,
+// as these are the only changes affecting the ClusterQueue's active state.
 func (r *ClusterQueueReconciler) NotifyTopologyUpdate(oldTopology, newTopology *kueuealpha.Topology) {
-	// if oldTopology is nil, it's a create event.
-	if oldTopology == nil {
-		r.topologyUpdateCh <- event.GenericEvent{Object: newTopology}
+	var topology *kueuealpha.Topology
+	switch {
+	case oldTopology == nil:
+		// Create Event.
+		topology = newTopology
+	case newTopology == nil:
+		// Delete Event.
+		topology = oldTopology
+	default:
 		return
 	}
-
-	// if newTopology is nil, it's a delete event.
-	if newTopology == nil {
-		r.topologyUpdateCh <- event.GenericEvent{Object: oldTopology}
-		return
+	r.nonCQObjectUpdateCh <- event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]]{
+		Object: slices.Values(r.cache.ClusterQueuesUsingTopology(kueue.TopologyReference(topology.Name))),
 	}
 }
 
+// NotifyWorkloadUpdate signals the controller to reconcile the ClusterQueue
+// associated to the workload in the event.
 func (r *ClusterQueueReconciler) NotifyWorkloadUpdate(oldWl, newWl *kueue.Workload) {
-	if oldWl != nil {
-		r.wlUpdateCh <- event.GenericEvent{Object: oldWl}
-		if newWl != nil && oldWl.Spec.QueueName != newWl.Spec.QueueName {
-			r.wlUpdateCh <- event.GenericEvent{Object: newWl}
+	var wls []*kueue.Workload
+	switch {
+	case oldWl != nil && newWl != nil:
+		// Update Event
+		wls = []*kueue.Workload{oldWl}
+		if oldWl.Spec.QueueName != newWl.Spec.QueueName {
+			wls = append(wls, newWl)
 		}
-		return
+	case oldWl == nil:
+		// Create Event
+		wls = []*kueue.Workload{newWl}
+	default:
+		// Delete Event
+		wls = []*kueue.Workload{oldWl}
 	}
-	if newWl != nil {
-		r.wlUpdateCh <- event.GenericEvent{Object: newWl}
+	r.nonCQObjectUpdateCh <- event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]]{
+		Object: r.requestCQForWL(wls),
+	}
+}
+
+func (r *ClusterQueueReconciler) requestCQForWL(wls []*kueue.Workload) iter.Seq[kueue.ClusterQueueReference] {
+	return func(yield func(kueue.ClusterQueueReference) bool) {
+		for _, wl := range wls {
+			var req kueue.ClusterQueueReference
+			if workload.HasQuotaReservation(wl) {
+				req = wl.Status.Admission.ClusterQueue
+			} else if cqName, ok := r.qManager.ClusterQueueForWorkload(wl); ok {
+				req = cqName
+			}
+			if len(req) > 0 {
+				if !yield(req) {
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -247,112 +280,102 @@ func (r *ClusterQueueReconciler) notifyWatchers(oldCQ, newCQ *kueue.ClusterQueue
 
 // NotifyResourceFlavorUpdate ignores updates since they have no impact on the ClusterQueue's readiness.
 func (r *ClusterQueueReconciler) NotifyResourceFlavorUpdate(oldRF, newRF *kueue.ResourceFlavor) {
-	// if oldRF is nil, it's a create event.
-	if oldRF == nil {
-		r.rfUpdateCh <- event.GenericEvent{Object: newRF}
+	var rfName string
+	switch {
+	case oldRF == nil:
+		// Create Event.
+		rfName = newRF.Name
+	case newRF == nil:
+		// Delete Event.
+		rfName = oldRF.Name
+	default:
 		return
 	}
-
-	// if newRF is nil, it's a delete event.
-	if newRF == nil {
-		r.rfUpdateCh <- event.GenericEvent{Object: oldRF}
-		return
+	r.nonCQObjectUpdateCh <- event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]]{
+		Object: slices.Values(r.cache.ClusterQueuesUsingFlavor(kueue.ResourceFlavorReference(rfName))),
 	}
 }
 
 func (r *ClusterQueueReconciler) NotifyAdmissionCheckUpdate(oldAc, newAc *kueue.AdmissionCheck) {
+	var acName string
 	switch {
 	case oldAc != nil:
-		r.acUpdateCh <- event.GenericEvent{Object: oldAc}
+		// Delete or Update Event.
+		acName = oldAc.Name
 	case newAc != nil:
-		r.acUpdateCh <- event.GenericEvent{Object: newAc}
+		// Create Event.
+		acName = newAc.Name
+	default:
+		return
+	}
+	r.nonCQObjectUpdateCh <- event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]]{
+		Object: slices.Values(r.cache.ClusterQueuesUsingAdmissionCheck(acName)),
 	}
 }
 
 // Event handlers return true to signal the controller to reconcile the
 // ClusterQueue associated with the event.
 
-func (r *ClusterQueueReconciler) Create(e event.CreateEvent) bool {
-	cq, match := e.Object.(*kueue.ClusterQueue)
-	if !match {
-		// No need to interact with the cache for other objects.
-		return true
-	}
-	defer r.notifyWatchers(nil, cq)
+func (r *ClusterQueueReconciler) Create(e event.TypedCreateEvent[*kueue.ClusterQueue]) bool {
+	defer r.notifyWatchers(nil, e.Object)
 
-	log := r.log.WithValues("clusterQueue", klog.KObj(cq))
+	log := r.log.WithValues("clusterQueue", klog.KObj(e.Object))
 	log.V(2).Info("ClusterQueue create event")
 	ctx := ctrl.LoggerInto(context.Background(), log)
-	if err := r.cache.AddClusterQueue(ctx, cq); err != nil {
+	if err := r.cache.AddClusterQueue(ctx, e.Object); err != nil {
 		log.Error(err, "Failed to add clusterQueue to cache")
 	}
 
-	if err := r.qManager.AddClusterQueue(ctx, cq); err != nil {
+	if err := r.qManager.AddClusterQueue(ctx, e.Object); err != nil {
 		log.Error(err, "Failed to add clusterQueue to queue manager")
 	}
 
 	if r.reportResourceMetrics {
-		recordResourceMetrics(cq)
+		recordResourceMetrics(e.Object)
 	}
 
 	return true
 }
 
-func (r *ClusterQueueReconciler) Delete(e event.DeleteEvent) bool {
-	cq, match := e.Object.(*kueue.ClusterQueue)
-	if !match {
-		// No need to interact with the cache for other objects.
-		return true
-	}
-	defer r.notifyWatchers(cq, nil)
+func (r *ClusterQueueReconciler) Delete(e event.TypedDeleteEvent[*kueue.ClusterQueue]) bool {
+	defer r.notifyWatchers(e.Object, nil)
 
-	r.log.V(2).Info("ClusterQueue delete event", "clusterQueue", klog.KObj(cq))
-	r.cache.DeleteClusterQueue(cq)
-	r.qManager.DeleteClusterQueue(cq)
-	r.qManager.DeleteSnapshot(cq)
+	r.log.V(2).Info("ClusterQueue delete event", "clusterQueue", klog.KObj(e.Object))
+	r.cache.DeleteClusterQueue(e.Object)
+	r.qManager.DeleteClusterQueue(e.Object)
+	r.qManager.DeleteSnapshot(e.Object)
 
-	metrics.ClearClusterQueueResourceMetrics(cq.Name)
-	r.log.V(2).Info("Cleared resource metrics for deleted ClusterQueue.", "clusterQueue", klog.KObj(cq))
+	metrics.ClearClusterQueueResourceMetrics(e.Object.Name)
+	r.log.V(2).Info("Cleared resource metrics for deleted ClusterQueue.", "clusterQueue", klog.KObj(e.Object))
 
 	return true
 }
 
-func (r *ClusterQueueReconciler) Update(e event.UpdateEvent) bool {
-	oldCq, match := e.ObjectOld.(*kueue.ClusterQueue)
-	if !match {
-		// No need to interact with the cache for other objects.
-		return true
-	}
-	newCq, match := e.ObjectNew.(*kueue.ClusterQueue)
-	if !match {
-		// No need to interact with the cache for other objects.
-		return true
-	}
-
-	log := r.log.WithValues("clusterQueue", klog.KObj(newCq))
+func (r *ClusterQueueReconciler) Update(e event.TypedUpdateEvent[*kueue.ClusterQueue]) bool {
+	log := r.log.WithValues("clusterQueue", klog.KObj(e.ObjectNew))
 	log.V(2).Info("ClusterQueue update event")
 
-	if newCq.DeletionTimestamp != nil {
+	if e.ObjectNew.DeletionTimestamp != nil {
 		return true
 	}
-	defer r.notifyWatchers(oldCq, newCq)
-	specUpdated := !equality.Semantic.DeepEqual(oldCq.Spec, newCq.Spec)
+	defer r.notifyWatchers(e.ObjectOld, e.ObjectNew)
+	specUpdated := !equality.Semantic.DeepEqual(e.ObjectOld.Spec, e.ObjectNew.Spec)
 
-	if err := r.cache.UpdateClusterQueue(newCq); err != nil {
+	if err := r.cache.UpdateClusterQueue(e.ObjectNew); err != nil {
 		log.Error(err, "Failed to update clusterQueue in cache")
 	}
-	if err := r.qManager.UpdateClusterQueue(context.Background(), newCq, specUpdated); err != nil {
+	if err := r.qManager.UpdateClusterQueue(context.Background(), e.ObjectNew, specUpdated); err != nil {
 		log.Error(err, "Failed to update clusterQueue in queue manager")
 	}
 
 	if r.reportResourceMetrics {
-		updateResourceMetrics(oldCq, newCq)
+		updateResourceMetrics(e.ObjectOld, e.ObjectNew)
 	}
 	return true
 }
 
-func (r *ClusterQueueReconciler) Generic(e event.GenericEvent) bool {
-	r.log.V(2).Info("Got generic event", "obj", klog.KObj(e.Object), "kind", e.Object.GetObjectKind().GroupVersionKind())
+func (r *ClusterQueueReconciler) Generic(e event.TypedGenericEvent[*kueue.ClusterQueue]) bool {
+	r.log.V(3).Info("Got ClusterQueue generic event", "clusterQueue", klog.KObj(e.Object))
 	return true
 }
 
@@ -404,7 +427,7 @@ func clearOldResourceQuotas(oldCq, newCq *kueue.ClusterQueue) {
 		oldRG := &oldCq.Spec.ResourceGroups[rgi]
 		newFlavors := map[kueue.ResourceFlavorReference]*kueue.FlavorQuotas{}
 		if rgi < len(newCq.Spec.ResourceGroups) && len(newCq.Spec.ResourceGroups[rgi].Flavors) > 0 {
-			newFlavors = slices.ToRefMap(newCq.Spec.ResourceGroups[rgi].Flavors, func(f *kueue.FlavorQuotas) kueue.ResourceFlavorReference { return f.Name })
+			newFlavors = utilslices.ToRefMap(newCq.Spec.ResourceGroups[rgi].Flavors, func(f *kueue.FlavorQuotas) kueue.ResourceFlavorReference { return f.Name })
 		}
 
 		for fi := range oldRG.Flavors {
@@ -413,7 +436,7 @@ func clearOldResourceQuotas(oldCq, newCq *kueue.ClusterQueue) {
 				metrics.ClearClusterQueueResourceQuotas(oldCq.Name, string(flavor.Name), "")
 			} else {
 				// check all resources
-				newResources := slices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceQuota) corev1.ResourceName { return r.Name })
+				newResources := utilslices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceQuota) corev1.ResourceName { return r.Name })
 				for ri := range flavor.Resources {
 					rname := flavor.Resources[ri].Name
 					if _, found := newResources[rname]; !found {
@@ -428,14 +451,14 @@ func clearOldResourceQuotas(oldCq, newCq *kueue.ClusterQueue) {
 	if len(oldCq.Status.FlavorsReservation) > 0 {
 		newFlavors := map[kueue.ResourceFlavorReference]*kueue.FlavorUsage{}
 		if len(newCq.Status.FlavorsReservation) > 0 {
-			newFlavors = slices.ToRefMap(newCq.Status.FlavorsReservation, func(f *kueue.FlavorUsage) kueue.ResourceFlavorReference { return f.Name })
+			newFlavors = utilslices.ToRefMap(newCq.Status.FlavorsReservation, func(f *kueue.FlavorUsage) kueue.ResourceFlavorReference { return f.Name })
 		}
 		for fi := range oldCq.Status.FlavorsReservation {
 			flavor := &oldCq.Status.FlavorsReservation[fi]
 			if newFlavor, found := newFlavors[flavor.Name]; !found || len(newFlavor.Resources) == 0 {
 				metrics.ClearClusterQueueResourceReservations(oldCq.Name, string(flavor.Name), "")
 			} else {
-				newResources := slices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceUsage) corev1.ResourceName { return r.Name })
+				newResources := utilslices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceUsage) corev1.ResourceName { return r.Name })
 				for ri := range flavor.Resources {
 					rname := flavor.Resources[ri].Name
 					if _, found := newResources[rname]; !found {
@@ -450,14 +473,14 @@ func clearOldResourceQuotas(oldCq, newCq *kueue.ClusterQueue) {
 	if len(oldCq.Status.FlavorsUsage) > 0 {
 		newFlavors := map[kueue.ResourceFlavorReference]*kueue.FlavorUsage{}
 		if len(newCq.Status.FlavorsUsage) > 0 {
-			newFlavors = slices.ToRefMap(newCq.Status.FlavorsUsage, func(f *kueue.FlavorUsage) kueue.ResourceFlavorReference { return f.Name })
+			newFlavors = utilslices.ToRefMap(newCq.Status.FlavorsUsage, func(f *kueue.FlavorUsage) kueue.ResourceFlavorReference { return f.Name })
 		}
 		for fi := range oldCq.Status.FlavorsUsage {
 			flavor := &oldCq.Status.FlavorsUsage[fi]
 			if newFlavor, found := newFlavors[flavor.Name]; !found || len(newFlavor.Resources) == 0 {
 				metrics.ClearClusterQueueResourceUsage(oldCq.Name, string(flavor.Name), "")
 			} else {
-				newResources := slices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceUsage) corev1.ResourceName { return r.Name })
+				newResources := utilslices.ToRefMap(newFlavor.Resources, func(r *kueue.ResourceUsage) corev1.ResourceName { return r.Name })
 				for ri := range flavor.Resources {
 					rname := flavor.Resources[ri].Name
 					if _, found := newResources[rname]; !found {
@@ -466,49 +489,6 @@ func clearOldResourceQuotas(oldCq, newCq *kueue.ClusterQueue) {
 				}
 			}
 		}
-	}
-}
-
-// cqWorkloadHandler signals the controller to reconcile the ClusterQueue
-// associated to the workload in the event.
-// Since the events come from a channel Source, only the Generic handler will
-// receive events.
-type cqWorkloadHandler struct {
-	qManager *queue.Manager
-}
-
-func (h *cqWorkloadHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqWorkloadHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqWorkloadHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqWorkloadHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-	w := e.Object.(*kueue.Workload)
-	req := h.requestForWorkloadClusterQueue(w)
-	if req != nil {
-		q.AddAfter(*req, constants.UpdatesBatchPeriod)
-	}
-}
-
-func (h *cqWorkloadHandler) requestForWorkloadClusterQueue(w *kueue.Workload) *reconcile.Request {
-	var name kueue.ClusterQueueReference
-	if workload.HasQuotaReservation(w) {
-		name = w.Status.Admission.ClusterQueue
-	} else {
-		var ok bool
-		name, ok = h.qManager.ClusterQueueForWorkload(w)
-		if !ok {
-			return nil
-		}
-	}
-	return &reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Name: string(name),
-		},
 	}
 }
 
@@ -541,96 +521,26 @@ func (h *cqNamespaceHandler) Delete(context.Context, event.DeleteEvent, workqueu
 func (h *cqNamespaceHandler) Generic(context.Context, event.GenericEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-type cqResourceFlavorHandler struct {
-	cache *cache.Cache
-}
+type nonCQObjectHandler struct{}
 
-func (h *cqResourceFlavorHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
+var _ handler.TypedEventHandler[iter.Seq[kueue.ClusterQueueReference], reconcile.Request] = (*nonCQObjectHandler)(nil)
 
-func (h *cqResourceFlavorHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+func (h *nonCQObjectHandler) Create(context.Context, event.TypedCreateEvent[iter.Seq[kueue.ClusterQueueReference]], workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
-
-func (h *cqResourceFlavorHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+func (h *nonCQObjectHandler) Update(context.Context, event.TypedUpdateEvent[iter.Seq[kueue.ClusterQueueReference]], workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
-
-func (h *cqResourceFlavorHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-	rf, ok := e.Object.(*kueue.ResourceFlavor)
-	if !ok {
-		return
+func (h *nonCQObjectHandler) Delete(context.Context, event.TypedDeleteEvent[iter.Seq[kueue.ClusterQueueReference]], workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+}
+func (h *nonCQObjectHandler) Generic(_ context.Context, e event.TypedGenericEvent[iter.Seq[kueue.ClusterQueueReference]], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+	for cq := range e.Object {
+		q.AddAfter(reconcile.Request{NamespacedName: types.NamespacedName{
+			Name: string(cq),
+		}}, constants.UpdatesBatchPeriod)
 	}
-
-	if cqs := h.cache.ClusterQueuesUsingFlavor(kueue.ResourceFlavorReference(rf.Name)); len(cqs) != 0 {
-		for _, cq := range cqs {
-			req := reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name: string(cq),
-				}}
-			q.Add(req)
-		}
-	}
-}
-
-type cqAdmissionCheckHandler struct {
-	cache *cache.Cache
 }
 
 type cqSnapshotHandler struct {
 	queueVisibilityUpdateInterval time.Duration
-}
-
-func (h *cqAdmissionCheckHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqAdmissionCheckHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqAdmissionCheckHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqAdmissionCheckHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-	ac, isAc := e.Object.(*kueue.AdmissionCheck)
-	if !isAc {
-		return
-	}
-
-	if cqs := h.cache.ClusterQueuesUsingAdmissionCheck(ac.Name); len(cqs) != 0 {
-		for _, cq := range cqs {
-			req := reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name: string(cq),
-				}}
-			q.Add(req)
-		}
-	}
-}
-
-type cqTopologyHandler struct {
-	cache *cache.Cache
-}
-
-func (h *cqTopologyHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqTopologyHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqTopologyHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-}
-
-func (h *cqTopologyHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-	topology, isTopology := e.Object.(*kueuealpha.Topology)
-	if !isTopology {
-		return
-	}
-	cqs := h.cache.ClusterQueuesUsingTopology(kueue.TopologyReference(topology.Name))
-	for _, cq := range cqs {
-		req := reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name: string(cq),
-			}}
-		q.Add(req)
-	}
 }
 
 func (h *cqSnapshotHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
@@ -662,35 +572,25 @@ func (h *cqSnapshotHandler) Generic(_ context.Context, e event.GenericEvent, q w
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ClusterQueueReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.Configuration) error {
-	wHandler := cqWorkloadHandler{
-		qManager: r.qManager,
-	}
 	nsHandler := cqNamespaceHandler{
 		qManager: r.qManager,
 		cache:    r.cache,
 	}
-	rfHandler := cqResourceFlavorHandler{
-		cache: r.cache,
-	}
-	acHandler := cqAdmissionCheckHandler{
-		cache: r.cache,
-	}
-	topologyHandler := cqTopologyHandler{
-		cache: r.cache,
-	}
 	snapHandler := cqSnapshotHandler{
 		queueVisibilityUpdateInterval: r.queueVisibilityUpdateInterval,
 	}
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&kueue.ClusterQueue{}).
+	return builder.TypedControllerManagedBy[reconcile.Request](mgr).
+		Named("clusterqueue_controller").
+		WatchesRawSource(source.TypedKind(
+			mgr.GetCache(),
+			&kueue.ClusterQueue{},
+			&handler.TypedEnqueueRequestForObject[*kueue.ClusterQueue]{},
+			r,
+		)).
 		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
 		Watches(&corev1.Namespace{}, &nsHandler).
-		WatchesRawSource(source.Channel(r.wlUpdateCh, &wHandler)).
-		WatchesRawSource(source.Channel(r.rfUpdateCh, &rfHandler)).
-		WatchesRawSource(source.Channel(r.acUpdateCh, &acHandler)).
-		WatchesRawSource(source.Channel(r.topologyUpdateCh, &topologyHandler)).
 		WatchesRawSource(source.Channel(r.snapUpdateCh, &snapHandler)).
-		WithEventFilter(r).
+		WatchesRawSource(source.Channel(r.nonCQObjectUpdateCh, &nonCQObjectHandler{})).
 		Complete(WithLeadingManager(mgr, r, &kueue.ClusterQueue{}, cfg))
 }
 

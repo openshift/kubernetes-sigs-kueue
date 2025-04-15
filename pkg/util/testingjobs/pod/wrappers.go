@@ -77,6 +77,16 @@ func (p *PodWrapper) MakeGroup(count int) []*corev1.Pod {
 	return pods
 }
 
+func (p *PodWrapper) MakePodGroupWrappers(count int) []*PodWrapper {
+	var pods []*PodWrapper
+	for i := 0; i < count; i++ {
+		pod := p.Clone().Group(p.Pod.Name).GroupTotalCount(strconv.Itoa(count))
+		pod.Pod.Name += fmt.Sprintf("-%d", i)
+		pods = append(pods, pod)
+	}
+	return pods
+}
+
 // MakeIndexedGroup returns multiple indexed pods that form a pod group, based on the original wrapper.
 func (p *PodWrapper) MakeIndexedGroup(count int) []*corev1.Pod {
 	var pods []*corev1.Pod
@@ -219,6 +229,11 @@ func (p *PodWrapper) NodeName(name string) *PodWrapper {
 func (p *PodWrapper) Request(r corev1.ResourceName, v string) *PodWrapper {
 	p.Spec.Containers[0].Resources.Requests[r] = resource.MustParse(v)
 	return p
+}
+
+// RequestAndLimit adds a resource request and limit to the default container.
+func (p *PodWrapper) RequestAndLimit(r corev1.ResourceName, v string) *PodWrapper {
+	return p.Request(r, v).Limit(r, v)
 }
 
 func (p *PodWrapper) ServiceAccountName(serviceAccountName string) *PodWrapper {

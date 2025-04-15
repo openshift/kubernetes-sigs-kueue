@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -55,12 +54,7 @@ var _ = ginkgo.Describe("StatefulSet Webhook", func() {
 			fwk.StopManager(ctx)
 		})
 		ginkgo.BeforeEach(func() {
-			ns = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "statefulset-",
-				},
-			}
-			gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "statefulset-")
 		})
 		ginkgo.AfterEach(func() {
 			gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -69,7 +63,7 @@ var _ = ginkgo.Describe("StatefulSet Webhook", func() {
 		ginkgo.When("The queue-name label is set", func() {
 			ginkgo.It("Should inject queue name, pod group name to pod template labels, and pod group total count to pod template annotations", func() {
 				sts := testingstatefulset.MakeStatefulSet("sts", ns.Name).Queue("user-queue").Obj()
-				gomega.Expect(k8sClient.Create(ctx, sts)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, sts)
 
 				gomega.Eventually(func(g gomega.Gomega) {
 					createdStatefulSet := &appsv1.StatefulSet{}
@@ -96,7 +90,7 @@ var _ = ginkgo.Describe("StatefulSet Webhook", func() {
 		ginkgo.When("The queue-name label is not set", func() {
 			ginkgo.It("Should not inject queue name to pod template labels", func() {
 				sts := testingstatefulset.MakeStatefulSet("sts", ns.Name).Obj()
-				gomega.Expect(k8sClient.Create(ctx, sts)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, sts)
 
 				gomega.Eventually(func(g gomega.Gomega) {
 					createdStatefulSet := &appsv1.StatefulSet{}

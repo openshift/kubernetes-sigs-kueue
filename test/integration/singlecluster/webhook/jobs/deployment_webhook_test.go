@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -57,12 +56,7 @@ var _ = ginkgo.Describe("Deployment Webhook", ginkgo.Ordered, ginkgo.ContinueOnF
 	})
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "deployment-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "deployment-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -74,7 +68,7 @@ var _ = ginkgo.Describe("Deployment Webhook", ginkgo.Ordered, ginkgo.ContinueOnF
 				deployment = testingdeployment.MakeDeployment("deployment", ns.Name).
 					Queue("user-queue").
 					Obj()
-				gomega.Expect(k8sClient.Create(ctx, deployment)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, deployment)
 			})
 		})
 
@@ -169,7 +163,7 @@ var _ = ginkgo.Describe("Deployment Webhook", ginkgo.Ordered, ginkgo.ContinueOnF
 		ginkgo.BeforeEach(func() {
 			ginkgo.By("Create deployment", func() {
 				deployment = testingdeployment.MakeDeployment("deployment", ns.Name).Obj()
-				gomega.Expect(k8sClient.Create(ctx, deployment)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, deployment)
 			})
 		})
 

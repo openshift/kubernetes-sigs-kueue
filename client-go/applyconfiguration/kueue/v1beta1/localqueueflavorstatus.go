@@ -30,7 +30,11 @@ type LocalQueueFlavorStatusApplyConfiguration struct {
 	Resources  []v1.ResourceName                     `json:"resources,omitempty"`
 	NodeLabels map[string]string                     `json:"nodeLabels,omitempty"`
 	NodeTaints []corev1.TaintApplyConfiguration      `json:"nodeTaints,omitempty"`
+<<<<<<< HEAD
 	Topology   *TopologyApplyConfiguration           `json:"topology,omitempty"`
+=======
+	Topology   *TopologyInfoApplyConfiguration       `json:"topology,omitempty"`
+>>>>>>> kueue-upstream/main
 }
 
 // LocalQueueFlavorStatusApplyConfiguration constructs a declarative configuration of the LocalQueueFlavorStatus type for use with
@@ -87,7 +91,11 @@ func (b *LocalQueueFlavorStatusApplyConfiguration) WithNodeTaints(values ...*cor
 // WithTopology sets the Topology field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Topology field is set to the value of the last call.
+<<<<<<< HEAD
 func (b *LocalQueueFlavorStatusApplyConfiguration) WithTopology(value *TopologyApplyConfiguration) *LocalQueueFlavorStatusApplyConfiguration {
+=======
+func (b *LocalQueueFlavorStatusApplyConfiguration) WithTopology(value *TopologyInfoApplyConfiguration) *LocalQueueFlavorStatusApplyConfiguration {
+>>>>>>> kueue-upstream/main
 	b.Topology = value
 	return b
 }

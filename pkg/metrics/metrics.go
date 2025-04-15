@@ -242,7 +242,7 @@ The label 'reason' can have the following values:
 The label 'reason' can have the following values:
 - "InClusterQueue" means that the workload was preempted by a workload in the same ClusterQueue.
 - "InCohortReclamation" means that the workload was preempted by a workload in the same cohort due to reclamation of nominal quota.
-- "InCohortFairSharing" means that the workload was preempted by a workload in the same cohort due to fair sharing.
+- "InCohortFairSharing" means that the workload was preempted by a workload in the same cohort Fair Sharing.
 - "InCohortReclaimWhileBorrowing" means that the workload was preempted by a workload in the same cohort due to reclamation of nominal quota while borrowing.`,
 		}, []string{"preempting_cluster_queue", "reason"},
 	)
@@ -365,9 +365,22 @@ For a LocalQueue, the metric only reports a value of 1 for one of the statuses.`
 quota to the lendable resources in the cohort, among all the resources provided by 
 the ClusterQueue, and divided by the weight.
 If zero, it means that the usage of the ClusterQueue is below the nominal quota.
-If the ClusterQueue has a weight of zero, this will return 9223372036854775807,
+If the ClusterQueue has a weight of zero and is borrowing, this will return 9223372036854775807,
 the maximum possible share value.`,
 		}, []string{"cluster_queue"},
+	)
+
+	CohortWeightedShare = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: constants.KueueName,
+			Name:      "cohort_weighted_share",
+			Help: `Reports a value that representing the maximum of the ratios of usage above nominal 
+quota to the lendable resources in the Cohort, among all the resources provided by 
+the Cohort, and divided by the weight.
+If zero, it means that the usage of the Cohort is below the nominal quota.
+If the Cohort has a weight of zero and is borrowing, this will return 9223372036854775807,
+the maximum possible share value.`,
+		}, []string{"cohort"},
 	)
 )
 
@@ -538,6 +551,10 @@ func ReportClusterQueueWeightedShare(cq string, weightedShare int64) {
 	ClusterQueueWeightedShare.WithLabelValues(cq).Set(float64(weightedShare))
 }
 
+func ReportCohortWeightedShare(cohort string, weightedShare int64) {
+	CohortWeightedShare.WithLabelValues(cohort).Set(float64(weightedShare))
+}
+
 func ClearClusterQueueResourceMetrics(cqName string) {
 	lbls := prometheus.Labels{
 		"cluster_queue": cqName,
@@ -625,6 +642,7 @@ func Register() {
 		ClusterQueueResourceBorrowingLimit,
 		ClusterQueueResourceLendingLimit,
 		ClusterQueueWeightedShare,
+		CohortWeightedShare,
 	)
 	if features.Enabled(features.LocalQueueMetrics) {
 		RegisterLQMetrics()

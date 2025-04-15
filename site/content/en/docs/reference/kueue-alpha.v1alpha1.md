@@ -47,9 +47,10 @@ description: Generated API reference documentation for kueue.x-k8s.io/v1alpha1.
 
 
 
-<p>Cohort is the Schema for the cohorts API. Using Hierarchical
-Cohorts (any Cohort which has a parent) with Fair Sharing
-results in undefined behavior in 0.9</p>
+<p>Cohort defines the Cohorts API.</p>
+<p>Hierarchical Cohorts (any Cohort which has a parent) are compatible
+with Fair Sharing as of v0.11. Using these features together in
+V0.9 and V0.10 is unsupported, and results in undefined behavior.</p>
 
 
 <table class="table">
@@ -59,6 +60,12 @@ results in undefined behavior in 0.9</p>
   
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#kueue-x-k8s-io-v1alpha1-CohortSpec"><code>CohortSpec</code></a>
+</td>
+<td>
+   <span class="text-muted">No description provided.</span></td>
+</tr>
+<tr><td><code>status</code> <B>[Required]</B><br/>
+<a href="#kueue-x-k8s-io-v1alpha1-CohortStatus"><code>CohortStatus</code></a>
 </td>
 <td>
    <span class="text-muted">No description provided.</span></td>
@@ -125,6 +132,34 @@ will be rejected by the webhook.</p>
    <p>fairSharing defines the properties of the Cohort when
 participating in FairSharing. The values are only relevant
 if FairSharing is enabled in the Kueue configuration.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
+## `CohortStatus`     {#kueue-x-k8s-io-v1alpha1-CohortStatus}
+    
+
+**Appears in:**
+
+- [Cohort](#kueue-x-k8s-io-v1alpha1-Cohort)
+
+
+<p>CohortStatus defines the observed state of Cohort.</p>
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>fairSharing</code><br/>
+<a href="#kueue-x-k8s-io-v1beta1-FairSharingStatus"><code>FairSharingStatus</code></a>
+</td>
+<td>
+   <p>fairSharing contains the current state for this Cohort
+when participating in Fair Sharing.
+The is recorded only when Fair Sharing is enabled in the Kueue configuration.</p>
 </td>
 </tr>
 </tbody>

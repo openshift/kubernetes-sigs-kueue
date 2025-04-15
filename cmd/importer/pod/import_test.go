@@ -17,7 +17,6 @@ limitations under the License.
 package pod
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -70,12 +69,12 @@ func TestImportNamespace(t *testing.T) {
 		ResourceGroup(
 			*utiltesting.MakeFlavorQuotas("f1").Resource(corev1.ResourceCPU, "1", "0").Obj())
 
-	podCmpOpts := []cmp.Option{
+	podCmpOpts := cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion"),
 	}
 
-	wlCmpOpts := []cmp.Option{
+	wlCmpOpts := cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion"),
 		cmpopts.IgnoreFields(metav1.Condition{}, "ObservedGeneration", "LastTransitionTime"),
@@ -178,7 +177,7 @@ func TestImportNamespace(t *testing.T) {
 				WithLists(&podsList, &cqList, &lqList)
 
 			client := builder.Build()
-			ctx := context.Background()
+			ctx := t.Context()
 
 			mpc, _ := util.LoadImportCache(ctx, client, []string{testingNamespace}, tc.mapping, tc.addLabels)
 			gotErr := Import(ctx, client, mpc, 8)

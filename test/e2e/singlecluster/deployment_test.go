@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -50,17 +49,12 @@ var _ = ginkgo.Describe("Deployment", func() {
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "deployment-e2e-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "deployment-e2e-")
 
 		rf = testing.MakeResourceFlavor(resourceFlavorName).
 			NodeLabel("instance-type", "on-demand").
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, rf)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, rf)
 
 		cq = testing.MakeClusterQueue(clusterQueueName).
 			ResourceGroup(
@@ -72,27 +66,29 @@ var _ = ginkgo.Describe("Deployment", func() {
 				WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
 			}).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, cq)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, cq)
 
 		lq = testing.MakeLocalQueue(localQueueName, ns.Name).ClusterQueue(cq.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, lq)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lq)
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, cq, true)
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, rf, true)
+		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 	})
 
 	ginkgo.It("should admit workloads that fits", func() {
 		deployment := deploymenttesting.MakeDeployment("deployment", ns.Name).
 			Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
-			Request(corev1.ResourceCPU, "100m").
+			RequestAndLimit(corev1.ResourceCPU, "200m").
+			TerminationGracePeriod(1).
 			Replicas(3).
 			Queue(lq.Name).
 			Obj()
 
 		ginkgo.By("Create a deployment", func() {
-			gomega.Expect(k8sClient.Create(ctx, deployment)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, deployment)
 		})
 
 		ginkgo.By("Wait for replicas ready", func() {
@@ -104,7 +100,7 @@ var _ = ginkgo.Describe("Deployment", func() {
 		})
 
 		pods := &corev1.PodList{}
-		gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Namespace),
+		gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name),
 			client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
 
 		createdWorkloads := make([]*kueue.Workload, 0, len(pods.Items))
@@ -135,13 +131,14 @@ var _ = ginkgo.Describe("Deployment", func() {
 	ginkgo.It("should admit workloads after change queue-name if AvailableReplicas = 0", func() {
 		deployment := deploymenttesting.MakeDeployment("deployment", ns.Name).
 			Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
-			Request(corev1.ResourceCPU, "100m").
+			RequestAndLimit(corev1.ResourceCPU, "200m").
+			TerminationGracePeriod(1).
 			Replicas(3).
 			Queue("invalid-queue-name").
 			Obj()
 
 		ginkgo.By("Create a deployment", func() {
-			gomega.Expect(k8sClient.Create(ctx, deployment)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, deployment)
 		})
 
 		ginkgo.By("Wait for replicas unavailable", func() {
@@ -155,7 +152,7 @@ var _ = ginkgo.Describe("Deployment", func() {
 		})
 
 		pods := &corev1.PodList{}
-		gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Namespace),
+		gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name),
 			client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
 
 		createdWorkloads := make([]*kueue.Workload, 0, len(pods.Items))
@@ -192,14 +189,14 @@ var _ = ginkgo.Describe("Deployment", func() {
 
 		ginkgo.By("Check previous pods are deleted", func() {
 			gomega.Eventually(func(g gomega.Gomega) {
-				g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Namespace),
+				g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name),
 					client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
 				g.Expect(pods.Items).To(gomega.HaveLen(3))
 			}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
 		})
 
 		ginkgo.By("Check that workloads are created and admitted", func() {
-			gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Namespace),
+			gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name),
 				client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
 			for _, p := range pods.Items {
 				createdWorkload := &kueue.Workload{}

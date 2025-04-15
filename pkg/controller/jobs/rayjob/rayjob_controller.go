@@ -34,6 +34,7 @@ import (
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 )
 
@@ -79,6 +80,7 @@ var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
 type RayJob rayv1.RayJob
 
 var _ jobframework.GenericJob = (*RayJob)(nil)
+var _ jobframework.JobWithManagedBy = (*RayJob)(nil)
 
 func (j *RayJob) Object() client.Object {
 	return (*rayv1.RayJob)(j)
@@ -116,12 +118,18 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 	podSets := make([]kueue.PodSet, 0)
 
 	// head
-	podSets = append(podSets, kueue.PodSet{
-		Name:            headGroupPodSetName,
-		Template:        *j.Spec.RayClusterSpec.HeadGroupSpec.Template.DeepCopy(),
-		Count:           1,
-		TopologyRequest: jobframework.PodSetTopologyRequest(&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta, nil, nil, nil),
-	})
+	headPodSet := kueue.PodSet{
+		Name:     headGroupPodSetName,
+		Template: *j.Spec.RayClusterSpec.HeadGroupSpec.Template.DeepCopy(),
+		Count:    1,
+	}
+	if features.Enabled(features.TopologyAwareScheduling) {
+		headPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(
+			&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta,
+			nil, nil, nil,
+		)
+	}
+	podSets = append(podSets, headPodSet)
 
 	// workers
 	for index := range j.Spec.RayClusterSpec.WorkerGroupSpecs {
@@ -133,12 +141,15 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 		if wgs.NumOfHosts > 1 {
 			count *= wgs.NumOfHosts
 		}
-		podSets = append(podSets, kueue.PodSet{
-			Name:            kueue.NewPodSetReference(wgs.GroupName),
-			Template:        *wgs.Template.DeepCopy(),
-			Count:           count,
-			TopologyRequest: jobframework.PodSetTopologyRequest(&wgs.Template.ObjectMeta, nil, nil, nil),
-		})
+		workerPodSet := kueue.PodSet{
+			Name:     kueue.NewPodSetReference(wgs.GroupName),
+			Template: *wgs.Template.DeepCopy(),
+			Count:    count,
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			workerPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&wgs.Template.ObjectMeta, nil, nil, nil)
+		}
+		podSets = append(podSets, workerPodSet)
 	}
 
 	// submitter Job
@@ -151,7 +162,9 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 
 		// Create the TopologyRequest for the Submitter Job PodSet, based on the annotations
 		// in rayJob.Spec.SubmitterPodTemplate, which can be specified by the user.
-		submitterJobPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta, nil, nil, nil)
+		if features.Enabled(features.TopologyAwareScheduling) {
+			submitterJobPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta, nil, nil, nil)
+		}
 		podSets = append(podSets, submitterJobPodSet)
 	}
 
@@ -282,4 +295,18 @@ func getSubmitterTemplate(rayJob *RayJob) *corev1.PodTemplateSpec {
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+}
+
+func (j *RayJob) CanDefaultManagedBy() bool {
+	jobSpecManagedBy := j.Spec.ManagedBy
+	return features.Enabled(features.MultiKueue) &&
+		(jobSpecManagedBy == nil || *jobSpecManagedBy == rayutils.KubeRayController)
+}
+
+func (j *RayJob) ManagedBy() *string {
+	return j.Spec.ManagedBy
+}
+
+func (j *RayJob) SetManagedBy(managedBy *string) {
+	j.Spec.ManagedBy = managedBy
 }

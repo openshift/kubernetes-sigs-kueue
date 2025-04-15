@@ -51,7 +51,7 @@ To create a Kubeconfig that can be used in the manager cluster to delegate Jobs 
 
 ### Kubeflow Installation
 
-Install Kubeflow Training-operator in the Worker cluster (see [Kubeflow Training-operator Installation](https://www.kubeflow.org/docs/components/training/installation/)
+Install Kubeflow Trainer in the Worker cluster (see [Kubeflow Trainer Installation](https://www.kubeflow.org/docs/components/training/installation/)
 for more details). Please use version v1.7.0 or a newer version for MultiKueue.
 
 ## In the Manager Cluster
@@ -100,3 +100,11 @@ CQ - Active: True Reason: Ready Message: Can admit new workloads
 AC - Active: True Reason: Active Message: The admission check is active
 MC - Active: True Reason: Active Message: Connected
 ```
+
+## (Optional) Setup MultiKueue with Open Cluster Management
+
+[Open Cluster Management (OCM)](https://open-cluster-management.io/) is a community-driven project focused on multicluster and multicloud scenarios for Kubernetes apps.
+It provides a robust, modular, and extensible framework that helps other open source projects orchestrate, schedule, and manage workloads across multiple clusters.
+
+The integration with OCM is an optional solution that enables Kueue users to streamline the MultiKueue setup process, automate the generation of MultiKueue specific Kubeconfig, and enhance multicluster scheduling capabilities.
+For more details about this solution, please refer to this [link](https://github.com/open-cluster-management-io/ocm/tree/main/solutions/kueue-admission-check).

@@ -66,14 +66,14 @@ const (
 	queueingTimeout = time.Second
 )
 
-var cmpDump = []cmp.Option{
+var cmpDump = cmp.Options{
 	cmpopts.SortSlices(func(a, b string) bool { return a < b }),
 }
 
 func TestSchedule(t *testing.T) {
 	now := time.Now()
 	fakeClock := testingclock.NewFakeClock(now)
-	ignoreEventMessageCmpOpts := []cmp.Option{cmpopts.IgnoreFields(utiltesting.EventRecord{}, "Message")}
+	ignoreEventMessageCmpOpts := cmp.Options{cmpopts.IgnoreFields(utiltesting.EventRecord{}, "Message")}
 
 	resourceFlavors := []*kueue.ResourceFlavor{
 		utiltesting.MakeResourceFlavor("default").Obj(),
@@ -261,7 +261,7 @@ func TestSchedule(t *testing.T) {
 		// wantScheduled is the subset of workloads that got scheduled/admitted in this cycle.
 		wantScheduled []string
 		// workloadCmpOpts are the cmp options to compare workloads.
-		workloadCmpOpts []cmp.Option
+		workloadCmpOpts cmp.Options
 		// wantWorkloads is the subset of workloads that got admitted in this cycle.
 		wantWorkloads []kueue.Workload
 		// wantLeft is the workload keys that are left in the queues after this cycle.
@@ -273,7 +273,7 @@ func TestSchedule(t *testing.T) {
 		// wantEvents ignored if empty, the Message is ignored (it contains the duration)
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the cmp options to compare recorded events.
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 
 		wantSkippedPreemptions map[string]int
 	}{
@@ -309,7 +309,7 @@ func TestSchedule(t *testing.T) {
 				},
 			},
 			wantScheduled: []string{"sales/foo"},
-			workloadCmpOpts: []cmp.Option{
+			workloadCmpOpts: cmp.Options{
 				cmpopts.EquateEmpty(),
 				cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 				cmpopts.IgnoreFields(
@@ -2945,6 +2945,104 @@ func TestSchedule(t *testing.T) {
 				"eng-gamma/Admitted-Workload-3": *utiltesting.MakeAdmission("CQ3").Assignment("gpu", "on-demand", "5").Obj(),
 			},
 		},
+		"capacity not blocked when lending clusterqueue can reclaim": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("ClusterQueueA").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "2").FlavorQuotas,
+					).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyAny,
+					}).
+					Obj(),
+				*utiltesting.MakeClusterQueue("ClusterQueueB").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "0").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq", "eng-alpha").ClusterQueue("ClusterQueueA").Obj(),
+				*utiltesting.MakeLocalQueue("lq", "eng-beta").ClusterQueue("ClusterQueueB").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "1").
+					SimpleReserveQuota("ClusterQueueA", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("a2-pending", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "2").
+					Obj(),
+				*utiltesting.MakeWorkload("b1-pending", "eng-beta").
+					Creation(now).
+					Queue("lq").
+					Request("gpu", "1").
+					Obj(),
+			},
+			wantLeft: nil,
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+				"ClusterQueueA": {"eng-alpha/a2-pending"},
+			},
+			wantScheduled: []string{
+				"eng-beta/b1-pending",
+			},
+			wantAssignments: map[string]kueue.Admission{
+				"eng-alpha/a1-admitted": *utiltesting.MakeAdmission("ClusterQueueA").Assignment("gpu", "on-demand", "1").Obj(),
+				"eng-beta/b1-pending":   *utiltesting.MakeAdmission("ClusterQueueB").Assignment("gpu", "on-demand", "1").Obj(),
+			},
+		},
+		"capacity blocked when lending clusterqueue not guaranteed to reclaim": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("ClusterQueueA").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "2").FlavorQuotas,
+					).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+					}).
+					Obj(),
+				*utiltesting.MakeClusterQueue("ClusterQueueB").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "0").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq", "eng-alpha").ClusterQueue("ClusterQueueA").Obj(),
+				*utiltesting.MakeLocalQueue("lq", "eng-beta").ClusterQueue("ClusterQueueB").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "1").
+					SimpleReserveQuota("ClusterQueueA", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("a2-pending", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "2").
+					Obj(),
+				*utiltesting.MakeWorkload("b1-pending", "eng-beta").
+					Creation(now).
+					Queue("lq").
+					Request("gpu", "1").
+					Obj(),
+			},
+			wantLeft: map[kueue.ClusterQueueReference][]string{
+				"ClusterQueueB": {"eng-beta/b1-pending"},
+			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+				"ClusterQueueA": {"eng-alpha/a2-pending"},
+			},
+			wantAssignments: map[string]kueue.Admission{
+				"eng-alpha/a1-admitted": *utiltesting.MakeAdmission("ClusterQueueA").Assignment("gpu", "on-demand", "1").Obj(),
+			},
+		},
 	}
 
 	for name, tc := range cases {
@@ -2965,11 +3063,11 @@ func TestSchedule(t *testing.T) {
 				WithLists(&kueue.WorkloadList{Items: tc.workloads}, &kueue.LocalQueueList{Items: allQueues}).
 				WithObjects(append(
 					[]client.Object{
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-alpha", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-beta", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-gamma", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sales", Labels: map[string]string{"dep": "sales"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "lend", Labels: map[string]string{"dep": "lend"}}},
+						utiltesting.MakeNamespaceWrapper("eng-alpha").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("eng-beta").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("eng-gamma").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("sales").Label("dep", "sales").Obj(),
+						utiltesting.MakeNamespaceWrapper("lend").Label("dep", "lend").Obj(),
 					}, tc.objects...,
 				)...)
 			cl := clientBuilder.Build()
@@ -3359,7 +3457,7 @@ func TestEntryOrdering(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.PrioritySortingWithinCohort, tc.prioritySorting)
-			iter := makeIterator(context.Background(), tc.input, tc.workloadOrdering, false)
+			iter := makeIterator(t.Context(), tc.input, tc.workloadOrdering, false)
 			order := make([]string, len(tc.input))
 			for i := range tc.input {
 				order[i] = iter.pop().Obj.Name
@@ -3776,7 +3874,7 @@ func TestLastSchedulingContext(t *testing.T) {
 					&kueue.ClusterQueueList{Items: tc.cqs},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			cl := clientBuilder.Build()
 			broadcaster := record.NewBroadcaster()
@@ -3966,7 +4064,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 			scheme := runtime.NewScheme()
 
 			updates := 0
-			objs := []client.Object{w1, q1, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns1"}}}
+			objs := []client.Object{w1, q1, utiltesting.MakeNamespace("ns1")}
 			cl := utiltesting.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
 				SubResourcePatch: func(ctx context.Context, client client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 					updates++
@@ -4283,7 +4381,7 @@ func TestScheduleForTAS(t *testing.T) {
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
 		"workload which does not specify TAS annotation uses the only TAS flavor": {
 			nodes:           defaultSingleNode,
@@ -4320,7 +4418,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4372,7 +4470,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4413,7 +4511,7 @@ func TestScheduleForTAS(t *testing.T) {
 					AssignmentPodCount(1).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4490,7 +4588,7 @@ func TestScheduleForTAS(t *testing.T) {
 					).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4534,7 +4632,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4631,7 +4729,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4815,7 +4913,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4887,7 +4985,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5041,7 +5139,7 @@ func TestScheduleForTAS(t *testing.T) {
 					}).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5137,7 +5235,7 @@ func TestScheduleForTAS(t *testing.T) {
 					}).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5226,7 +5324,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5309,7 +5407,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5354,7 +5452,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5435,6 +5533,51 @@ func TestScheduleForTAS(t *testing.T) {
 				},
 			},
 		},
+		"workload with zero value request gets scheduled": {
+			nodes:           defaultSingleNode,
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "0").
+						Request(corev1.ResourceMemory, "10Mi").
+						Obj()).
+					Obj(),
+			},
+			wantNewAssignments: map[string]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "0").
+					Assignment(corev1.ResourceMemory, "tas-default", "10Mi").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -5449,7 +5592,7 @@ func TestScheduleForTAS(t *testing.T) {
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()
@@ -5626,7 +5769,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
 		"only low priority workload is preempted": {
 			// This test case demonstrates the baseline scenario where there
@@ -6010,7 +6153,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()
@@ -6226,7 +6369,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
 		"workload which requires borrowing gets scheduled": {
 			nodes:           defaultTwoNodes,
@@ -6264,7 +6407,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1"},
@@ -6322,7 +6465,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				"tas-cq-b": {"default/b1"},
 			},
 			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6433,7 +6576,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				"tas-cq-b": {"default/b1"},
 			},
 			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1-admitted"},
@@ -6522,7 +6665,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				"tas-cq-b": {"default/b1"},
 			},
 			wantPreempted: sets.New("default/a2-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a2-admitted"},
@@ -6648,7 +6791,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				"tas-cq-c": {"default/c1"},
 			},
 			wantPreempted: sets.New("default/a2-admitted", "default/a3-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6725,7 +6868,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6802,7 +6945,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6868,7 +7011,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 			wantLeft: map[kueue.ClusterQueueReference][]string{
 				"tas-cq-b": {"default/b1"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6929,7 +7072,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6992,7 +7135,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 			wantLeft: map[kueue.ClusterQueueReference][]string{
 				"tas-cq-b": {"default/b1"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1"},
@@ -7073,7 +7216,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				"tas-cq-b": {"default/b1"},
 			},
 			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
@@ -7093,6 +7236,83 @@ func TestScheduleForTASCohorts(t *testing.T) {
 			},
 		},
 		"preempting workload without targets reserves capacity so that lower priority workload cannot use it": {
+			nodes:           []corev1.Node{defaultNodeY1},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues: []kueue.ClusterQueue{*utiltesting.MakeClusterQueue("tas-cq-a").
+				Cohort("tas-cohort-main").
+				Preemption(kueue.ClusterQueuePreemption{
+					WithinClusterQueue:  kueue.PreemptionPolicyLowerPriority,
+					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+				}).
+				ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
+					Resource(corev1.ResourceCPU, "8", "0").
+					Resource(corev1.ResourceMemory, "4Gi", "0").Obj()).
+				Obj(), defaultClusterQueueB},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "default").
+					Queue("tas-lq-a").
+					Priority(2).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-cq-a", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "2").
+							AssignmentPodCount(2).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 2,
+										Values: []string{
+											"y1",
+										},
+									},
+								},
+							}).Obj(),
+					).
+					Admitted(true).
+					PodSets(*utiltesting.MakePodSet("one", 2).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+				*utiltesting.MakeWorkload("a2", "default").
+					Queue("tas-lq-a").
+					Priority(2).
+					PodSets(*utiltesting.MakePodSet("one", 4).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+				*utiltesting.MakeWorkload("b1", "default").
+					Queue("tas-lq-b").
+					Priority(1).
+					PodSets(*utiltesting.MakePodSet("one", 3).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+			},
+			wantLeft: map[kueue.ClusterQueueReference][]string{
+				"tas-cq-b": {"default/b1"},
+			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+				"tas-cq-a": {"default/a2"},
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
+					Reason:    "Pending",
+					EventType: corev1.EventTypeWarning,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
+					Reason:    "Pending",
+					EventType: corev1.EventTypeWarning,
+				},
+			},
+		},
+		"preempting workload without targets doesn't reserve capacity when it can always reclaim": {
 			nodes:           []corev1.Node{defaultNodeY1},
 			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
 			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
@@ -7149,24 +7369,43 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
-				"tas-cq-b": {"default/b1"},
-			},
 			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
 				"tas-cq-a": {"default/a2"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
-					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
-					Reason:    "Pending",
-					EventType: corev1.EventTypeWarning,
+					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
 				},
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
-					Reason:    "Pending",
-					EventType: corev1.EventTypeWarning,
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
 				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
+					EventType: "Warning",
+					Reason:    "Pending",
+					Message:   `couldn't assign flavors to pod set one: topology "tas-single-level" allows to fit only 3 out of 4 pod(s)`,
+				},
+			},
+			wantNewAssignments: map[string]kueue.Admission{
+				"default/b1": *utiltesting.MakeAdmission("tas-cq-b", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "3").
+					AssignmentPodCount(3).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 3,
+								Values: []string{
+									"y1",
+								},
+							},
+						},
+					}).Obj(),
 			},
 		},
 	}
@@ -7183,7 +7422,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()

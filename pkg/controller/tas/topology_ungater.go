@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -30,16 +29,19 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/constants"
 	"sigs.k8s.io/kueue/pkg/controller/core"
 	"sigs.k8s.io/kueue/pkg/controller/tas/indexer"
 	utilclient "sigs.k8s.io/kueue/pkg/util/client"
@@ -49,10 +51,6 @@ import (
 	utilslices "sigs.k8s.io/kueue/pkg/util/slices"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
-)
-
-const (
-	ungateBatchPeriod = time.Second
 )
 
 var (
@@ -75,7 +73,7 @@ type podWithDomain struct {
 }
 
 var _ reconcile.Reconciler = (*topologyUngater)(nil)
-var _ predicate.Predicate = (*topologyUngater)(nil)
+var _ predicate.TypedPredicate[*kueue.Workload] = (*topologyUngater)(nil)
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
@@ -92,13 +90,18 @@ func (r *topologyUngater) setupWithManager(mgr ctrl.Manager, cfg *configapi.Conf
 	podHandler := podHandler{
 		expectationsStore: r.expectationsStore,
 	}
-	return TASTopologyUngater, ctrl.NewControllerManagedBy(mgr).
+	return TASTopologyUngater, builder.TypedControllerManagedBy[reconcile.Request](mgr).
 		Named("tas_topology_ungater").
+		WatchesRawSource(source.TypedKind(
+			mgr.GetCache(),
+			&kueue.Workload{},
+			&handler.TypedEnqueueRequestForObject[*kueue.Workload]{},
+			r,
+		)).
 		For(&kueue.Workload{}).
 		Watches(&corev1.Pod{}, &podHandler).
 		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
-		WithEventFilter(r).
-		Complete(core.WithLeadingManager(mgr, r, &kueue.ClusterQueue{}, cfg))
+		Complete(core.WithLeadingManager(mgr, r, &kueue.Workload{}, cfg))
 }
 
 var _ handler.EventHandler = (*podHandler)(nil)
@@ -142,7 +145,7 @@ func (h *podHandler) queueReconcileForPod(ctx context.Context, object client.Obj
 			log := ctrl.LoggerFrom(ctx).WithValues("pod", klog.KObj(pod), "workload", key.String())
 			h.expectationsStore.ObservedUID(log, key, pod.UID)
 		}
-		q.AddAfter(reconcile.Request{NamespacedName: key}, ungateBatchPeriod)
+		q.AddAfter(reconcile.Request{NamespacedName: key}, constants.UpdatesBatchPeriod)
 	}
 }
 
@@ -225,31 +228,19 @@ func (r *topologyUngater) Reconcile(ctx context.Context, req reconcile.Request) 
 	return reconcile.Result{}, nil
 }
 
-func (r *topologyUngater) Create(event event.CreateEvent) bool {
-	wl, isWl := event.Object.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Create(event event.TypedCreateEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.Object)
 }
 
-func (r *topologyUngater) Delete(event event.DeleteEvent) bool {
-	wl, isWl := event.Object.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Delete(event event.TypedDeleteEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.Object)
 }
 
-func (r *topologyUngater) Update(event event.UpdateEvent) bool {
-	wl, isWl := event.ObjectNew.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Update(event event.TypedUpdateEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.ObjectNew)
 }
 
-func (r *topologyUngater) Generic(event event.GenericEvent) bool {
+func (r *topologyUngater) Generic(event.TypedGenericEvent[*kueue.Workload]) bool {
 	return false
 }
 

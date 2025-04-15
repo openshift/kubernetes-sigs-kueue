@@ -17,7 +17,7 @@ limitations under the License.
 package cache
 
 import (
-	"maps"
+	"iter"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -51,7 +51,7 @@ type ClusterQueueSnapshot struct {
 	// deleted, or the resource groups are changed.
 	AllocatableResourceGeneration int64
 
-	ResourceNode ResourceNode
+	ResourceNode resourceNode
 	hierarchy.ClusterQueue[*CohortSnapshot]
 
 	TASFlavors map[kueue.ResourceFlavorReference]*TASFlavorSnapshot
@@ -69,11 +69,11 @@ func (c *ClusterQueueSnapshot) RGByResource(resource corev1.ResourceName) *Resou
 	return nil
 }
 
-// SimulateUsageRemoval the snapshot by removing the usage corresponding to the
-// list of workloads. It returns the function which can be used to restore
-// the usage.
-func (c *ClusterQueueSnapshot) SimulateUsageRemoval(workloads []*workload.Info) func() {
-	var usage []workload.Usage
+// SimulateWorkloadRemoval modifies the snapshot by removing the usage
+// corresponding to the list of workloads. It returns a function which
+// can be used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateWorkloadRemoval(workloads []*workload.Info) func() {
+	usage := make([]workload.Usage, 0, len(workloads))
 	for _, w := range workloads {
 		usage = append(usage, w.Usage())
 	}
@@ -84,6 +84,24 @@ func (c *ClusterQueueSnapshot) SimulateUsageRemoval(workloads []*workload.Info) 
 		for _, u := range usage {
 			c.AddUsage(u)
 		}
+	}
+}
+
+// SimulateUsageAddition modifies the snapshot by adding usage, and
+// returns a function used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateUsageAddition(usage workload.Usage) func() {
+	c.AddUsage(usage)
+	return func() {
+		c.RemoveUsage(usage)
+	}
+}
+
+// SimulateUsageRemoval modifies the snapshot by removing usage, and
+// returns a function used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateUsageRemoval(usage workload.Usage) func() {
+	c.RemoveUsage(usage)
+	return func() {
+		c.AddUsage(usage)
 	}
 }
 
@@ -170,7 +188,7 @@ func (c *ClusterQueueSnapshot) fairWeight() *resource.Quantity {
 
 // The methods below implement hierarchicalResourceNode interface.
 
-func (c *ClusterQueueSnapshot) getResourceNode() ResourceNode {
+func (c *ClusterQueueSnapshot) getResourceNode() resourceNode {
 	return c.ResourceNode
 }
 
@@ -180,20 +198,6 @@ func (c *ClusterQueueSnapshot) parentHRN() hierarchicalResourceNode {
 
 func (c *ClusterQueueSnapshot) DominantResourceShare() int {
 	share, _ := dominantResourceShare(c, nil)
-	return share
-}
-
-func (c *ClusterQueueSnapshot) DominantResourceShareWith(wlReq resources.FlavorResourceQuantities) int {
-	share, _ := dominantResourceShare(c, wlReq)
-	return share
-}
-
-func (c *ClusterQueueSnapshot) DominantResourceShareWithout(wlReq resources.FlavorResourceQuantities) int {
-	without := maps.Clone(wlReq)
-	for fr, q := range without {
-		without[fr] = -q
-	}
-	share, _ := dominantResourceShare(c, without)
 	return share
 }
 
@@ -218,4 +222,17 @@ func (c *ClusterQueueSnapshot) FindTopologyAssignmentsForWorkload(
 
 func (c *ClusterQueueSnapshot) IsTASOnly() bool {
 	return c.tasOnly
+}
+
+// Returns all ancestors starting with parent and ending with root
+func (c *ClusterQueueSnapshot) PathParentToRoot() iter.Seq[*CohortSnapshot] {
+	return func(yield func(*CohortSnapshot) bool) {
+		a := c.Parent()
+		for a != nil {
+			if !yield(a) {
+				return
+			}
+			a = a.Parent()
+		}
+	}
 }

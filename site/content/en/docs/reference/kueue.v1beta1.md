@@ -743,11 +743,11 @@ fits within the nominal quota of its ClusterQueue, only preempt
 Workloads in the cohort that have lower priority than the pending
 Workload. <strong>Fair Sharing</strong> only preempt Workloads in the cohort that
 have lower priority than the pending Workload and that satisfy the
-fair sharing preemptionStategies.</li>
+Fair Sharing preemptionStategies.</li>
 <li><code>Any</code>: <strong>Classic Preemption</strong> if the pending Workload fits within
 the nominal quota of its ClusterQueue, preempt any Workload in the
 cohort, irrespective of priority. <strong>Fair Sharing</strong> preempt Workloads
-in the cohort that satisfy the fair sharing preemptionStrategies.</li>
+in the cohort that satisfy the Fair Sharing preemptionStrategies.</li>
 </ul>
 </td>
 </tr>
@@ -999,7 +999,9 @@ instead.</p>
 <a href="#kueue-x-k8s-io-v1beta1-FairSharingStatus"><code>FairSharingStatus</code></a>
 </td>
 <td>
-   <p>FairSharing contains the information about the current status of fair sharing.</p>
+   <p>fairSharing contains the current state for this ClusterQueue
+when participating in Fair Sharing.
+This is recorded only when Fair Sharing is enabled in the Kueue configuration.</p>
 </td>
 </tr>
 </tbody>
@@ -1031,6 +1033,9 @@ subdomain in DNS (RFC 1123).</p>
 
 <p>FairSharing contains the properties of the ClusterQueue or Cohort,
 when participating in FairSharing.</p>
+<p>Fair Sharing is compatible with Hierarchical Cohorts (any Cohort
+which has a parent) as of v0.11. Using these features together in
+V0.9 and V0.10 is unsupported, and results in undefined behavior.</p>
 
 
 <table class="table">
@@ -1065,6 +1070,8 @@ disadvantage against other ClusterQueues and Cohorts.</p>
 - [ClusterQueueStatus](#kueue-x-k8s-io-v1beta1-ClusterQueueStatus)
 
 
+<p>FairSharingStatus contains the information about the current status of Fair Sharing.</p>
+
 
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
@@ -1075,13 +1082,13 @@ disadvantage against other ClusterQueues and Cohorts.</p>
 <code>int64</code>
 </td>
 <td>
-   <p>WeightedShare represent the maximum of the ratios of usage
+   <p>WeightedShare represents the maximum of the ratios of usage
 above nominal quota to the lendable resources in the
 Cohort, among all the resources provided by the Node, and
 divided by the weight.  If zero, it means that the usage of
 the Node is below the nominal quota.  If the Node has a
-weight of zero, this will return 9223372036854775807, the
-maximum possible share value.</p>
+weight of zero and is borrowing, this will return
+9223372036854775807, the maximum possible share value.</p>
 </td>
 </tr>
 </tbody>
@@ -1289,7 +1296,7 @@ have.</p>
 </td>
 </tr>
 <tr><td><code>topology</code><br/>
-<a href="#kueue-x-k8s-io-v1beta1-Topology"><code>Topology</code></a>
+<a href="#kueue-x-k8s-io-v1beta1-TopologyInfo"><code>TopologyInfo</code></a>
 </td>
 <td>
    <p>topology is the topology that associated with this ResourceFlavor.</p>
@@ -2385,37 +2392,6 @@ words, it's the used quota that is over the nominalQuota.</p>
 
 
 
-## `Topology`     {#kueue-x-k8s-io-v1beta1-Topology}
-    
-
-**Appears in:**
-
-- [LocalQueueFlavorStatus](#kueue-x-k8s-io-v1beta1-LocalQueueFlavorStatus)
-
-
-
-<table class="table">
-<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
-<tbody>
-    
-  
-<tr><td><code>name</code> <B>[Required]</B><br/>
-<a href="#kueue-x-k8s-io-v1beta1-TopologyReference"><code>TopologyReference</code></a>
-</td>
-<td>
-   <p>name is the name of the topology.</p>
-</td>
-</tr>
-<tr><td><code>levels</code> <B>[Required]</B><br/>
-<code>[]string</code>
-</td>
-<td>
-   <p>levels define the levels of topology.</p>
-</td>
-</tr>
-</tbody>
-</table>
-
 ## `TopologyAssignment`     {#kueue-x-k8s-io-v1beta1-TopologyAssignment}
     
 
@@ -2484,6 +2460,37 @@ domain indicated by the values field.</p>
 </tbody>
 </table>
 
+## `TopologyInfo`     {#kueue-x-k8s-io-v1beta1-TopologyInfo}
+    
+
+**Appears in:**
+
+- [LocalQueueFlavorStatus](#kueue-x-k8s-io-v1beta1-LocalQueueFlavorStatus)
+
+
+
+<table class="table">
+<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
+<tbody>
+    
+  
+<tr><td><code>name</code> <B>[Required]</B><br/>
+<a href="#kueue-x-k8s-io-v1beta1-TopologyReference"><code>TopologyReference</code></a>
+</td>
+<td>
+   <p>name is the name of the topology.</p>
+</td>
+</tr>
+<tr><td><code>levels</code> <B>[Required]</B><br/>
+<code>[]string</code>
+</td>
+<td>
+   <p>levels define the levels of topology.</p>
+</td>
+</tr>
+</tbody>
+</table>
+
 ## `TopologyReference`     {#kueue-x-k8s-io-v1beta1-TopologyReference}
     
 (Alias of `string`)
@@ -2492,7 +2499,7 @@ domain indicated by the values field.</p>
 
 - [ResourceFlavorSpec](#kueue-x-k8s-io-v1beta1-ResourceFlavorSpec)
 
-- [Topology](#kueue-x-k8s-io-v1beta1-Topology)
+- [TopologyInfo](#kueue-x-k8s-io-v1beta1-TopologyInfo)
 
 
 <p>TopologyReference is the name of the Topology.</p>

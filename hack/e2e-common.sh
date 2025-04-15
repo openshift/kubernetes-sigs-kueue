@@ -33,8 +33,11 @@ if [[ -n ${JOBSET_VERSION:-} ]]; then
 fi
 
 if [[ -n ${KUBEFLOW_VERSION:-} ]]; then
-    export KUBEFLOW_MANIFEST=${ROOT_DIR}/test/e2e/config/multikueue
-    KUBEFLOW_IMAGE_VERSION=$($KUSTOMIZE build "$KUBEFLOW_MANIFEST" | $YQ e 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image | split(":") | .[1]')
+    export KUBEFLOW_MANIFEST_ORIG=${ROOT_DIR}/dep-crds/training-operator/manifests/overlays/standalone/kustomization.yaml
+    export KUBEFLOW_MANIFEST_PATCHED=${ROOT_DIR}/test/e2e/config/multikueue
+    # Extract the Kubeflow Training Operator image version tag (newTag) from the manifest.
+    # This is necessary because the image version tag does not follow the usual package versioning convention.
+    KUBEFLOW_IMAGE_VERSION=$($YQ '.images[] | select(.name | contains("training-operator")) | .newTag' "${KUBEFLOW_MANIFEST_ORIG}")
     export KUBEFLOW_IMAGE_VERSION
     export KUBEFLOW_IMAGE=kubeflow/training-operator:${KUBEFLOW_IMAGE_VERSION}
 fi
@@ -46,10 +49,9 @@ fi
 
 if [[ -n ${KUBERAY_VERSION:-} ]]; then
     export KUBERAY_MANIFEST="${ROOT_DIR}/dep-crds/ray-operator/default/"
-    export KUBERAY_IMAGE=bitnami/kuberay-operator:${KUBERAY_VERSION/#v}
+    export KUBERAY_IMAGE=quay.io/kuberay/operator:${KUBERAY_VERSION}
     export KUBERAY_RAY_IMAGE=rayproject/ray:2.9.0
     export KUBERAY_RAY_IMAGE_ARM=rayproject/ray:2.9.0-aarch64
-    export KUBERAY_CRDS=${ROOT_DIR}/dep-crds/ray-operator/crd/bases
 fi
 
 if [[ -n ${LEADERWORKERSET_VERSION:-} ]]; then
@@ -131,13 +133,41 @@ function cluster_kind_load {
 # $1 cluster
 # $2 image
 function cluster_kind_load_image {
-    $KIND load docker-image "$2" --name "$1"
+    # check if the command to get worker nodes could succeeded
+    if ! $KIND get nodes --name "$1" > /dev/null 2>&1; then
+        echo "Failed to retrieve nodes for cluster '$1'."
+        return 1
+    fi
+    # filter out 'control-plane' node, use only worker nodes to load image
+    worker_nodes=$($KIND get nodes --name "$1" | grep -v 'control-plane' | paste -sd "," -)
+    if [[ -n "$worker_nodes" ]]; then
+        $KIND load docker-image "$2" --name "$1" --nodes "$worker_nodes"
+    fi
+}
+
+# Wait until all cert-manager deployments are available.
+function wait_for_cert_manager_ready() {
+    echo "Waiting for cert-manager components to be ready..."
+    local deployments=(cert-manager cert-manager-cainjector cert-manager-webhook)
+    for dep in "${deployments[@]}"; do
+        echo "Waiting for deployment '$dep'..."
+        if ! kubectl wait --for=condition=Available deployment/"$dep" -n cert-manager --timeout=300s; then
+            echo "Timeout waiting for deployment '$dep' to become available."
+            exit 1
+        fi
+    done
+    echo "All cert-manager components are ready."
 }
 
 # $1 cluster
 function cluster_kueue_deploy {
     kubectl config use-context "kind-${1}"
-    kubectl apply --server-side -k test/e2e/config/default
+    if [[ -n ${CERTMANAGER_VERSION:-} ]]; then
+       wait_for_cert_manager_ready
+       kubectl apply --server-side -k test/e2e/config/certmanager
+    else
+       kubectl apply --server-side -k test/e2e/config/default  
+    fi
 }
 
 #$1 - cluster name
@@ -158,7 +188,7 @@ function install_jobset {
 function install_kubeflow {
     cluster_kind_load_image "${1}" "${KUBEFLOW_IMAGE}"
     kubectl config use-context "kind-${1}"
-    kubectl apply --server-side -k "${KUBEFLOW_MANIFEST}"
+    kubectl apply --server-side -k "${KUBEFLOW_MANIFEST_PATCHED}"
 }
 
 #$1 - cluster name
@@ -188,6 +218,11 @@ function install_lws {
     cluster_kind_load_image "${1}" "${LEADERWORKERSET_IMAGE/#v}"
     kubectl config use-context "kind-${1}"
     kubectl apply --server-side -f "${LEADERWORKERSET_MANIFEST}"
+}
+
+function install_cert_manager {
+    kubectl config use-context "kind-${1}"
+    kubectl apply --server-side -f "${CERTMANAGER_MANIFEST}"
 }
 
 INITIAL_IMAGE=$($YQ '.images[] | select(.name == "controller") | [.newName, .newTag] | join(":")' config/components/manager/kustomization.yaml)

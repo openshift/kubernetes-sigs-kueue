@@ -63,8 +63,8 @@ func (p *PriorityClassWrapper) Obj() *schedulingv1.PriorityClass {
 
 type WorkloadWrapper struct{ kueue.Workload }
 
-// MakeWorkload creates a wrapper for a Workload with a single
-// pod with a single container.
+// MakeWorkload creates a wrapper for a Workload with a single pod
+// with a single container.
 func MakeWorkload(name, ns string) *WorkloadWrapper {
 	return &WorkloadWrapper{kueue.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -74,6 +74,14 @@ func MakeWorkload(name, ns string) *WorkloadWrapper {
 			},
 		},
 	}}
+}
+
+// MakeWorkloadWithGeneratedName creates a wrapper for a Workload with a single pod
+// with a single container.
+func MakeWorkloadWithGeneratedName(namePrefix, ns string) *WorkloadWrapper {
+	wl := MakeWorkload("", ns)
+	wl.GenerateName = namePrefix
+	return wl
 }
 
 func (w *WorkloadWrapper) Obj() *kueue.Workload {
@@ -120,6 +128,10 @@ func (w *WorkloadWrapper) Limit(r corev1.ResourceName, q string) *WorkloadWrappe
 		res.Limits[r] = resource.MustParse(q)
 	}
 	return w
+}
+
+func (w *WorkloadWrapper) RequestAndLimit(r corev1.ResourceName, q string) *WorkloadWrapper {
+	return w.Request(r, q).Limit(r, q)
 }
 
 func (w *WorkloadWrapper) Queue(q string) *WorkloadWrapper {
@@ -309,12 +321,12 @@ func (w *WorkloadWrapper) Conditions(conditions ...metav1.Condition) *WorkloadWr
 }
 
 func (w *WorkloadWrapper) ControllerReference(gvk schema.GroupVersionKind, name, uid string) *WorkloadWrapper {
-	appendOwnerReference(&w.Workload, gvk, name, uid, ptr.To(true), ptr.To(true))
+	AppendOwnerReference(&w.Workload, gvk, name, uid, ptr.To(true), ptr.To(true))
 	return w
 }
 
 func (w *WorkloadWrapper) OwnerReference(gvk schema.GroupVersionKind, name, uid string) *WorkloadWrapper {
-	appendOwnerReference(&w.Workload, gvk, name, uid, nil, nil)
+	AppendOwnerReference(&w.Workload, gvk, name, uid, nil, nil)
 	return w
 }
 
@@ -1516,11 +1528,46 @@ func (w *PodTemplateWrapper) Toleration(toleration corev1.Toleration) *PodTempla
 }
 
 func (w *PodTemplateWrapper) ControllerReference(gvk schema.GroupVersionKind, name, uid string) *PodTemplateWrapper {
-	appendOwnerReference(&w.PodTemplate, gvk, name, uid, ptr.To(true), ptr.To(true))
+	AppendOwnerReference(&w.PodTemplate, gvk, name, uid, ptr.To(true), ptr.To(true))
 	return w
 }
 
-func appendOwnerReference(obj client.Object, gvk schema.GroupVersionKind, name, uid string, controller, blockDeletion *bool) {
+type NamespaceWrapper struct {
+	corev1.Namespace
+}
+
+func MakeNamespaceWrapper(name string) *NamespaceWrapper {
+	return &NamespaceWrapper{
+		corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+		},
+	}
+}
+
+func (w *NamespaceWrapper) Clone() *NamespaceWrapper {
+	return &NamespaceWrapper{Namespace: *w.DeepCopy()}
+}
+
+func (w *NamespaceWrapper) Obj() *corev1.Namespace {
+	return &w.Namespace
+}
+
+func (w *NamespaceWrapper) GenerateName(generateName string) *NamespaceWrapper {
+	w.Namespace.GenerateName = generateName
+	return w
+}
+
+func (w *NamespaceWrapper) Label(k, v string) *NamespaceWrapper {
+	if w.ObjectMeta.Labels == nil {
+		w.ObjectMeta.Labels = make(map[string]string)
+	}
+	w.ObjectMeta.Labels[k] = v
+	return w
+}
+
+func AppendOwnerReference(obj client.Object, gvk schema.GroupVersionKind, name, uid string, controller, blockDeletion *bool) {
 	obj.SetOwnerReferences(append(obj.GetOwnerReferences(), metav1.OwnerReference{
 		APIVersion:         gvk.GroupVersion().String(),
 		Kind:               gvk.Kind,
