@@ -64,17 +64,30 @@ type CohortSpec struct {
 	FairSharing *kueuebeta.FairSharing `json:"fairSharing,omitempty"`
 }
 
+// CohortStatus defines the observed state of Cohort.
+type CohortStatus struct {
+	// fairSharing contains the current state for this Cohort
+	// when participating in Fair Sharing.
+	// The is recorded only when Fair Sharing is enabled in the Kueue configuration.
+	// +optional
+	FairSharing *kueuebeta.FairSharingStatus `json:"fairSharing,omitempty"`
+}
+
 //+kubebuilder:object:root=true
 //+kubebuilder:resource:scope=Cluster
+//+kubebuilder:subresource:status
 
-// Cohort is the Schema for the cohorts API. Using Hierarchical
-// Cohorts (any Cohort which has a parent) with Fair Sharing
-// results in undefined behavior in 0.9
+// Cohort defines the Cohorts API.
+//
+// Hierarchical Cohorts (any Cohort which has a parent) are compatible
+// with Fair Sharing as of v0.11. Using these features together in
+// V0.9 and V0.10 is unsupported, and results in undefined behavior.
 type Cohort struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec CohortSpec `json:"spec,omitempty"`
+	Spec   CohortSpec   `json:"spec,omitempty"`
+	Status CohortStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true

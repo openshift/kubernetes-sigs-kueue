@@ -237,7 +237,7 @@ func TestUpdateCqStatusIfChanged(t *testing.T) {
 			if diff := cmp.Diff(tc.wantError, gotError, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Errorf("Unexpected error (-want/+got):\n%s", diff)
 			}
-			configCmpOpts := []cmp.Option{
+			configCmpOpts := cmp.Options{
 				cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 				cmpopts.IgnoreFields(kueue.ClusterQueuePendingWorkloadsStatus{}, "LastChangeTime"),
 				cmpopts.EquateEmpty(),
@@ -489,7 +489,7 @@ func TestRecordResourceMetrics(t *testing.T) {
 		},
 	}
 
-	opts := []cmp.Option{
+	opts := cmp.Options{
 		cmpopts.SortSlices(func(a, b testingmetrics.MetricDataPoint) bool { return a.Less(&b) }),
 		cmpopts.EquateEmpty(),
 	}
@@ -568,7 +568,7 @@ func TestClusterQueuePendingWorkloadsStatus(t *testing.T) {
 				QueueingStrategy(kueue.StrictFIFO).Obj()
 			lq := utiltesting.MakeLocalQueue(lqName, "").
 				ClusterQueue(cqName).Obj()
-			ctx := context.Background()
+			ctx := t.Context()
 
 			cl := utiltesting.NewClientBuilder().WithLists(defaultWls).WithObjects(lq, cq).WithStatusSubresource(lq, cq).
 				Build()

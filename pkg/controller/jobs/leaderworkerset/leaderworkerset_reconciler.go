@@ -20,8 +20,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,6 +36,7 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	podcontroller "sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -42,18 +46,24 @@ const (
 )
 
 type Reconciler struct {
-	client          client.Client
-	record          record.EventRecorder
-	labelKeysToCopy []string
+	client                       client.Client
+	log                          logr.Logger
+	record                       record.EventRecorder
+	labelKeysToCopy              []string
+	manageJobsWithoutQueueName   bool
+	managedJobsNamespaceSelector labels.Selector
 }
 
 func NewReconciler(client client.Client, eventRecorder record.EventRecorder, opts ...jobframework.Option) jobframework.JobReconcilerInterface {
 	options := jobframework.ProcessOptions(opts...)
 
 	return &Reconciler{
-		client:          client,
-		record:          eventRecorder,
-		labelKeysToCopy: options.LabelKeysToCopy,
+		client:                       client,
+		log:                          ctrl.Log.WithName("leaderworkerset-reconciler"),
+		record:                       eventRecorder,
+		labelKeysToCopy:              options.LabelKeysToCopy,
+		manageJobsWithoutQueueName:   options.ManageJobsWithoutQueueName,
+		managedJobsNamespaceSelector: options.ManagedJobsNamespaceSelector,
 	}
 }
 
@@ -112,7 +122,17 @@ func (r *Reconciler) createPrebuiltWorkloadIfNotExist(ctx context.Context, lws *
 
 func (r *Reconciler) createPrebuiltWorkload(ctx context.Context, lws *leaderworkersetv1.LeaderWorkerSet, index int32) error {
 	createdWorkload := r.constructWorkload(lws, index)
-	err := r.client.Create(ctx, createdWorkload)
+
+	priorityClassName, source, p, err := jobframework.ExtractPriority(ctx, r.client, lws, createdWorkload.Spec.PodSets, nil)
+	if err != nil {
+		return err
+	}
+
+	createdWorkload.Spec.PriorityClassName = priorityClassName
+	createdWorkload.Spec.Priority = &p
+	createdWorkload.Spec.PriorityClassSource = source
+
+	err = r.client.Create(ctx, createdWorkload)
 	if err != nil {
 		return err
 	}
@@ -131,19 +151,20 @@ func (r *Reconciler) podSets(lws *leaderworkersetv1.LeaderWorkerSet) []kueue.Pod
 	podSets := make([]kueue.PodSet, 0, 2)
 
 	if lws.Spec.LeaderWorkerTemplate.LeaderTemplate != nil {
-		podSets = append(podSets, kueue.PodSet{
+		podSet := kueue.PodSet{
 			Name:  leaderPodSetName,
 			Count: 1,
 			Template: corev1.PodTemplateSpec{
 				Spec: *lws.Spec.LeaderWorkerTemplate.LeaderTemplate.Spec.DeepCopy(),
 			},
-			TopologyRequest: jobframework.PodSetTopologyRequest(
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			podSet.TopologyRequest = jobframework.PodSetTopologyRequest(
 				&lws.Spec.LeaderWorkerTemplate.LeaderTemplate.ObjectMeta,
-				nil,
-				nil,
-				nil,
-			),
-		})
+				nil, nil, nil,
+			)
+		}
+		podSets = append(podSets, podSet)
 	}
 
 	defaultPodSetName := kueue.DefaultPodSetName
@@ -156,19 +177,23 @@ func (r *Reconciler) podSets(lws *leaderworkersetv1.LeaderWorkerSet) []kueue.Pod
 		defaultPodSetCount--
 	}
 
-	podSets = append(podSets, kueue.PodSet{
+	podSet := kueue.PodSet{
 		Name:  defaultPodSetName,
 		Count: defaultPodSetCount,
 		Template: corev1.PodTemplateSpec{
 			Spec: *lws.Spec.LeaderWorkerTemplate.WorkerTemplate.Spec.DeepCopy(),
 		},
-		TopologyRequest: jobframework.PodSetTopologyRequest(
+	}
+
+	if features.Enabled(features.TopologyAwareScheduling) {
+		podSet.TopologyRequest = jobframework.PodSetTopologyRequest(
 			&lws.Spec.LeaderWorkerTemplate.WorkerTemplate.ObjectMeta,
 			ptr.To(leaderworkersetv1.WorkerIndexLabelKey),
-			nil,
-			nil,
-		),
-	})
+			nil, nil,
+		)
+	}
+
+	podSets = append(podSets, podSet)
 
 	return podSets
 }
@@ -196,6 +221,16 @@ func (r *Reconciler) handle(obj client.Object) bool {
 	if !isLws {
 		return false
 	}
+
+	ctx := context.Background()
+	log := r.log.WithValues("leaderworkerset", klog.KObj(lws))
+	ctrl.LoggerInto(ctx, log)
+
 	// Handle only leaderworkerset managed by kueue.
-	return jobframework.IsManagedByKueue(lws)
+	suspend, err := jobframework.WorkloadShouldBeSuspended(ctx, lws, r.client, r.manageJobsWithoutQueueName, r.managedJobsNamespaceSelector)
+	if err != nil {
+		log.Error(err, "Failed to determine if the LeaderWorkerSet should be managed by Kueue")
+	}
+
+	return suspend
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,15 +38,11 @@ import (
 var _ = ginkgo.Describe("TopologyAwareScheduling for JobSet", func() {
 	var ns *corev1.Namespace
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "e2e-tas-jobset-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-tas-jobset-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 	})
 
 	ginkgo.When("Creating a JobSet", func() {
@@ -59,11 +54,11 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for JobSet", func() {
 		)
 		ginkgo.BeforeEach(func() {
 			topology = testing.MakeDefaultThreeLevelTopology("datacenter")
-			gomega.Expect(k8sClient.Create(ctx, topology)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, topology)
 
 			tasFlavor = testing.MakeResourceFlavor("tas-flavor").
 				NodeLabel(tasNodeGroupLabel, instanceType).TopologyName(topology.Name).Obj()
-			gomega.Expect(k8sClient.Create(ctx, tasFlavor)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, tasFlavor)
 			clusterQueue = testing.MakeClusterQueue("cluster-queue").
 				ResourceGroup(
 					*testing.MakeFlavorQuotas("tas-flavor").
@@ -71,11 +66,11 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for JobSet", func() {
 						Obj(),
 				).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, clusterQueue)
 			util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
 
 			localQueue = testing.MakeLocalQueue("main", ns.Name).ClusterQueue("cluster-queue").Obj()
-			gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, localQueue)
 		})
 		ginkgo.AfterEach(func() {
 			gomega.Expect(util.DeleteAllJobSetsInNamespace(ctx, k8sClient, ns)).Should(gomega.Succeed())
@@ -98,7 +93,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for JobSet", func() {
 					testingjobset.ReplicatedJobRequirements{
 						Name:        "replicated-job-1",
 						Image:       util.E2eTestAgnHostImage,
-						Args:        util.BehaviorWaitForDeletion,
+						Args:        util.BehaviorExitFast,
 						Replicas:    int32(replicas),
 						Parallelism: int32(parallelism),
 						Completions: int32(parallelism),
@@ -107,10 +102,9 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for JobSet", func() {
 						},
 					},
 				).
-				Request("replicated-job-1", extraResource, "1").
-				Limit("replicated-job-1", extraResource, "1").
+				RequestAndLimit("replicated-job-1", extraResource, "1").
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, sampleJob)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, sampleJob)
 
 			ginkgo.By("JobSet is unsuspended", func() {
 				gomega.Eventually(func(g gomega.Gomega) {

@@ -46,6 +46,8 @@ import (
 )
 
 var (
+	ErrCohortNotFound      = errors.New("cohort not found")
+	ErrCohortHasCycle      = errors.New("cohort has a cycle")
 	ErrCqNotFound          = errors.New("cluster queue not found")
 	errQNotFound           = errors.New("queue not found")
 	errWorkloadNotAdmitted = errors.New("workload not admitted by a ClusterQueue")
@@ -139,7 +141,7 @@ func (c *Cache) newClusterQueue(cq *kueue.ClusterQueue) (*clusterQueue, error) {
 		Name:                kueue.ClusterQueueReference(cq.Name),
 		Workloads:           make(map[string]*workload.Info),
 		WorkloadsNotReady:   sets.New[string](),
-		localQueues:         make(map[string]*queue),
+		localQueues:         make(map[string]*LocalQueue),
 		podsReadyTracking:   c.podsReadyTracking,
 		workloadInfoOptions: c.workloadInfoOptions,
 		AdmittedUsage:       make(resources.FlavorResourceQuantities),
@@ -148,7 +150,7 @@ func (c *Cache) newClusterQueue(cq *kueue.ClusterQueue) (*clusterQueue, error) {
 	}
 	c.hm.AddClusterQueue(cqImpl)
 	c.hm.UpdateClusterQueueEdge(kueue.ClusterQueueReference(cq.Name), cq.Spec.Cohort)
-	if err := cqImpl.updateClusterQueue(c.hm.CycleChecker, cq, c.resourceFlavors, c.admissionChecks, nil); err != nil {
+	if err := cqImpl.updateClusterQueue(cq, c.resourceFlavors, c.admissionChecks, nil); err != nil {
 		return nil, err
 	}
 
@@ -395,7 +397,7 @@ func (c *Cache) AddClusterQueue(ctx context.Context, cq *kueue.ClusterQueue) err
 	}
 	for _, q := range queues.Items {
 		qKey := queueKey(&q)
-		qImpl := &queue{
+		qImpl := &LocalQueue{
 			key:                qKey,
 			reservingWorkloads: 0,
 			admittedWorkloads:  0,
@@ -428,7 +430,7 @@ func (c *Cache) UpdateClusterQueue(cq *kueue.ClusterQueue) error {
 	}
 	oldParent := cqImpl.Parent()
 	c.hm.UpdateClusterQueueEdge(kueue.ClusterQueueReference(cq.Name), cq.Spec.Cohort)
-	if err := cqImpl.updateClusterQueue(c.hm.CycleChecker, cq, c.resourceFlavors, c.admissionChecks, oldParent); err != nil {
+	if err := cqImpl.updateClusterQueue(cq, c.resourceFlavors, c.admissionChecks, oldParent); err != nil {
 		return err
 	}
 	for _, qImpl := range cqImpl.localQueues {
@@ -465,7 +467,7 @@ func (c *Cache) AddOrUpdateCohort(apiCohort *kueuealpha.Cohort) error {
 	cohort := c.hm.Cohort(cohortName)
 	oldParent := cohort.Parent()
 	c.hm.UpdateCohortEdge(cohortName, apiCohort.Spec.Parent)
-	return cohort.updateCohort(c.hm.CycleChecker, apiCohort, oldParent)
+	return cohort.updateCohort(apiCohort, oldParent)
 }
 
 func (c *Cache) DeleteCohort(cohortName kueue.CohortReference) {
@@ -688,6 +690,56 @@ func (c *Cache) Usage(cqObj *kueue.ClusterQueue) (*ClusterQueueUsageStats, error
 	return stats, nil
 }
 
+type CohortUsageStats struct {
+	WeightedShare int64
+}
+
+func (c *Cache) CohortStats(cohortObj *kueuealpha.Cohort) (*CohortUsageStats, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	cohort := c.hm.Cohort(kueue.CohortReference(cohortObj.Name))
+	if cohort == nil {
+		return nil, ErrCohortNotFound
+	}
+
+	stats := &CohortUsageStats{}
+	if c.fairSharingEnabled {
+		weightedShare, _ := dominantResourceShare(cohort, nil)
+		stats.WeightedShare = int64(weightedShare)
+	}
+
+	return stats, nil
+}
+
+// ClusterQueueAncestors returns all ancestors (Cohorts), excluding the root,
+// for a given ClusterQueue. If the ClusterQueue contains a Cohort cycle, it
+// returns ErrCohortHasCycle.
+func (c *Cache) ClusterQueueAncestors(cqObj *kueue.ClusterQueue) ([]kueue.CohortReference, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if cqObj.Spec.Cohort == "" {
+		return nil, nil
+	}
+
+	cohort := c.hm.Cohort(cqObj.Spec.Cohort)
+	if cohort == nil {
+		return nil, nil
+	}
+	if hierarchy.HasCycle(cohort) {
+		return nil, ErrCohortHasCycle
+	}
+
+	var ancestors []kueue.CohortReference
+
+	for ancestor := range cohort.PathSelfToRoot() {
+		ancestors = append(ancestors, ancestor.Name)
+	}
+
+	return ancestors[:len(ancestors)-1], nil
+}
+
 func getUsage(frq resources.FlavorResourceQuantities, cq *clusterQueue) []kueue.FlavorUsage {
 	usage := make([]kueue.FlavorUsage, 0, len(frq))
 	for _, rg := range cq.ResourceGroups {
@@ -768,7 +820,7 @@ func (c *Cache) LocalQueueUsage(qObj *kueue.LocalQueue) (*LocalQueueUsageStats, 
 					flavor.NodeTaints = rf.Spec.NodeTaints
 					if features.Enabled(features.TopologyAwareScheduling) && rf.Spec.TopologyName != nil {
 						if topology, ok := c.tasCache.flavors[rgFlavor]; ok {
-							flavor.Topology = &kueue.Topology{
+							flavor.Topology = &kueue.TopologyInfo{
 								Name:   topology.TopologyName,
 								Levels: topology.Levels,
 							}

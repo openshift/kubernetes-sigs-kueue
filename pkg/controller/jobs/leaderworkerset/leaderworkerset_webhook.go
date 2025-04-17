@@ -45,9 +45,13 @@ type Webhook struct {
 	queues                       *queue.Manager
 }
 
-func SetupWebhook(mgr ctrl.Manager, _ ...jobframework.Option) error {
+func SetupWebhook(mgr ctrl.Manager, opts ...jobframework.Option) error {
+	options := jobframework.ProcessOptions(opts...)
 	wh := &Webhook{
-		client: mgr.GetClient(),
+		client:                       mgr.GetClient(),
+		manageJobsWithoutQueueName:   options.ManageJobsWithoutQueueName,
+		managedJobsNamespaceSelector: options.ManagedJobsNamespaceSelector,
+		queues:                       options.Queues,
 	}
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(&leaderworkersetv1.LeaderWorkerSet{}).
@@ -72,17 +76,24 @@ func (wh *Webhook) Default(ctx context.Context, obj runtime.Object) error {
 	}
 	if suspend {
 		if lws.Spec.LeaderWorkerTemplate.LeaderTemplate != nil {
-			wh.podTemplateSpecDefault(lws.Spec.LeaderWorkerTemplate.LeaderTemplate)
+			wh.podTemplateSpecDefault(lws, lws.Spec.LeaderWorkerTemplate.LeaderTemplate)
 		}
-		wh.podTemplateSpecDefault(&lws.Spec.LeaderWorkerTemplate.WorkerTemplate)
+		wh.podTemplateSpecDefault(lws, &lws.Spec.LeaderWorkerTemplate.WorkerTemplate)
 	}
 
 	return nil
 }
 
-func (wh *Webhook) podTemplateSpecDefault(podTemplateSpec *corev1.PodTemplateSpec) {
+func (wh *Webhook) podTemplateSpecDefault(lws *LeaderWorkerSet, podTemplateSpec *corev1.PodTemplateSpec) {
+	if priorityClass := jobframework.WorkloadPriorityClassName(lws.Object()); priorityClass != "" {
+		if podTemplateSpec.Labels == nil {
+			podTemplateSpec.Labels = make(map[string]string, 1)
+		}
+		podTemplateSpec.Labels[constants.WorkloadPriorityClassLabel] = priorityClass
+	}
+
 	if podTemplateSpec.Annotations == nil {
-		podTemplateSpec.Annotations = make(map[string]string, 1)
+		podTemplateSpec.Annotations = make(map[string]string, 2)
 	}
 	podTemplateSpec.Annotations[podconstants.SuspendedByParentAnnotation] = FrameworkName
 	podTemplateSpec.Annotations[podconstants.GroupServingAnnotationKey] = podconstants.GroupServingAnnotationValue
@@ -134,7 +145,11 @@ func (wh *Webhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Ob
 		oldLeaderWorkerSet.Object(),
 	)...)
 
-	if jobframework.IsManagedByKueue(newLeaderWorkerSet.Object()) {
+	suspend, err := jobframework.WorkloadShouldBeSuspended(ctx, newLeaderWorkerSet.Object(), wh.client, wh.manageJobsWithoutQueueName, wh.managedJobsNamespaceSelector)
+	if err != nil {
+		return nil, err
+	}
+	if suspend {
 		allErrs = append(allErrs, validateImmutablePodTemplateSpec(
 			newLeaderWorkerSet.Spec.LeaderWorkerTemplate.LeaderTemplate,
 			oldLeaderWorkerSet.Spec.LeaderWorkerTemplate.LeaderTemplate,

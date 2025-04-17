@@ -17,12 +17,10 @@ limitations under the License.
 package jobframework_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,39 +51,39 @@ var _ jobframework.GenericJob = (*testGenericJob)(nil)
 var _ jobframework.JobWithCustomValidation = (*testGenericJob)(nil)
 var _ jobframework.JobWithManagedBy = (*testGenericJob)(nil)
 
-func (t *testGenericJob) Object() client.Object {
-	return t.Job
+func (j *testGenericJob) Object() client.Object {
+	return j.Job
 }
 
-func (t *testGenericJob) IsSuspended() bool {
-	return ptr.Deref(t.Spec.Suspend, false)
+func (j *testGenericJob) IsSuspended() bool {
+	return ptr.Deref(j.Spec.Suspend, false)
 }
 
-func (t *testGenericJob) Suspend() {
-	t.Spec.Suspend = ptr.To(true)
+func (j *testGenericJob) Suspend() {
+	j.Spec.Suspend = ptr.To(true)
 }
 
-func (t *testGenericJob) RunWithPodSetsInfo([]podset.PodSetInfo) error {
+func (j *testGenericJob) RunWithPodSetsInfo([]podset.PodSetInfo) error {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) RestorePodSetsInfo([]podset.PodSetInfo) bool {
+func (j *testGenericJob) RestorePodSetsInfo([]podset.PodSetInfo) bool {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) Finished() (string, bool, bool) {
+func (j *testGenericJob) Finished() (string, bool, bool) {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) PodSets() ([]kueue.PodSet, error) {
+func (j *testGenericJob) PodSets() ([]kueue.PodSet, error) {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) IsActive() bool {
+func (j *testGenericJob) IsActive() bool {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) PodsReady() bool {
+func (j *testGenericJob) PodsReady() bool {
 	panic("not implemented")
 }
 
@@ -103,40 +101,40 @@ func (j *testGenericJob) SetManagedBy(managedBy *string) {
 	j.Spec.ManagedBy = managedBy
 }
 
-func (t *testGenericJob) GVK() schema.GroupVersionKind {
+func (j *testGenericJob) GVK() schema.GroupVersionKind {
 	panic("not implemented")
 }
 
-func (t *testGenericJob) ValidateOnCreate() field.ErrorList {
-	if t.validateOnCreate != nil {
-		return t.validateOnCreate()
+func (j *testGenericJob) ValidateOnCreate() field.ErrorList {
+	if j.validateOnCreate != nil {
+		return j.validateOnCreate()
 	}
 	return nil
 }
 
-func (t *testGenericJob) ValidateOnUpdate(oldJob jobframework.GenericJob) field.ErrorList {
-	if t.validateOnUpdate != nil {
-		return t.validateOnUpdate(oldJob)
+func (j *testGenericJob) ValidateOnUpdate(oldJob jobframework.GenericJob) field.ErrorList {
+	if j.validateOnUpdate != nil {
+		return j.validateOnUpdate(oldJob)
 	}
 	return nil
 }
 
-func (t *testGenericJob) withValidateOnCreate(validateOnCreate func() field.ErrorList) *testGenericJob {
-	t.validateOnCreate = validateOnCreate
-	return t
+func (j *testGenericJob) withValidateOnCreate(validateOnCreate func() field.ErrorList) *testGenericJob {
+	j.validateOnCreate = validateOnCreate
+	return j
 }
 
-func (t *testGenericJob) withValidateOnUpdate(validateOnUpdate func(jobframework.GenericJob) field.ErrorList) *testGenericJob {
-	t.validateOnUpdate = validateOnUpdate
-	return t
+func (j *testGenericJob) withValidateOnUpdate(validateOnUpdate func(jobframework.GenericJob) field.ErrorList) *testGenericJob {
+	j.validateOnUpdate = validateOnUpdate
+	return j
 }
 
-func (t *testGenericJob) fromObject(o runtime.Object) jobframework.GenericJob {
+func (j *testGenericJob) fromObject(o runtime.Object) jobframework.GenericJob {
 	if o == nil {
 		return nil
 	}
-	t.Job = o.(*batchv1.Job)
-	return t
+	j.Job = o.(*batchv1.Job)
+	return j
 }
 
 func makeTestGenericJob() *testGenericJob {
@@ -252,7 +250,7 @@ func TestBaseWebhookDefault(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.MultiKueue, tc.enableMultiKueue)
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			cl := clientBuilder.Build()
 			cqCache := cache.New(cl)
@@ -290,7 +288,7 @@ func TestBaseWebhookDefault(t *testing.T) {
 				Queues:                     queueManager,
 				Cache:                      cqCache,
 			}
-			if err := w.Default(context.Background(), tc.job); err != nil {
+			if err := w.Default(t.Context(), tc.job); err != nil {
 				t.Errorf("set defaults by base webhook")
 			}
 			if diff := cmp.Diff(tc.want, tc.job); len(diff) != 0 {
@@ -351,7 +349,7 @@ func TestValidateOnCreate(t *testing.T) {
 			w := &jobframework.BaseWebhook{
 				FromObject: makeTestGenericJob().withValidateOnCreate(tc.validateOnCreate).fromObject,
 			}
-			gotWarn, gotErr := w.ValidateCreate(context.Background(), tc.job)
+			gotWarn, gotErr := w.ValidateCreate(t.Context(), tc.job)
 			if diff := cmp.Diff(tc.wantErr, gotErr); diff != "" {
 				t.Errorf("validate create err mismatch (-want +got):\n%s", diff)
 			}
@@ -428,7 +426,7 @@ func TestValidateOnUpdate(t *testing.T) {
 			w := &jobframework.BaseWebhook{
 				FromObject: makeTestGenericJob().withValidateOnUpdate(tc.validateOnUpdate).fromObject,
 			}
-			gotWarn, gotErr := w.ValidateUpdate(context.Background(), tc.oldJob, tc.job)
+			gotWarn, gotErr := w.ValidateUpdate(t.Context(), tc.oldJob, tc.job)
 			if diff := cmp.Diff(tc.wantErr, gotErr); diff != "" {
 				t.Errorf("validate create err mismatch (-want +got):\n%s", diff)
 			}

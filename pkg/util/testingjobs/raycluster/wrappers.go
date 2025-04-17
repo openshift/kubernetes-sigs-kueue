@@ -195,8 +195,8 @@ func (j *ClusterWrapper) StatusConditions(c metav1.Condition) *ClusterWrapper {
 }
 
 // ManagedBy adds a managedby.
-func (j *ClusterWrapper) ManagedBy(_ string) *ClusterWrapper {
-	// j.Spec.ManagedBy = &c
+func (j *ClusterWrapper) ManagedBy(c string) *ClusterWrapper {
+	j.Spec.ManagedBy = &c
 	return j
 }
 
@@ -208,6 +208,21 @@ func (j *ClusterWrapper) Request(rayType rayv1.RayNodeType, r corev1.ResourceNam
 		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Resources.Requests[r] = resource.MustParse(v)
 	}
 	return j
+}
+
+// Limit adds a resource limit to the default container.
+func (j *ClusterWrapper) Limit(rayType rayv1.RayNodeType, r corev1.ResourceName, v string) *ClusterWrapper {
+	if rayType == rayv1.HeadNode {
+		j.Spec.HeadGroupSpec.Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	} else if rayType == rayv1.WorkerNode {
+		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	}
+	return j
+}
+
+// RequestAndLimit adds a resource request and limit to the default container.
+func (j *ClusterWrapper) RequestAndLimit(rayType rayv1.RayNodeType, r corev1.ResourceName, v string) *ClusterWrapper {
+	return j.Request(rayType, r, v).Limit(rayType, r, v)
 }
 
 func (j *ClusterWrapper) Image(rayType rayv1.RayNodeType, image string, args []string) *ClusterWrapper {
