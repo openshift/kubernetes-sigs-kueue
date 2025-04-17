@@ -39,11 +39,11 @@ const (
 	// statefulset/pod belong to.
 	GroupIndexLabelKey string = "leaderworkerset.sigs.k8s.io/group-index"
 
-	// Worker index will be added to pods as a label which is
+	// Worker index will be added to pods as a label and annotation which is
 	// the index/identity of the pod in the group.
 	WorkerIndexLabelKey string = "leaderworkerset.sigs.k8s.io/worker-index"
 
-	// Size will be added to pods as an annotation which corresponds to
+	// Size will be added to leader pods as an annotation which corresponds to
 	// LeaderWorkerSet.Spec.LeaderWorkerTemplate.Size.
 	SizeAnnotationKey string = "leaderworkerset.sigs.k8s.io/size"
 
@@ -62,16 +62,12 @@ const (
 	RevisionKey string = "leaderworkerset.sigs.k8s.io/template-revision-hash"
 
 	// Environment variable added to all containers in the LeaderWorkerSet to
-	// address the leader via the leader pod address.
+	// address the leader via the headless service.
 	LwsLeaderAddress string = "LWS_LEADER_ADDRESS"
 
 	// Environment variable added to all containers in the LeaderWorkerSet to
 	// track the size of the LWS group.
 	LwsGroupSize string = "LWS_GROUP_SIZE"
-
-	// Environment variable added to all containers in the LeaderWorkerSet to
-	// the index/identity of the pod in the group.
-	LwsWorkerIndex string = "LWS_WORKER_INDEX"
 
 	// Subgroup index tracks which subgroup the pod is part of. It will be added
 	// as a label to the pod only if LeaderWorkerSet.Spec.SubGroupSize is set.
@@ -79,14 +75,10 @@ const (
 
 	// SubGroupSize will be added to pods as an annotation which corresponds to
 	// LeaderWorkerSet.Spec.SubGroupPolicy.SubGroupSize
-	SubGroupSizeAnnotationKey string = "leaderworkerset.sigs.k8s.io/subgroup-size"
+	SubGroupSizeAnnotationKey string = "leaderworkerset.gke.io/subgroup-size"
 
 	// Pods that are part of the same subgroup will have the same unique hash value.
 	SubGroupUniqueHashLabelKey string = "leaderworkerset.sigs.k8s.io/subgroup-key"
-
-	// SubGroupPolicyType will be added to leader pods as an annotation which
-	// corresponds to LeaderWorkerSet.Spec.SubGroupPolicy.Type
-	SubGroupPolicyTypeAnnotationKey string = "leaderworkerset.sigs.k8s.io/subgroup-policy-type"
 
 	// Leader pods will have an annotation that determines what type of domain
 	// will be injected. Corresponds to LeaderWorkerSet.Spec.NetworkConfig.SubdomainPolicy
@@ -187,15 +179,6 @@ type RolloutStrategy struct {
 
 // SubGroupPolicy describes the policy that will be applied when creating subgroups.
 type SubGroupPolicy struct {
-
-	// Defines what type of Subgroups to create. Defaults to
-	// LeaderWorker
-	//
-	// +kubebuilder:validation:Enum={LeaderWorker,LeaderExcluded}
-	// +kubebuilder:default=LeaderWorker
-	// +optional
-	Type *SubGroupPolicyType `json:"subGroupPolicyType,omitempty"`
-
 	// The number of pods per subgroup. This value is immutable,
 	// and must not be greater than LeaderWorkerSet.Spec.Size.
 	// Size must be divisible by subGroupSize in which case the
@@ -204,25 +187,6 @@ type SubGroupPolicy struct {
 	// the extra pod, and will be part of the first subgroup.
 	SubGroupSize *int32 `json:"subGroupSize,omitempty"`
 }
-
-type SubGroupPolicyType string
-
-const (
-	// LeaderWorker will include the leader in the first subgroup.
-	// If (LeaderWorkerSet.Spec.LeaderWorkerTemplate.Size-1) is divisible
-	// by LeaderWorkerSet.Spec.SubGroupPolicy.Size, the groups will look like:
-	// (0, 1, ... subGroupSize), (subGroupSize + 1, ... 2 * subGroupSize), ...
-	// If not divisible, the groups will look like:
-	// (0, 1, ... subGroupSize-1), (subGroupSize, ... 2*subGroupSize - 1), ...
-	SubGroupPolicyTypeLeaderWorker SubGroupPolicyType = "LeaderWorker"
-
-	// LeaderExcluded excludes the leader from any subgroup.
-	// Only supported when (LeaderWorkerSet.Spec.LeaderWorkerTemplate.Size-1) is divisible
-	// by LeaderWorkerSet.Spec.SubGroupPolicy.Size.
-	// Groups will look like:
-	// (1, ... subGroupSize), (subGroupSize + 1, ... 2 * subGroupSize), ...
-	SubGroupPolicyTypeLeaderExcluded SubGroupPolicyType = "LeaderExcluded"
-)
 
 type NetworkConfig struct {
 	// SubdomainPolicy determines the policy that will be used when creating
