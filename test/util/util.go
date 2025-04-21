@@ -25,6 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -55,6 +57,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -69,6 +72,22 @@ import (
 	"sigs.k8s.io/kueue/pkg/util/testing"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
+
+const (
+	defaultLogLevel = -3
+)
+
+func logLevel() int {
+	level, err := strconv.Atoi(os.Getenv("TEST_LOG_LEVEL"))
+	if err != nil {
+		return defaultLogLevel
+	}
+	return level
+}
+
+var SetupLogger = sync.OnceFunc(func() {
+	ctrl.SetLogger(NewTestingLogger(ginkgo.GinkgoWriter, logLevel()))
+})
 
 type objAsPtr[T any] interface {
 	client.Object
@@ -196,6 +215,7 @@ func deleteAllPodsInNamespace(ctx context.Context, c client.Client, ns *corev1.N
 }
 
 func ExpectAllPodsInNamespaceDeleted(ctx context.Context, c client.Client, ns *corev1.Namespace) {
+	ginkgo.GinkgoHelper()
 	pods := corev1.PodList{}
 	gomega.Eventually(func(g gomega.Gomega) {
 		g.Expect(c.List(ctx, &pods, client.InNamespace(ns.Name))).Should(gomega.Succeed())
@@ -1006,4 +1026,17 @@ func FindDeploymentCondition(deployment *appsv1.Deployment, deploymentType appsv
 		}
 	}
 	return nil
+}
+
+func GetListOptsFromLabel(label string) *client.ListOptions {
+	selector, err := labels.Parse(label)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return &client.ListOptions{
+		LabelSelector: selector,
+	}
+}
+
+func MustCreate(ctx context.Context, c client.Client, obj client.Object) {
+	ginkgo.GinkgoHelper()
+	gomega.ExpectWithOffset(1, c.Create(ctx, obj)).Should(gomega.Succeed())
 }

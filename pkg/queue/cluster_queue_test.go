@@ -17,7 +17,6 @@ limitations under the License.
 package queue
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -54,7 +53,7 @@ func Test_PushOrUpdate(t *testing.T) {
 	now := time.Now()
 	minuteLater := now.Add(time.Minute)
 	fakeClock := testingclock.NewFakeClock(now)
-	cmpOpts := []cmp.Option{
+	cmpOpts := cmp.Options{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 	}
@@ -290,9 +289,9 @@ func Test_DeleteFromLocalQueue(t *testing.T) {
 
 func TestClusterQueueImpl(t *testing.T) {
 	cl := utiltesting.NewFakeClient(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns1", Labels: map[string]string{"dep": "eng"}}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns2", Labels: map[string]string{"dep": "sales"}}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns3", Labels: map[string]string{"dep": "marketing"}}},
+		utiltesting.MakeNamespaceWrapper("ns1").Label("dep", "eng").Obj(),
+		utiltesting.MakeNamespaceWrapper("ns2").Label("dep", "sales").Obj(),
+		utiltesting.MakeNamespaceWrapper("ns3").Label("dep", "marketing").Obj(),
 	)
 
 	now := time.Now()
@@ -443,7 +442,7 @@ func TestClusterQueueImpl(t *testing.T) {
 
 			if test.queueInadmissibleWorkloads {
 				if diff := cmp.Diff(test.wantInadmissibleWorkloadsRequeued,
-					cq.QueueInadmissibleWorkloads(context.Background(), cl)); diff != "" {
+					cq.QueueInadmissibleWorkloads(t.Context(), cl)); diff != "" {
 					t.Errorf("Unexpected requeuing of inadmissible workloads (-want,+got):\n%s", diff)
 				}
 			}
@@ -463,13 +462,8 @@ func TestQueueInadmissibleWorkloadsDuringScheduling(t *testing.T) {
 	cq := newClusterQueueImpl(defaultOrdering, testingclock.NewFakeClock(time.Now()))
 	cq.namespaceSelector = labels.Everything()
 	wl := utiltesting.MakeWorkload("workload-1", defaultNamespace).Obj()
-	cl := utiltesting.NewFakeClient(
-		wl,
-		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: defaultNamespace},
-		},
-	)
-	ctx := context.Background()
+	cl := utiltesting.NewFakeClient(wl, utiltesting.MakeNamespace(defaultNamespace))
+	ctx := t.Context()
 	cq.PushOrUpdate(workload.NewInfo(wl))
 
 	wantActiveWorkloads := []string{workload.Key(wl)}

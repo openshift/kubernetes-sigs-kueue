@@ -23,9 +23,11 @@ import (
 	"runtime"
 	"time"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	awv1beta2 "github.com/project-codeflare/appwrapper/api/v1beta2"
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
@@ -48,6 +50,7 @@ import (
 	visibility "sigs.k8s.io/kueue/apis/visibility/v1beta1"
 	kueueclientset "sigs.k8s.io/kueue/client-go/clientset/versioned"
 	visibilityv1beta1 "sigs.k8s.io/kueue/client-go/clientset/versioned/typed/visibility/v1beta1"
+	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 const (
@@ -66,6 +69,9 @@ func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) 
 	gomega.ExpectWithOffset(1, cfg).NotTo(gomega.BeNil())
 
 	err = kueue.AddToScheme(scheme.Scheme)
+	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
+
+	err = cmv1.AddToScheme(scheme.Scheme)
 	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
 
 	err = kueuealpha.AddToScheme(scheme.Scheme)
@@ -164,6 +170,8 @@ func rolloutOperatorDeployment(ctx context.Context, k8sClient client.Client, key
 func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, key types.NamespacedName) {
 	deployment := &appsv1.Deployment{}
 	pods := &corev1.PodList{}
+	waitForAvailableStart := time.Now()
+	ginkgo.By(fmt.Sprintf("Waiting for availability of deployment: %q", key))
 	gomega.EventuallyWithOffset(2, func(g gomega.Gomega) error {
 		g.Expect(k8sClient.Get(ctx, key, deployment)).To(gomega.Succeed())
 		g.Expect(k8sClient.List(ctx, pods, client.InNamespace(key.Namespace), client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
@@ -184,6 +192,7 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 		))
 		return nil
 	}, StartUpTimeout, Interval).Should(gomega.Succeed())
+	ginkgo.GinkgoLogr.Info("Deployment is available in the cluster", "deployment", key, "waitingTime", time.Since(waitForAvailableStart))
 }
 
 func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
@@ -217,7 +226,10 @@ func WaitForKubeFlowMPIOperatorAvailability(ctx context.Context, k8sClient clien
 }
 
 func WaitForKubeRayOperatorAvailability(ctx context.Context, k8sClient client.Client) {
-	kroKey := types.NamespacedName{Namespace: "ray-system", Name: "kuberay-operator"}
+	// TODO: use ray-system namespace instead.
+	// See discussions https://github.com/kubernetes-sigs/kueue/pull/4568#discussion_r2001045775 and
+	// https://github.com/ray-project/kuberay/pull/2624/files#r2001143254 for context.
+	kroKey := types.NamespacedName{Namespace: "default", Name: "kuberay-operator"}
 	waitForOperatorAvailability(ctx, k8sClient, kroKey)
 }
 
@@ -296,4 +308,20 @@ func GetKuberayTestImage() string {
 	}
 	gomega.Expect(found).To(gomega.BeTrue())
 	return kuberayTestImage
+}
+
+func CreateNamespaceWithLog(ctx context.Context, k8sClient client.Client, nsName string) *corev1.Namespace {
+	ginkgo.GinkgoHelper()
+	return CreateNamespaceFromObjectWithLog(ctx, k8sClient, utiltesting.MakeNamespace(nsName))
+}
+
+func CreateNamespaceFromPrefixWithLog(ctx context.Context, k8sClient client.Client, nsPrefix string) *corev1.Namespace {
+	ginkgo.GinkgoHelper()
+	return CreateNamespaceFromObjectWithLog(ctx, k8sClient, utiltesting.MakeNamespaceWithGenerateName(nsPrefix))
+}
+
+func CreateNamespaceFromObjectWithLog(ctx context.Context, k8sClient client.Client, ns *corev1.Namespace) *corev1.Namespace {
+	MustCreate(ctx, k8sClient, ns)
+	ginkgo.GinkgoLogr.Info(fmt.Sprintf("Created namespace: %s", ns.Name))
+	return ns
 }

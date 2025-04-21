@@ -23,8 +23,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
-	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 )
 
 // DeploymentWrapper wraps a Deployment.
@@ -82,12 +84,18 @@ func (d *DeploymentWrapper) Label(k, v string) *DeploymentWrapper {
 
 // Queue updates the queue name of the Deployment
 func (d *DeploymentWrapper) Queue(q string) *DeploymentWrapper {
-	return d.Label(constants.QueueLabel, q)
+	return d.Label(controllerconstants.QueueLabel, q)
 }
 
 // Name updated the name of the Deployment
 func (d *DeploymentWrapper) Name(n string) *DeploymentWrapper {
 	d.ObjectMeta.Name = n
+	return d
+}
+
+// UID updates the uid of the Deployment.
+func (d *DeploymentWrapper) UID(uid string) *DeploymentWrapper {
+	d.ObjectMeta.UID = types.UID(uid)
 	return d
 }
 
@@ -105,6 +113,20 @@ func (d *DeploymentWrapper) Request(r corev1.ResourceName, v string) *Deployment
 	}
 	d.Spec.Template.Spec.Containers[0].Resources.Requests[r] = resource.MustParse(v)
 	return d
+}
+
+// Limit adds a resource limit to the default container.
+func (d *DeploymentWrapper) Limit(r corev1.ResourceName, v string) *DeploymentWrapper {
+	if d.Spec.Template.Spec.Containers[0].Resources.Limits == nil {
+		d.Spec.Template.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
+	}
+	d.Spec.Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	return d
+}
+
+// RequestAndLimit adds a resource request and limit to the default container.
+func (d *DeploymentWrapper) RequestAndLimit(r corev1.ResourceName, v string) *DeploymentWrapper {
+	return d.Request(r, v).Limit(r, v)
 }
 
 // Replicas updated the replicas of the Deployment
@@ -139,5 +161,20 @@ func (d *DeploymentWrapper) PodTemplateAnnotation(k, v string) *DeploymentWrappe
 
 // PodTemplateSpecQueue updates the queue name of the pod template spec of the Deployment
 func (d *DeploymentWrapper) PodTemplateSpecQueue(q string) *DeploymentWrapper {
-	return d.PodTemplateSpecLabel(constants.QueueLabel, q)
+	return d.PodTemplateSpecLabel(controllerconstants.QueueLabel, q)
+}
+
+func (d *DeploymentWrapper) PodTemplateSpecManagedByKueue() *DeploymentWrapper {
+	return d.PodTemplateSpecLabel(constants.ManagedByKueueLabelKey, constants.ManagedByKueueLabelValue)
+}
+
+func (d *DeploymentWrapper) TerminationGracePeriod(seconds int64) *DeploymentWrapper {
+	d.Spec.Template.Spec.TerminationGracePeriodSeconds = &seconds
+	return d
+}
+
+func (d *DeploymentWrapper) SetTypeMeta() *DeploymentWrapper {
+	d.APIVersion = appsv1.SchemeGroupVersion.String()
+	d.Kind = "Deployment"
+	return d
 }

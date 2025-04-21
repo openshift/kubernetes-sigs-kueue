@@ -82,6 +82,7 @@ rules:
   - apiGroups:
       - apps
     resources:
+      - deployments
       - replicasets
       - statefulsets
     verbs:
@@ -233,6 +234,7 @@ rules:
     resources:
       - admissionchecks/status
       - clusterqueues/status
+      - cohorts/status
       - localqueues/status
       - multikueueclusters/status
       - workloads/status

@@ -22,7 +22,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -40,18 +39,13 @@ const (
 	TestNamespace = "ns"
 )
 
-func getClientBuilder() (*fake.ClientBuilder, context.Context) {
+func getClientBuilder(ctx context.Context) (*fake.ClientBuilder, context.Context) {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(kueue.AddToScheme(scheme))
 	utilruntime.Must(autoscaling.AddToScheme(scheme))
 
-	ctx := context.Background()
-	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: TestNamespace,
-		},
-	})
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(utiltesting.MakeNamespace(TestNamespace))
 	_ = SetupIndexer(ctx, utiltesting.AsIndexer(builder))
 	return builder, ctx
 }
@@ -137,7 +131,7 @@ func TestIndexProvisioningRequests(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			builder, ctx := getClientBuilder()
+			builder, ctx := getClientBuilder(t.Context())
 			k8sclient := builder.Build()
 			for _, req := range tc.requests {
 				if err := k8sclient.Create(ctx, req); err != nil {
@@ -247,7 +241,7 @@ func TestIndexWorkload(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			builder, ctx := getClientBuilder()
+			builder, ctx := getClientBuilder(t.Context())
 			k8sclient := builder.Build()
 			for _, wl := range tc.workloads {
 				if err := k8sclient.Create(ctx, wl); err != nil {
@@ -343,7 +337,7 @@ func TestIndexAdmissionChecks(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			builder, ctx := getClientBuilder()
+			builder, ctx := getClientBuilder(t.Context())
 			k8sclient := builder.Build()
 			for _, req := range tc.checks {
 				if err := k8sclient.Create(ctx, req); err != nil {

@@ -17,16 +17,15 @@ limitations under the License.
 package cache
 
 import (
-	"errors"
 	"maps"
 
 	"sigs.k8s.io/kueue/pkg/hierarchy"
 	"sigs.k8s.io/kueue/pkg/resources"
 )
 
-// ResourceNode is the shared representation of Quotas and Usage, used
+// resourceNode is the shared representation of Quotas and Usage, used
 // by ClusterQueues and Cohorts.
-type ResourceNode struct {
+type resourceNode struct {
 	// Quotas are the ResourceQuotas specified for the current
 	// node.
 	Quotas map[resources.FlavorResource]ResourceQuota
@@ -41,8 +40,8 @@ type ResourceNode struct {
 	Usage resources.FlavorResourceQuantities
 }
 
-func NewResourceNode() ResourceNode {
-	return ResourceNode{
+func NewResourceNode() resourceNode {
+	return resourceNode{
 		Quotas:       make(map[resources.FlavorResource]ResourceQuota),
 		SubtreeQuota: make(resources.FlavorResourceQuantities),
 		Usage:        make(resources.FlavorResourceQuantities),
@@ -51,8 +50,8 @@ func NewResourceNode() ResourceNode {
 
 // Clone clones the mutable field Usage, while returning copies to
 // Quota and SubtreeQuota (these are replaced with new maps upon update).
-func (r ResourceNode) Clone() ResourceNode {
-	return ResourceNode{
+func (r resourceNode) Clone() resourceNode {
+	return resourceNode{
 		Quotas:       r.Quotas,
 		SubtreeQuota: r.SubtreeQuota,
 		Usage:        maps.Clone(r.Usage),
@@ -61,7 +60,7 @@ func (r ResourceNode) Clone() ResourceNode {
 
 // guaranteedQuota is the capacity which will not be lent the node's
 // Cohort.
-func (r ResourceNode) guaranteedQuota(fr resources.FlavorResource) int64 {
+func (r resourceNode) guaranteedQuota(fr resources.FlavorResource) int64 {
 	if lendingLimit := r.Quotas[fr].LendingLimit; lendingLimit != nil {
 		return max(0, r.SubtreeQuota[fr]-*lendingLimit)
 	}
@@ -72,7 +71,7 @@ func (r ResourceNode) guaranteedQuota(fr resources.FlavorResource) int64 {
 // by providing access to the contained ResourceNode, with the ability
 // to navigate to the parent node.
 type hierarchicalResourceNode interface {
-	getResourceNode() ResourceNode
+	getResourceNode() resourceNode
 
 	HasParent() bool
 	parentHRN() hierarchicalResourceNode
@@ -155,9 +154,9 @@ func updateClusterQueueResourceNode(cq *clusterQueue) {
 // updateCohortTreeResources traverses the Cohort tree from the root
 // to accumulate SubtreeQuota and Usage. It returns an error if the
 // provided Cohort has a cycle.
-func updateCohortTreeResources(cohort *cohort, cycleChecker hierarchy.CycleChecker) error {
-	if cycleChecker.HasCycle(cohort) {
-		return errors.New("cohort has a cycle")
+func updateCohortTreeResources(cohort *cohort) error {
+	if hierarchy.HasCycle(cohort) {
+		return ErrCohortHasCycle
 	}
 	updateCohortResourceNode(cohort.getRootUnsafe())
 	return nil

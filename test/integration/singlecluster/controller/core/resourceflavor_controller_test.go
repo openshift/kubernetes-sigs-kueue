@@ -20,7 +20,6 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
@@ -40,12 +39,7 @@ var _ = ginkgo.Describe("ResourceFlavor controller", ginkgo.Ordered, ginkgo.Cont
 	})
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-resourceflavor-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-resourceflavor-")
 	})
 
 	ginkgo.AfterEach(func() {
@@ -62,8 +56,8 @@ var _ = ginkgo.Describe("ResourceFlavor controller", ginkgo.Ordered, ginkgo.Cont
 				ResourceGroup(*utiltesting.MakeFlavorQuotas("flavor").Resource(corev1.ResourceCPU, "5").Obj()).
 				Obj()
 
-			gomega.Expect(k8sClient.Create(ctx, resourceFlavor)).To(gomega.Succeed())
-			gomega.Expect(k8sClient.Create(ctx, clusterQueue)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, resourceFlavor)
+			util.MustCreate(ctx, k8sClient, clusterQueue)
 
 			ginkgo.By("Wait for the queue to become active", func() {
 				util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)

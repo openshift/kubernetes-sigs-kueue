@@ -178,6 +178,11 @@ func (j *MPIJobWrapper) Limit(replicaType kfmpi.MPIReplicaType, r corev1.Resourc
 	return j
 }
 
+// RequestAndLimit adds a resource request and limit to the default container.
+func (j *MPIJobWrapper) RequestAndLimit(replicaType kfmpi.MPIReplicaType, r corev1.ResourceName, v string) *MPIJobWrapper {
+	return j.Request(replicaType, r, v).Limit(replicaType, r, v)
+}
+
 // Parallelism updates job parallelism.
 func (j *MPIJobWrapper) Parallelism(p int32) *MPIJobWrapper {
 	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeWorker].Replicas = ptr.To(p)
@@ -247,5 +252,11 @@ func (j *MPIJobWrapper) Image(replicaType kfmpi.MPIReplicaType, image string, ar
 // ManagedBy adds a managedby.
 func (j *MPIJobWrapper) ManagedBy(c string) *MPIJobWrapper {
 	j.Spec.RunPolicy.ManagedBy = &c
+	return j
+}
+
+func (j *MPIJobWrapper) TerminationGracePeriodSeconds(seconds int64) *MPIJobWrapper {
+	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeLauncher].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
+	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeWorker].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
 	return j
 }

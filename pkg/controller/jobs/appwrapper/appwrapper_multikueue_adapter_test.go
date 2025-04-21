@@ -42,14 +42,16 @@ const (
 )
 
 func TestMultiKueueAdapter(t *testing.T) {
-	objCheckOpts := []cmp.Option{
+	objCheckOpts := cmp.Options{
 		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion"),
 		cmpopts.IgnoreFields(awv1beta2.AppWrapperComponent{}, "Template"),
 		cmpopts.EquateEmpty(),
 	}
 
 	baseAppWrapperBuilder := utiltestingaw.MakeAppWrapper("aw1", TestNamespace).
-		Component(utiltestingjob.MakeJob("job", "ns").SetTypeMeta().Parallelism(2).Obj())
+		Component(utiltestingaw.Component{
+			Template: utiltestingjob.MakeJob("job", "ns").SetTypeMeta().Parallelism(2).Obj(),
+		})
 	baseAppWrapperManagedByKueueBuilder := baseAppWrapperBuilder.DeepCopy().ManagedBy(kueue.MultiKueueControllerName)
 
 	cases := map[string]struct {
