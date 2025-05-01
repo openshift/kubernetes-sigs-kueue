@@ -1,5 +1,5 @@
 ARG BUILDER_IMAGE=brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_9_1.23
-ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-micro@sha256:3d7dff3c85eb3c248d121407ef4b6ac0002a7f8ff565eab5a2d92e63be766a31
+ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-micro@sha256:84bb350a205a892350d995177f51c81180397d63f1028634623a0c487837f90c
 
 # Build the manager binary
 FROM ${BUILDER_IMAGE} AS builder
