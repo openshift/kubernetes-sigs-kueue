@@ -38,6 +38,8 @@ IMAGE_NAME := kueue
 IMAGE_REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME)
 IMAGE_TAG ?= $(IMAGE_REPO):$(GIT_TAG)
 HELM_CHART_REPO := $(STAGING_IMAGE_REGISTRY)/kueue/charts
+RAY_VERSION := 2.41.0
+RAYMINI_VERSION ?= 0.0.1
 
 ifdef EXTRA_TAG
 IMAGE_EXTRA_TAG ?= $(IMAGE_REPO):$(EXTRA_TAG)
@@ -77,7 +79,7 @@ LD_FLAGS += -X '$(version_pkg).GitCommit=$(shell git rev-parse HEAD)'
 
 # Update these variables when preparing a new release or a release branch.
 # Then run `make prepare-release-branch`
-RELEASE_VERSION=v0.11.3
+RELEASE_VERSION=v0.11.4
 RELEASE_BRANCH=release-0.11
 # Version used form Helm which is not using the leading "v"
 CHART_VERSION := $(shell echo $(RELEASE_VERSION) | cut -c2-)
@@ -156,6 +158,14 @@ toc-update: mdtoc
 toc-verify: mdtoc
 	./hack/verify-toc.sh
 
+.PHONY: helm-lint
+helm-lint: helm ## Run Helm chart lint test.
+	${HELM} lint charts/kueue
+
+.PHONY: helm-verify
+helm-verify: helm helm-lint ## run helm template and detect any rendering failures
+# test default values
+	$(HELM) template charts/kueue > /dev/null
 .PHONY: vet
 vet: ## Run go vet against code.
 	$(GO_CMD) vet ./...
@@ -174,7 +184,7 @@ shell-lint: ## Run shell linting.
 
 PATHS_TO_VERIFY := config/components apis charts/kueue/templates client-go site/
 .PHONY: verify
-verify: gomod-verify ci-lint fmt-verify shell-lint toc-verify manifests generate update-helm prepare-release-branch
+verify: gomod-verify ci-lint fmt-verify shell-lint toc-verify manifests generate update-helm helm-verify prepare-release-branch
 	git --no-pager diff --exit-code $(PATHS_TO_VERIFY)
 	if git ls-files --exclude-standard --others $(PATHS_TO_VERIFY) | grep -q . ; then exit 1; fi
 
@@ -380,3 +390,19 @@ generate-kueuectl-docs: kueuectl-docs
 	$(PROJECT_DIR)/bin/kueuectl-docs \
 		$(PROJECT_DIR)/cmd/kueuectl-docs/templates \
 		$(PROJECT_DIR)/site/content/en/docs/reference/kubectl-kueue/commands
+
+# Build the ray-project-mini image
+.PHONY: ray-project-mini-image-build
+ray-project-mini-image-build:
+	$(IMAGE_BUILD_CMD) \
+		-t $(IMAGE_REGISTRY)/ray-project-mini:$(RAYMINI_VERSION) \
+		--platform=$(PLATFORMS) \
+		--build-arg RAY_VERSION=$(RAY_VERSION) \
+		$(PUSH) \
+		-f ./hack/internal/test-images/ray/Dockerfile ./ \
+
+# The step is required for local e2e test run
+.PHONY: kind-ray-project-mini-image-build
+kind-ray-project-mini-image-build: PLATFORMS=linux/amd64
+kind-ray-project-mini-image-build: PUSH=--load
+kind-ray-project-mini-image-build: ray-project-mini-image-build

@@ -90,13 +90,18 @@ var (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:      SetupIndexes,
-		NewJob:            NewJob,
-		NewReconciler:     NewReconciler,
-		SetupWebhook:      SetupWebhook,
-		JobType:           &corev1.Pod{},
-		MultiKueueAdapter: &multiKueueAdapter{},
+		SetupIndexes:           SetupIndexes,
+		NewJob:                 NewJob,
+		NewReconciler:          NewReconciler,
+		SetupWebhook:           SetupWebhook,
+		JobType:                &corev1.Pod{},
+		MultiKueueAdapter:      &multiKueueAdapter{},
+		IsManagingObjectsOwner: isPod,
 	}))
+}
+
+func isPod(ref *metav1.OwnerReference) bool {
+	return ref.Kind == "Pod" && ref.APIVersion == "v1"
 }
 
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
@@ -161,6 +166,7 @@ var (
 	_ jobframework.JobWithFinalize                 = (*Pod)(nil)
 	_ jobframework.ComposableJob                   = (*Pod)(nil)
 	_ jobframework.JobWithCustomWorkloadConditions = (*Pod)(nil)
+	_ jobframework.TopLevelJob                     = (*Pod)(nil)
 )
 
 type options struct {
@@ -320,6 +326,10 @@ func (p *Pod) Run(ctx context.Context, c client.Client, podSetsInfo []podset.Pod
 	})
 }
 
+func (p *Pod) IsTopLevel() bool {
+	return true
+}
+
 // RunWithPodSetsInfo will inject the node affinity and podSet counts extracting from workload to job and unsuspend it.
 func (p *Pod) RunWithPodSetsInfo(_ []podset.PodSetInfo) error {
 	// Not implemented because this is not called when JobWithCustomRun is implemented.
@@ -335,6 +345,10 @@ func (p *Pod) RestorePodSetsInfo(_ []podset.PodSetInfo) bool {
 // Finished means whether the job is completed/failed or not,
 // condition represents the workload finished condition.
 func (p *Pod) Finished() (message string, success, finished bool) {
+	if p.isServing() {
+		return "", true, false
+	}
+
 	finished = true
 	success = true
 

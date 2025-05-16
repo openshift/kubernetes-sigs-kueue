@@ -363,6 +363,21 @@ func TestSchedule(t *testing.T) {
 				},
 			},
 		},
+		"skip workload with missing or deleted ClusterQueue (NoFit)": {
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("missing-cq-workload", "sales").
+					Queue("non-existent-queue").
+					PodSets(*utiltesting.MakePodSet("set", 1).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Generation(1).
+					Obj(),
+			},
+			// Expect no panics and workload skipped.
+			wantLeft:     nil,
+			wantEvents:   nil,
+			eventCmpOpts: ignoreEventMessageCmpOpts,
+		},
 		"workload fits in single clusterQueue, with check state pending": {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("foo", "sales").
@@ -5530,6 +5545,51 @@ func TestScheduleForTAS(t *testing.T) {
 					EventType: "Warning",
 					Reason:    "Pending",
 					Message:   `couldn't assign flavors to pod set one: topology "tas-single-level" doesn't allow to fit any of 1 pod(s)`,
+				},
+			},
+		},
+		"workload with zero value request gets scheduled": {
+			nodes:           defaultSingleNode,
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "0").
+						Request(corev1.ResourceMemory, "10Mi").
+						Obj()).
+					Obj(),
+			},
+			wantNewAssignments: map[string]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "0").
+					Assignment(corev1.ResourceMemory, "tas-default", "10Mi").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
 				},
 			},
 		},
