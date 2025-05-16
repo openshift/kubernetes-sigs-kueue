@@ -163,9 +163,6 @@ func (r *Reconciler) createPrebuiltWorkload(ctx context.Context, lws *leaderwork
 		return err
 	}
 
-func (r *Reconciler) createPrebuiltWorkload(ctx context.Context, lws *leaderworkersetv1.LeaderWorkerSet, index int32) error {
-	createdWorkload := r.constructWorkload(lws, index)
-
 	priorityClassName, source, p, err := jobframework.ExtractPriority(ctx, r.client, lws, createdWorkload.Spec.PodSets, nil)
 	if err != nil {
 		return err

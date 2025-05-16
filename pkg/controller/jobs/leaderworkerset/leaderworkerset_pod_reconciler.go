@@ -128,7 +128,7 @@ func (r *PodReconciler) setDefault(ctx context.Context, pod *corev1.Pod) (bool, 
 	pod.Labels[constants.ManagedByKueueLabelKey] = constants.ManagedByKueueLabelValue
 	pod.Labels[controllerconstants.QueueLabel] = queueName
 	pod.Labels[podconstants.GroupNameLabel] = wlName
-	pod.Labels[constants.PrebuiltWorkloadLabel] = wlName
+	pod.Labels[controllerconstants.PrebuiltWorkloadLabel] = wlName
 	pod.Annotations[podconstants.GroupTotalCountAnnotation] = fmt.Sprint(ptr.Deref(lws.Spec.LeaderWorkerTemplate.Size, 1))
 	pod.Annotations[podconstants.RoleHashAnnotation] = string(kueue.DefaultPodSetName)
 
