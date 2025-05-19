@@ -35,20 +35,22 @@ readonly k8s_registry="registry.k8s.io/kueue"
 readonly semver_regex='^v([0-9]+)(\.[0-9]+){1,2}$'
 
 image_repository=${IMAGE_REPO}
-chart_version=${GIT_TAG}
+app_version=${GIT_TAG}
 if [[ ${EXTRA_TAG} =~ ${semver_regex} ]]
 then
 	image_repository=${k8s_registry}/kueue
-	chart_version=${EXTRA_TAG}
+	app_version=${EXTRA_TAG}
 fi
+# Strip leading v from version
+chart_version="${app_version/#v/}"
 
 default_image_repo=$(${YQ} ".controllerManager.manager.image.repository" charts/kueue/values.yaml)
 readonly default_image_repo
 
 # Update the image repo, tag and policy
-${YQ}  e  ".controllerManager.manager.image.repository = \"${image_repository}\" | .controllerManager.manager.image.tag = \"${chart_version}\" | .controllerManager.manager.image.pullPolicy = \"IfNotPresent\"" -i charts/kueue/values.yaml
+${YQ}  e  ".controllerManager.manager.image.repository = \"${image_repository}\" | .controllerManager.manager.image.tag = \"${app_version}\" | .controllerManager.manager.image.pullPolicy = \"IfNotPresent\"" -i charts/kueue/values.yaml
 
-${HELM} package --version "${chart_version}" --app-version "${chart_version}" charts/kueue -d "${DEST_CHART_DIR}"
+${HELM} package --version "${chart_version}" --app-version "${app_version}" charts/kueue -d "${DEST_CHART_DIR}"
 
 # Revert the image changes
 ${YQ}  e  ".controllerManager.manager.image.repository = \"${default_image_repo}\" | .controllerManager.manager.image.tag = \"main\" | .controllerManager.manager.image.pullPolicy = \"Always\"" -i charts/kueue/values.yaml

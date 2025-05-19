@@ -43,6 +43,9 @@ Changes since `0.11.1`:
 
 ## v0.11.0
 
+IMPORTANT: Avoid using this release due to the corrupted [Topology CRD specification](https://github.com/kubernetes-sigs/kueue/issues/4850).
+When upgrading to the newer version please reinstall Kueue. If you are not using TopologyAwareScheduling the upgrading is not urgent.
+
 Changes since `0.10.0`:
 
 ## Urgent Upgrade Notes

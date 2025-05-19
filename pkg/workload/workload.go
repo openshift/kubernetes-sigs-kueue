@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -652,7 +653,7 @@ func PropagateResourceRequests(w *kueue.Workload, info *Info) bool {
 		match := true
 		for idx := range w.Status.ResourceRequests {
 			if w.Status.ResourceRequests[idx].Name != info.TotalRequests[idx].Name ||
-				!maps.Equal(w.Status.ResourceRequests[idx].Resources, info.TotalRequests[idx].Requests.ToResourceList()) {
+				!equality.Semantic.DeepEqual(w.Status.ResourceRequests[idx].Resources, info.TotalRequests[idx].Requests.ToResourceList()) {
 				match = false
 				break
 			}
@@ -709,10 +710,15 @@ func AdmissionChecksStatusPatch(w *kueue.Workload, wlCopy *kueue.Workload, c clo
 // If strict is true, resourceVersion will be part of the patch, make this call fail if Workload
 // was changed.
 func ApplyAdmissionStatus(ctx context.Context, c client.Client, w *kueue.Workload, strict bool, clk clock.Clock) error {
+	wlCopy := PrepareWorkloadPatch(w, strict, clk)
+	return ApplyAdmissionStatusPatch(ctx, c, wlCopy)
+}
+
+func PrepareWorkloadPatch(w *kueue.Workload, strict bool, clk clock.Clock) *kueue.Workload {
 	wlCopy := BaseSSAWorkload(w)
 	AdmissionStatusPatch(w, wlCopy, strict)
 	AdmissionChecksStatusPatch(w, wlCopy, clk)
-	return ApplyAdmissionStatusPatch(ctx, c, wlCopy)
+	return wlCopy
 }
 
 // ApplyAdmissionStatusPatch applies the patch of admission related status fields of a workload with SSA.
