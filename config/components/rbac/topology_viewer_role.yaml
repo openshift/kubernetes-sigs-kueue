@@ -8,11 +8,7 @@ rules:
 - apiGroups:
   - kueue.x-k8s.io
   resources:
-<<<<<<< HEAD
-  - topology
-=======
   - topologies
->>>>>>> kueue-upstream/release-0.11
   verbs:
   - get
   - list
