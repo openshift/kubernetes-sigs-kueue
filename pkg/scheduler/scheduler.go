@@ -196,7 +196,7 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 	logSnapshotIfVerbose(log, snapshot)
 
 	// 3. Calculate requirements (resource flavors, borrowing) for admitting workloads.
-	entries := s.nominate(ctx, headWorkloads, snapshot)
+	entries, inadmissibleEntries := s.nominate(ctx, headWorkloads, snapshot)
 
 	// 4. Create iterator which returns ordered entries.
 	iterator := makeIterator(ctx, entries, s.workloadOrdering, s.fairSharing.Enable)
@@ -213,7 +213,7 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 
 		cq := snapshot.ClusterQueue(e.ClusterQueue)
 		log := log.WithValues("workload", klog.KObj(e.Obj), "clusterQueue", klog.KRef("", string(e.ClusterQueue)))
-		if cq != nil && cq.HasParent() {
+		if cq.HasParent() {
 			log = log.WithValues("parentCohort", klog.KRef("", string(cq.Parent().GetName())), "rootCohort", klog.KRef("", string(cq.Parent().Root().GetName())))
 		}
 		ctx := ctrl.LoggerInto(ctx, log)
@@ -301,6 +301,11 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 			result = metrics.AdmissionResultSuccess
 		}
 	}
+	for _, e := range inadmissibleEntries {
+		logAdmissionAttemptIfVerbose(log, &e)
+		s.requeueAndUpdate(ctx, e)
+	}
+
 	reportSkippedPreemptions(skippedPreemptions)
 	metrics.AdmissionAttempt(result, s.clock.Since(startTime))
 	if result != metrics.AdmissionResultSuccess {
@@ -340,10 +345,12 @@ func (e *entry) assignmentUsage() workload.Usage {
 }
 
 // nominate returns the workloads with their requirements (resource flavors, borrowing) if
-// they were admitted by the clusterQueues in the snapshot.
-func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, snap *cache.Snapshot) []entry {
+// they were admitted by the clusterQueues in the snapshot. The second return value
+// is the list of inadmissibleEntries.
+func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, snap *cache.Snapshot) ([]entry, []entry) {
 	log := ctrl.LoggerFrom(ctx)
 	entries := make([]entry, 0, len(workloads))
+	var inadmissibleEntries []entry
 	for _, w := range workloads {
 		log := log.WithValues("workload", klog.KObj(w.Obj), "clusterQueue", klog.KRef("", string(w.ClusterQueue)))
 		ns := corev1.Namespace{}
@@ -371,10 +378,12 @@ func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, sna
 			e.assignment, e.preemptionTargets = s.getAssignments(log, &e.Info, snap)
 			e.inadmissibleMsg = e.assignment.Message()
 			e.Info.LastAssignment = &e.assignment.LastState
+			entries = append(entries, e)
+			continue
 		}
-		entries = append(entries, e)
+		inadmissibleEntries = append(inadmissibleEntries, e)
 	}
-	return entries
+	return entries, inadmissibleEntries
 }
 
 func fits(cq *cache.ClusterQueueSnapshot, usage *workload.Usage, preemptedWorkloads preemption.PreemptedWorkloads, newTargets []*preemption.Target) bool {
@@ -508,7 +517,7 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 		// sync Admitted, ignore the result since an API update is always done.
 		_ = workload.SyncAdmittedCondition(newWorkload, s.clock.Now())
 	}
-	if err := s.cache.AssumeWorkload(newWorkload); err != nil {
+	if err := s.cache.AssumeWorkload(log, newWorkload); err != nil {
 		return err
 	}
 	e.status = assumed
@@ -541,7 +550,7 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 		}
 		// Ignore errors because the workload or clusterQueue could have been deleted
 		// by an event.
-		_ = s.cache.ForgetWorkload(newWorkload)
+		_ = s.cache.ForgetWorkload(log, newWorkload)
 		if apierrors.IsNotFound(err) {
 			log.V(2).Info("Workload not admitted because it was deleted")
 			return

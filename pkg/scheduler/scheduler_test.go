@@ -3069,7 +3069,7 @@ func TestSchedule(t *testing.T) {
 			if tc.disablePartialAdmission {
 				features.SetFeatureGateDuringTest(t, features.PartialAdmission, false)
 			}
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			allQueues := append(queues, tc.additionalLocalQueues...)
 			allClusterQueues := append(clusterQueues, tc.additionalClusterQueues...)
@@ -3096,7 +3096,7 @@ func TestSchedule(t *testing.T) {
 				}
 			}
 			for i := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(resourceFlavors[i])
+				cqCache.AddOrUpdateResourceFlavor(log, resourceFlavors[i])
 			}
 			for _, cq := range allClusterQueues {
 				if err := cqCache.AddClusterQueue(ctx, &cq); err != nil {
@@ -3880,7 +3880,7 @@ func TestLastSchedulingContext(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 			scheme := runtime.NewScheme()
 
 			clientBuilder := utiltesting.NewClientBuilder().
@@ -3904,7 +3904,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				}
 			}
 			for i := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(resourceFlavors[i])
+				cqCache.AddOrUpdateResourceFlavor(log, resourceFlavors[i])
 			}
 			for _, cq := range tc.cqs {
 				if err := cqCache.AddClusterQueue(ctx, &cq); err != nil {
@@ -3955,7 +3955,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				if err != nil {
 					t.Errorf("Delete workload failed: %v", err)
 				}
-				err = cqCache.DeleteWorkload(&wl)
+				err = cqCache.DeleteWorkload(log, &wl)
 				if err != nil {
 					t.Errorf("Delete workload failed: %v", err)
 				}
@@ -4282,7 +4282,7 @@ func TestResourcesToReserve(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 			assignment := flavorassigner.Assignment{
 				PodSets: []flavorassigner.PodSetAssignment{{
 					Name:    "memory",
@@ -4304,7 +4304,7 @@ func TestResourcesToReserve(t *testing.T) {
 				Build()
 			cqCache := cache.New(cl)
 			for _, flavor := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, flavor)
 			}
 			err := cqCache.AddClusterQueue(ctx, cq)
 			if err != nil {
@@ -4316,7 +4316,7 @@ func TestResourcesToReserve(t *testing.T) {
 				quantity := resources.ResourceQuantity(fr.Resource, v)
 				admission := utiltesting.MakeAdmission("cq").Assignment(fr.Resource, fr.Flavor, quantity.String())
 				wl := utiltesting.MakeWorkload(fmt.Sprintf("workload-%d", i), "default-namespace").ReserveQuota(admission.Obj()).Obj()
-				cqCache.AddOrUpdateWorkload(wl)
+				cqCache.AddOrUpdateWorkload(log, wl)
 				i++
 			}
 			snapshot, err := cqCache.Snapshot(ctx)
@@ -5597,7 +5597,7 @@ func TestScheduleForTAS(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
@@ -5618,13 +5618,10 @@ func TestScheduleForTAS(t *testing.T) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {
@@ -6158,7 +6155,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
@@ -6179,13 +6176,10 @@ func TestScheduleForTASPreemption(t *testing.T) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {
@@ -7427,7 +7421,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
@@ -7448,13 +7442,10 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {

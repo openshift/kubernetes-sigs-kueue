@@ -34,14 +34,10 @@ $ cd kueue/charts
 $ helm install kueue kueue/ --create-namespace --namespace kueue-system
 ```
 
-Or use the charts pushed to `us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue`:
+Or use the charts pushed to `oci://registry.k8s.io/kueue/charts/kueue`:
 
 ```bash
-<<<<<<< HEAD
-helm install kueue oci://us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue --version="0.11.3" --create-namespace --namespace=kueue-system
-=======
-helm install kueue oci://us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue --version="0.11.4" --create-namespace --namespace=kueue-system
->>>>>>> kueue-upstream/release-0.11
+helm install kueue oci://registry.k8s.io/kueue/charts/kueue --version="0.12.1" --create-namespace --namespace=kueue-system
 ```
 
 ##### Verify that controller pods are running properly.
@@ -79,8 +75,8 @@ The following table lists the configurable parameters of the kueue chart and the
 | `enableCertManager`                                    | enable CertManager                                     | `false`                                     |
 | `enableVisibilityAPF`                                  | enable APF for the visibility API                      | `false`                                     |
 | `enableKueueViz`                                       | enable KueueViz dashboard                              | `false`                                     |
-| `kueueViz.backend.image`                               | KueueViz dashboard backend image                       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue-viz-backend:main-latest` |
-| `kueueViz.frontend.image`                              | KueueViz dashboard frontend image                      | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue-viz-frontend:main-latest` |
+| `KueueViz.backend.image`                               | KueueViz dashboard backend image                       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-backend:main` |
+| `KueueViz.frontend.image`                              | KueueViz dashboard frontend image                      | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend:main` |
 | `controllerManager.manager.image.repository`           | controllerManager.manager's repository and image       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue` |
 | `controllerManager.manager.image.tag`                  | controllerManager.manager's tag                        | `main`                                      |
 | `controllerManager.manager.resources`                  | controllerManager.manager's resources                  | abbr.                                       |
@@ -100,5 +96,6 @@ The following table lists the configurable parameters of the kueue chart and the
 | `managerConfig.controllerManagerConfigYaml`            | controllerManagerConfigYaml                            | abbr.                                       |
 | `metricsService`                                       | metricsService's ports                                 | abbr.                                       |
 | `webhookService`                                       | webhookService's ports                                 | abbr.                                       |
+| `mutatingWebhook.reinvocationPolicy`                   | Webhook's reinvocation policy                          | `Never`                                     |
 | `metrics.prometheusNamespace`                          | prometheus namespace                                   | `monitoring`                                |
 | `metrics.serviceMonitor.tlsConfig`                     | service monitor for prometheus                         | abbr.                                       |
