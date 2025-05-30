@@ -1827,7 +1827,7 @@ func TestPreemption(t *testing.T) {
 
 			cqCache := cache.New(cl)
 			for _, flv := range flavors {
-				cqCache.AddOrUpdateResourceFlavor(flv)
+				cqCache.AddOrUpdateResourceFlavor(log, flv)
 			}
 			for _, cq := range tc.clusterQueues {
 				if err := cqCache.AddClusterQueue(ctx, cq); err != nil {
@@ -2352,6 +2352,40 @@ func TestFairPreemptions(t *testing.T) {
 			incoming: unitWl.Clone().Name("a_incoming").Obj(),
 			targetCQ: "a",
 		},
+		"can't preempt nominal from Cohort with 0 weight": {
+			clusterQueues: []*kueue.ClusterQueue{
+				utiltesting.MakeClusterQueue("left-cq").
+					Cohort("root").
+					ResourceGroup(*utiltesting.MakeFlavorQuotas("default").
+						Resource(corev1.ResourceCPU, "0").Obj()).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyAny,
+					}).
+					Obj(),
+				utiltesting.MakeClusterQueue("right-cq").
+					Cohort("right-cohort").
+					ResourceGroup(*utiltesting.MakeFlavorQuotas("default").
+						Resource(corev1.ResourceCPU, "0").Obj()).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyAny,
+					}).
+					FairWeight(resource.MustParse("0")).
+					Obj(),
+			},
+			cohorts: []*kueuealpha.Cohort{
+				utiltesting.MakeCohort("right-cohort").
+					FairWeight(resource.MustParse("0")).
+					ResourceGroup(*utiltesting.MakeFlavorQuotas("default").
+						Resource(corev1.ResourceCPU, "1").Obj()).
+					Parent("root").Obj(),
+			},
+			admitted: []kueue.Workload{
+				*unitWl.Clone().Name("right-1").SimpleReserveQuota("right-cq", "default", now).Obj(),
+			},
+			incoming:      unitWl.Clone().Name("left-1").Obj(),
+			wantPreempted: sets.New[string](),
+			targetCQ:      "left-cq",
+		},
 		"can preempt within cluster queue when no cohort": {
 			clusterQueues: []*kueue.ClusterQueue{
 				utiltesting.MakeClusterQueue("a").
@@ -2652,7 +2686,7 @@ func TestFairPreemptions(t *testing.T) {
 				Build()
 			cqCache := cache.New(cl)
 			for _, flv := range flavors {
-				cqCache.AddOrUpdateResourceFlavor(flv)
+				cqCache.AddOrUpdateResourceFlavor(log, flv)
 			}
 			for _, cq := range tc.clusterQueues {
 				if err := cqCache.AddClusterQueue(ctx, cq); err != nil {

@@ -41,7 +41,6 @@ import (
 	"sigs.k8s.io/kueue/pkg/hierarchy"
 	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/resources"
-	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -113,7 +112,7 @@ type Cache struct {
 
 	hm hierarchy.Manager[*clusterQueue, *cohort]
 
-	tasCache TASCache
+	tasCache tasCache
 }
 
 func New(client client.Client, opts ...Option) *Cache {
@@ -136,7 +135,7 @@ func New(client client.Client, opts ...Option) *Cache {
 	return c
 }
 
-func (c *Cache) newClusterQueue(cq *kueue.ClusterQueue) (*clusterQueue, error) {
+func (c *Cache) newClusterQueue(log logr.Logger, cq *kueue.ClusterQueue) (*clusterQueue, error) {
 	cqImpl := &clusterQueue{
 		Name:                kueue.ClusterQueueReference(cq.Name),
 		Workloads:           make(map[string]*workload.Info),
@@ -147,10 +146,12 @@ func (c *Cache) newClusterQueue(cq *kueue.ClusterQueue) (*clusterQueue, error) {
 		AdmittedUsage:       make(resources.FlavorResourceQuantities),
 		resourceNode:        NewResourceNode(),
 		tasCache:            &c.tasCache,
+
+		workloadsNotAccountedForTAS: sets.New[string](),
 	}
 	c.hm.AddClusterQueue(cqImpl)
 	c.hm.UpdateClusterQueueEdge(kueue.ClusterQueueReference(cq.Name), cq.Spec.Cohort)
-	if err := cqImpl.updateClusterQueue(cq, c.resourceFlavors, c.admissionChecks, nil); err != nil {
+	if err := cqImpl.updateClusterQueue(log, cq, c.resourceFlavors, c.admissionChecks, nil); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +215,7 @@ func (c *Cache) CleanUpOnContext(ctx context.Context) {
 	c.podsReadyCond.Broadcast()
 }
 
-func (c *Cache) updateClusterQueues() sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) updateClusterQueues(log logr.Logger) sets.Set[kueue.ClusterQueueReference] {
 	cqs := sets.New[kueue.ClusterQueueReference]()
 
 	for _, cq := range c.hm.ClusterQueues() {
@@ -222,8 +223,8 @@ func (c *Cache) updateClusterQueues() sets.Set[kueue.ClusterQueueReference] {
 		// We call update on all ClusterQueues irrespective of which CQ actually use this flavor
 		// because it is not expensive to do so, and is not worth tracking which ClusterQueues use
 		// which flavors.
-		cq.UpdateWithFlavors(c.resourceFlavors)
-		cq.updateWithAdmissionChecks(c.admissionChecks)
+		cq.UpdateWithFlavors(log, c.resourceFlavors)
+		cq.updateWithAdmissionChecks(log, c.admissionChecks)
 		curStatus := cq.Status
 		if prevStatus == pending && curStatus == active {
 			cqs.Insert(cq.Name)
@@ -244,41 +245,51 @@ func (c *Cache) ActiveClusterQueues() sets.Set[kueue.ClusterQueueReference] {
 	return cqs
 }
 
-func (c *Cache) TASCache() *TASCache {
+func (c *Cache) TASCache() *tasCache {
 	return &c.tasCache
 }
 
-func (c *Cache) AddOrUpdateResourceFlavor(rf *kueue.ResourceFlavor) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) AddOrUpdateResourceFlavor(log logr.Logger, rf *kueue.ResourceFlavor) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
 	c.resourceFlavors[kueue.ResourceFlavorReference(rf.Name)] = rf
-	return c.updateClusterQueues()
+	if handleTASFlavor(rf) {
+		c.tasCache.AddFlavor(rf)
+	}
+	return c.updateClusterQueues(log)
 }
 
-func (c *Cache) DeleteResourceFlavor(rf *kueue.ResourceFlavor) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) DeleteResourceFlavor(log logr.Logger, rf *kueue.ResourceFlavor) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.resourceFlavors, kueue.ResourceFlavorReference(rf.Name))
-	return c.updateClusterQueues()
+	if handleTASFlavor(rf) {
+		c.tasCache.DeleteFlavor(kueue.ResourceFlavorReference(rf.Name))
+	}
+	return c.updateClusterQueues(log)
 }
 
-func (c *Cache) AddOrUpdateTopologyForFlavor(topology *kueuealpha.Topology, flv *kueue.ResourceFlavor) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) AddOrUpdateTopology(log logr.Logger, topology *kueuealpha.Topology) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
-	levels := utiltas.Levels(topology)
-	tasInfo := c.tasCache.NewTASFlavorCache(kueue.TopologyReference(topology.Name), levels, flv.Spec.NodeLabels, flv.Spec.Tolerations)
-	c.tasCache.Set(kueue.ResourceFlavorReference(flv.Name), tasInfo)
-	return c.updateClusterQueues()
+	c.tasCache.AddTopology(topology)
+	return c.updateClusterQueues(log)
 }
 
-func (c *Cache) DeleteTopologyForFlavor(flv kueue.ResourceFlavorReference) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) DeleteTopology(log logr.Logger, name kueue.TopologyReference) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
-	c.tasCache.Delete(flv)
-	return c.updateClusterQueues()
+	c.tasCache.DeleteTopology(name)
+	return c.updateClusterQueues(log)
 }
 
-func (c *Cache) AddOrUpdateAdmissionCheck(ac *kueue.AdmissionCheck) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) CloneTASCache() map[kueue.ResourceFlavorReference]*TASFlavorCache {
+	c.RLock()
+	defer c.RUnlock()
+	return c.tasCache.Clone()
+}
+
+func (c *Cache) AddOrUpdateAdmissionCheck(log logr.Logger, ac *kueue.AdmissionCheck) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
 
@@ -295,14 +306,14 @@ func (c *Cache) AddOrUpdateAdmissionCheck(ac *kueue.AdmissionCheck) sets.Set[kue
 	}
 	c.admissionChecks[ac.Name] = newAC
 
-	return c.updateClusterQueues()
+	return c.updateClusterQueues(log)
 }
 
-func (c *Cache) DeleteAdmissionCheck(ac *kueue.AdmissionCheck) sets.Set[kueue.ClusterQueueReference] {
+func (c *Cache) DeleteAdmissionCheck(log logr.Logger, ac *kueue.AdmissionCheck) sets.Set[kueue.ClusterQueueReference] {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.admissionChecks, ac.Name)
-	return c.updateClusterQueues()
+	return c.updateClusterQueues(log)
 }
 
 func (c *Cache) AdmissionChecksForClusterQueue(cqName kueue.ClusterQueueReference) []AdmissionCheck {
@@ -383,7 +394,8 @@ func (c *Cache) AddClusterQueue(ctx context.Context, cq *kueue.ClusterQueue) err
 	if oldCq := c.hm.ClusterQueue(kueue.ClusterQueueReference(cq.Name)); oldCq != nil {
 		return errors.New("ClusterQueue already exists")
 	}
-	cqImpl, err := c.newClusterQueue(cq)
+	log := ctrl.LoggerFrom(ctx)
+	cqImpl, err := c.newClusterQueue(log, cq)
 	if err != nil {
 		return err
 	}
@@ -412,16 +424,17 @@ func (c *Cache) AddClusterQueue(ctx context.Context, cq *kueue.ClusterQueue) err
 		return fmt.Errorf("listing workloads that match the queue: %w", err)
 	}
 	for i, w := range workloads.Items {
+		log := log.WithValues("workload", workload.Key(&w))
 		if !workload.HasQuotaReservation(&w) || workload.IsFinished(&w) {
 			continue
 		}
-		c.addOrUpdateWorkload(&workloads.Items[i])
+		c.addOrUpdateWorkload(log, &workloads.Items[i])
 	}
 
 	return nil
 }
 
-func (c *Cache) UpdateClusterQueue(cq *kueue.ClusterQueue) error {
+func (c *Cache) UpdateClusterQueue(log logr.Logger, cq *kueue.ClusterQueue) error {
 	c.Lock()
 	defer c.Unlock()
 	cqImpl := c.hm.ClusterQueue(kueue.ClusterQueueReference(cq.Name))
@@ -430,7 +443,7 @@ func (c *Cache) UpdateClusterQueue(cq *kueue.ClusterQueue) error {
 	}
 	oldParent := cqImpl.Parent()
 	c.hm.UpdateClusterQueueEdge(kueue.ClusterQueueReference(cq.Name), cq.Spec.Cohort)
-	if err := cqImpl.updateClusterQueue(cq, c.resourceFlavors, c.admissionChecks, oldParent); err != nil {
+	if err := cqImpl.updateClusterQueue(log, cq, c.resourceFlavors, c.admissionChecks, oldParent); err != nil {
 		return err
 	}
 	for _, qImpl := range cqImpl.localQueues {
@@ -520,13 +533,13 @@ func (c *Cache) UpdateLocalQueue(oldQ, newQ *kueue.LocalQueue) error {
 	return nil
 }
 
-func (c *Cache) AddOrUpdateWorkload(w *kueue.Workload) bool {
+func (c *Cache) AddOrUpdateWorkload(log logr.Logger, w *kueue.Workload) bool {
 	c.Lock()
 	defer c.Unlock()
-	return c.addOrUpdateWorkload(w)
+	return c.addOrUpdateWorkload(log, w)
 }
 
-func (c *Cache) addOrUpdateWorkload(w *kueue.Workload) bool {
+func (c *Cache) addOrUpdateWorkload(log logr.Logger, w *kueue.Workload) bool {
 	if !workload.HasQuotaReservation(w) {
 		return false
 	}
@@ -536,19 +549,19 @@ func (c *Cache) addOrUpdateWorkload(w *kueue.Workload) bool {
 		return false
 	}
 
-	c.cleanupAssumedState(w)
+	c.cleanupAssumedState(log, w)
 
 	if _, exist := clusterQueue.Workloads[workload.Key(w)]; exist {
-		clusterQueue.deleteWorkload(w)
+		clusterQueue.deleteWorkload(log, w)
 	}
 
 	if c.podsReadyTracking {
 		c.podsReadyCond.Broadcast()
 	}
-	return clusterQueue.addWorkload(w) == nil
+	return clusterQueue.addWorkload(log, w) == nil
 }
 
-func (c *Cache) UpdateWorkload(oldWl, newWl *kueue.Workload) error {
+func (c *Cache) UpdateWorkload(log logr.Logger, oldWl, newWl *kueue.Workload) error {
 	c.Lock()
 	defer c.Unlock()
 	if workload.HasQuotaReservation(oldWl) {
@@ -556,9 +569,9 @@ func (c *Cache) UpdateWorkload(oldWl, newWl *kueue.Workload) error {
 		if cq == nil {
 			return errors.New("old ClusterQueue doesn't exist")
 		}
-		cq.deleteWorkload(oldWl)
+		cq.deleteWorkload(log, oldWl)
 	}
-	c.cleanupAssumedState(oldWl)
+	c.cleanupAssumedState(log, oldWl)
 
 	if !workload.HasQuotaReservation(newWl) {
 		return nil
@@ -570,10 +583,10 @@ func (c *Cache) UpdateWorkload(oldWl, newWl *kueue.Workload) error {
 	if c.podsReadyTracking {
 		c.podsReadyCond.Broadcast()
 	}
-	return cq.addWorkload(newWl)
+	return cq.addWorkload(log, newWl)
 }
 
-func (c *Cache) DeleteWorkload(w *kueue.Workload) error {
+func (c *Cache) DeleteWorkload(log logr.Logger, w *kueue.Workload) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -582,9 +595,9 @@ func (c *Cache) DeleteWorkload(w *kueue.Workload) error {
 		return ErrCqNotFound
 	}
 
-	c.cleanupAssumedState(w)
+	c.cleanupAssumedState(log, w)
 
-	cq.deleteWorkload(w)
+	cq.forgetWorkload(log, w)
 	if c.podsReadyTracking {
 		c.podsReadyCond.Broadcast()
 	}
@@ -607,7 +620,7 @@ func (c *Cache) IsAssumedOrAdmittedWorkload(w workload.Info) bool {
 	return false
 }
 
-func (c *Cache) AssumeWorkload(w *kueue.Workload) error {
+func (c *Cache) AssumeWorkload(log logr.Logger, w *kueue.Workload) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -626,21 +639,21 @@ func (c *Cache) AssumeWorkload(w *kueue.Workload) error {
 		return ErrCqNotFound
 	}
 
-	if err := cq.addWorkload(w); err != nil {
+	if err := cq.addWorkload(log, w); err != nil {
 		return err
 	}
 	c.assumedWorkloads[k] = w.Status.Admission.ClusterQueue
 	return nil
 }
 
-func (c *Cache) ForgetWorkload(w *kueue.Workload) error {
+func (c *Cache) ForgetWorkload(log logr.Logger, w *kueue.Workload) error {
 	c.Lock()
 	defer c.Unlock()
 
 	if _, assumed := c.assumedWorkloads[workload.Key(w)]; !assumed {
 		return errors.New("the workload is not assumed")
 	}
-	c.cleanupAssumedState(w)
+	c.cleanupAssumedState(log, w)
 
 	if !workload.HasQuotaReservation(w) {
 		return errWorkloadNotAdmitted
@@ -650,7 +663,7 @@ func (c *Cache) ForgetWorkload(w *kueue.Workload) error {
 	if cq == nil {
 		return ErrCqNotFound
 	}
-	cq.deleteWorkload(w)
+	cq.forgetWorkload(log, w)
 	if c.podsReadyTracking {
 		c.podsReadyCond.Broadcast()
 	}
@@ -818,11 +831,11 @@ func (c *Cache) LocalQueueUsage(qObj *kueue.LocalQueue) (*LocalQueueUsageStats, 
 				if rf, ok := c.resourceFlavors[rgFlavor]; ok {
 					flavor.NodeLabels = rf.Spec.NodeLabels
 					flavor.NodeTaints = rf.Spec.NodeTaints
-					if features.Enabled(features.TopologyAwareScheduling) && rf.Spec.TopologyName != nil {
-						if topology, ok := c.tasCache.flavors[rgFlavor]; ok {
+					if handleTASFlavor(rf) {
+						if cache := c.tasCache.Get(rgFlavor); cache != nil {
 							flavor.Topology = &kueue.TopologyInfo{
-								Name:   topology.TopologyName,
-								Levels: topology.Levels,
+								Name:   cache.flavor.TopologyName,
+								Levels: cache.topology.Levels,
 							}
 						}
 					}
@@ -839,6 +852,10 @@ func (c *Cache) LocalQueueUsage(qObj *kueue.LocalQueue) (*LocalQueueUsageStats, 
 		AdmittedWorkloads:  qImpl.admittedWorkloads,
 		Flavors:            flavors,
 	}, nil
+}
+
+func handleTASFlavor(rf *kueue.ResourceFlavor) bool {
+	return features.Enabled(features.TopologyAwareScheduling) && rf.Spec.TopologyName != nil
 }
 
 func filterLocalQueueUsage(orig resources.FlavorResourceQuantities, resourceGroups []ResourceGroup) []kueue.LocalQueueFlavorUsage {
@@ -866,7 +883,7 @@ func filterLocalQueueUsage(orig resources.FlavorResourceQuantities, resourceGrou
 	return qFlvUsages
 }
 
-func (c *Cache) cleanupAssumedState(w *kueue.Workload) {
+func (c *Cache) cleanupAssumedState(log logr.Logger, w *kueue.Workload) {
 	k := workload.Key(w)
 	assumedCQName, assumed := c.assumedWorkloads[k]
 	if assumed {
@@ -874,7 +891,7 @@ func (c *Cache) cleanupAssumedState(w *kueue.Workload) {
 		// one, then we should also clean up the assumed one.
 		if workload.HasQuotaReservation(w) && assumedCQName != w.Status.Admission.ClusterQueue {
 			if assumedCQ := c.hm.ClusterQueue(assumedCQName); assumedCQ != nil {
-				assumedCQ.deleteWorkload(w)
+				assumedCQ.deleteWorkload(log, w)
 			}
 		}
 		delete(c.assumedWorkloads, k)
