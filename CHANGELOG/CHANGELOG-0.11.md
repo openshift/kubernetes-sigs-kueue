@@ -1,3 +1,35 @@
+## v0.11.6
+
+Changes since `v0.11.5`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fix a bug that would allow a user to bypass localQueueDefaulting. (#5478, @dgrove-oss)
+- RBAC permissions for the Cohort API to update & read by admins are now created out of the box. (#5434, @vladikkuzn)
+- TAS: Fix a bug that LeastFreeCapacity Algorithm does not respect level ordering (#5468, @tenzen-y)
+
+## v0.11.5
+
+Changes since `v0.11.4`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fix Kueue crash caused by race condition when deleting ClusterQueue (#5296, @gabesaba)
+- Fix RayJob webhook validation when `LocalQueueDefaulting` feature is enabled. (#5073, @MaysaMacedo)
+- Fix a bug where PropagateResourceRequests would always trigger an API status patch call. (#5132, @alexeldeib)
+- Fix panic due to nil ptr exception in scheduler when ClusterQueue is deleted concurrently. (#5207, @sohankunkerkar)
+- Fix the bug which prevented running Jobs (with queue-name label) owned by other Jobs for which Kueue does not
+  have the necessary RBAC permissions (for example kserve or CronJob). (#5263, @mimowo)
+- TAS: Fix RBAC configuration for the Topology API (#5122, @qti-haeyoon)
+- TAS: Fix the bug where TAS workloads may be admitted after restart of the Kueue controller. (#5334, @mimowo)
+- TAS: fix accounting of TAS usage for workloads with multiple PodSets. This bug could prevent admitting workloads which otherwise could fit. (#5342, @lchrzaszcz)
+- TAS: fix issues with the initialization of TAS cache in case of errors in event handlers. (#5351, @mimowo)
+
+>>>>>>> kueue-upstream/release-0.11
 ## v0.11.4
 
 Changes since `v0.11.3`:

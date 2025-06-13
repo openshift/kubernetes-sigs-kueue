@@ -31,25 +31,21 @@ CLI_PLATFORMS ?= linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
 VIZ_PLATFORMS ?= linux/amd64,linux/arm64,linux/s390x,linux/ppc64le
 DOCKER_BUILDX_CMD ?= docker buildx
 IMAGE_BUILD_CMD ?= $(DOCKER_BUILDX_CMD) build
-IMAGE_BUILD_EXTRA_OPTS ?=
-STAGING_IMAGE_REGISTRY := us-central1-docker.pkg.dev/k8s-staging-images
-IMAGE_REGISTRY ?= $(STAGING_IMAGE_REGISTRY)/kueue
-IMAGE_NAME := kueue
-IMAGE_REPO ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME)
+
+STAGING_IMAGE_REGISTRY := us-central1-docker.pkg.dev/k8s-staging-images/kueue
+IMAGE_REGISTRY ?= $(STAGING_IMAGE_REGISTRY)
+
+IMAGE_REPO := $(IMAGE_REGISTRY)/kueue
 IMAGE_TAG ?= $(IMAGE_REPO):$(GIT_TAG)
-HELM_CHART_REPO := $(STAGING_IMAGE_REGISTRY)/kueue/charts
+
 RAY_VERSION := 2.41.0
 RAYMINI_VERSION ?= 0.0.1
 
-ifdef EXTRA_TAG
-IMAGE_EXTRA_TAG ?= $(IMAGE_REPO):$(EXTRA_TAG)
-endif
-ifdef IMAGE_EXTRA_TAG
-IMAGE_BUILD_EXTRA_OPTS += -t $(IMAGE_EXTRA_TAG)
-endif
-
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-ARTIFACTS ?= $(PROJECT_DIR)/bin
+BIN_DIR ?= $(PROJECT_DIR)/bin
+ARTIFACTS ?= $(BIN_DIR)
+TOOLS_DIR := $(PROJECT_DIR)/hack/internal/tools
+
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 BASE_IMAGE ?= gcr.io/distroless/static:nonroot
@@ -79,7 +75,7 @@ LD_FLAGS += -X '$(version_pkg).GitCommit=$(shell git rev-parse HEAD)'
 
 # Update these variables when preparing a new release or a release branch.
 # Then run `make prepare-release-branch`
-RELEASE_VERSION=v0.11.5
+RELEASE_VERSION=v0.11.6
 RELEASE_BRANCH=release-0.11
 # Version used form Helm which is not using the leading "v"
 CHART_VERSION := $(shell echo $(RELEASE_VERSION) | cut -c2-)
@@ -202,7 +198,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 .PHONY: image-local-build
 image-local-build:
 	BUILDER=$(shell $(DOCKER_BUILDX_CMD) create --use)
-	$(MAKE) image-build PUSH=$(PUSH)
+	$(MAKE) image-build PUSH=$(PUSH) IMAGE_BUILD_EXTRA_OPTS=$(IMAGE_BUILD_EXTRA_OPTS)
 	$(DOCKER_BUILDX_CMD) rm $$BUILDER
 
 # Build the multiplatform container image locally and push to repo.
@@ -212,26 +208,36 @@ image-local-push: image-local-build
 
 .PHONY: image-build
 image-build:
-	$(IMAGE_BUILD_CMD) -t $(IMAGE_TAG) \
+	$(IMAGE_BUILD_CMD) \
+		-t $(IMAGE_TAG) \
+		-t $(IMAGE_REPO):$(RELEASE_BRANCH) \
 		--platform=$(PLATFORMS) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILDER_IMAGE=$(BUILDER_IMAGE) \
 		--build-arg CGO_ENABLED=$(CGO_ENABLED) \
 		$(PUSH) \
-		$(IMAGE_BUILD_EXTRA_OPTS) ./
+		$(IMAGE_BUILD_EXTRA_OPTS) \
+		./
 
 .PHONY: image-push
 image-push: PUSH=--push
 image-push: image-build
 
+.PHONY: helm-chart-package
+helm-chart-package: yq helm ## Package a chart into a versioned chart archive file.
+	DEST_CHART_DIR=$(DEST_CHART_DIR) \
+	HELM="$(HELM)" YQ="$(YQ)" GIT_TAG="$(GIT_TAG)" IMAGE_REGISTRY="$(IMAGE_REGISTRY)" \
+	HELM_CHART_PUSH=$(HELM_CHART_PUSH) \
+	./hack/helm-chart-package.sh
+
 .PHONY: helm-chart-push
-helm-chart-push: yq helm
-	EXTRA_TAG="$(EXTRA_TAG)" GIT_TAG="$(GIT_TAG)" IMAGE_REGISTRY="$(IMAGE_REGISTRY)" HELM_CHART_REPO="$(HELM_CHART_REPO)" IMAGE_REPO="$(IMAGE_REPO)" HELM="$(HELM)" YQ="$(YQ)" ./hack/push-chart.sh
+helm-chart-push: HELM_CHART_PUSH=true
+helm-chart-push: helm-chart-package
 
 # Build an amd64 image that can be used for Kind E2E tests.
 .PHONY: kind-image-build
 kind-image-build: PLATFORMS=linux/amd64
-kind-image-build: IMAGE_BUILD_EXTRA_OPTS=--load
+kind-image-build: PUSH=--load
 kind-image-build: kind image-build
 
 ##@ Deployment
@@ -240,7 +246,7 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
-clean-manifests = (cd config/components/manager && $(KUSTOMIZE) edit set image controller=us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue:$(RELEASE_BRANCH))
+clean-manifests = (cd config/components/manager && $(KUSTOMIZE) edit set image controller=$(STAGING_IMAGE_REGISTRY)/kueue:$(RELEASE_BRANCH))
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
@@ -251,8 +257,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 	$(KUSTOMIZE) build config/components/crd | kubectl delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/components/manager && $(KUSTOMIZE) edit set image controller=${IMAGE_TAG}
+deploy: manifests kustomize prepare-manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	kubectl apply --server-side -k config/default
 	@$(call clean-manifests)
 
@@ -269,24 +274,23 @@ site-server: hugo
 	(cd site; $(HUGO) server)
 
 ##@ Release
-.PHONY: artifacts
-artifacts: kustomize yq helm ## Generate release artifacts.
-	cd config/components/manager && $(KUSTOMIZE) edit set image controller=${IMAGE_TAG}
+.PHONY: clean-artifacts
+clean-artifacts:
 	if [ -d artifacts ]; then rm -rf artifacts; fi
-	mkdir -p artifacts
+
+.PHONY: prepare-manifests
+prepare-manifests:
+	cd config/components/manager && $(KUSTOMIZE) edit set image controller=$(IMAGE_TAG)
+
+.PHONY: artifacts
+artifacts: DEST_CHART_DIR="artifacts"
+artifacts: clean-artifacts kustomize helm-chart-package prepare-manifests ## Generate release artifacts.
 	$(KUSTOMIZE) build config/default -o artifacts/manifests.yaml
 	$(KUSTOMIZE) build config/dev -o artifacts/manifests-dev.yaml
 	$(KUSTOMIZE) build config/alpha-enabled -o artifacts/manifests-alpha-enabled.yaml
 	$(KUSTOMIZE) build config/prometheus -o artifacts/prometheus.yaml
 	$(KUSTOMIZE) build config/visibility-apf -o artifacts/visibility-apf.yaml
 	@$(call clean-manifests)
-	# Update the image tag and policy
-	$(YQ)  e  '.controllerManager.manager.image.repository = "$(IMAGE_REPO)" | .controllerManager.manager.image.tag = "$(GIT_TAG)" | .controllerManager.manager.image.pullPolicy = "IfNotPresent"' -i charts/kueue/values.yaml
-	# create the package. TODO: consider signing it
-	$(HELM) package --version $(GIT_TAG) --app-version $(GIT_TAG) charts/kueue -d artifacts/
-	mv artifacts/kueue-$(GIT_TAG).tgz artifacts/kueue-chart-$(GIT_TAG).tgz
-	# Revert the image changes
-	$(YQ)  e  '.controllerManager.manager.image.repository = "$(STAGING_IMAGE_REGISTRY)/kueue/$(IMAGE_NAME)" | del(.controllerManager.manager.image.tag) | .controllerManager.manager.image.pullPolicy = "Always"' -i charts/kueue/values.yaml
 	CGO_ENABLED=$(CGO_ENABLED) GO_CMD="$(GO_CMD)" LD_FLAGS="$(LD_FLAGS)" BUILD_DIR="artifacts" BUILD_NAME=kubectl-kueue PLATFORMS="$(CLI_PLATFORMS)" ./hack/multiplatform-build.sh ./cmd/kueuectl/main.go
 
 .PHONY: prepare-release-branch
@@ -295,7 +299,6 @@ prepare-release-branch: yq kustomize ## Prepare the release branch with the rele
 	$(SED) -r 's/chart_version = "[0-9]+\.[0-9]+\.[0-9]+/chart_version = "$(CHART_VERSION)/g' -i site/hugo.toml
 	$(SED) -r 's/--version="v?[0-9]+\.[0-9]+\.[0-9]+/--version="$(CHART_VERSION)/g' -i charts/kueue/README.md
 	$(YQ) e '.appVersion = "$(RELEASE_VERSION)"' -i charts/kueue/Chart.yaml
-	@$(call clean-manifests)
 
 .PHONY: update-security-insights
 update-security-insights: yq
@@ -327,12 +330,13 @@ importer-build:
 importer-image-build:
 	$(IMAGE_BUILD_CMD) \
 		-t $(IMAGE_REGISTRY)/importer:$(GIT_TAG) \
-		-t $(IMAGE_REGISTRY)/importer:$(RELEASE_BRANCH)-latest \
+		-t $(IMAGE_REGISTRY)/importer:$(RELEASE_BRANCH) \
 		--platform=$(PLATFORMS) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILDER_IMAGE=$(BUILDER_IMAGE) \
 		--build-arg CGO_ENABLED=$(CGO_ENABLED) \
 		$(PUSH) \
+		$(IMAGE_BUILD_EXTRA_OPTS) \
 		-f ./cmd/importer/Dockerfile ./
 
 .PHONY: importer-image-push
@@ -351,19 +355,21 @@ importer-image: importer-image-build
 kueue-viz-image-build:
 	$(IMAGE_BUILD_CMD) \
 		-t $(IMAGE_REGISTRY)/kueue-viz-backend:$(GIT_TAG) \
-		-t $(IMAGE_REGISTRY)/kueue-viz-backend:$(RELEASE_BRANCH)-latest \
+		-t $(IMAGE_REGISTRY)/kueue-viz-backend:$(RELEASE_BRANCH) \
 		--platform=$(VIZ_PLATFORMS) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg BUILDER_IMAGE=$(BUILDER_IMAGE) \
 		--build-arg CGO_ENABLED=$(CGO_ENABLED) \
 		$(PUSH) \
-		-f ./cmd/experimental/kueue-viz/backend/Dockerfile ./cmd/experimental/kueue-viz/backend; \
+		$(IMAGE_BUILD_EXTRA_OPTS) \
+		-f ./cmd/experimental/kueue-viz/backend/Dockerfile ./cmd/experimental/kueue-viz/backend
 	$(IMAGE_BUILD_CMD) \
 		-t $(IMAGE_REGISTRY)/kueue-viz-frontend:$(GIT_TAG) \
-		-t $(IMAGE_REGISTRY)/kueue-viz-frontend:$(RELEASE_BRANCH)-latest \
+		-t $(IMAGE_REGISTRY)/kueue-viz-frontend:$(RELEASE_BRANCH) \
 		--platform=$(VIZ_PLATFORMS) \
 		$(PUSH) \
-		-f ./cmd/experimental/kueue-viz/frontend/Dockerfile ./cmd/experimental/kueue-viz/frontend; \
+		$(IMAGE_BUILD_EXTRA_OPTS) \
+		-f ./cmd/experimental/kueue-viz/frontend/Dockerfile ./cmd/experimental/kueue-viz/frontend
 
 .PHONY: kueue-viz-image-push
 kueue-viz-image-push: PUSH=--push
@@ -378,7 +384,7 @@ kueue-viz-image: kueue-viz-image-build
 
 .PHONY: kueuectl
 kueuectl:
-	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/kubectl-kueue cmd/kueuectl/main.go
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(BIN_DIR)/kubectl-kueue cmd/kueuectl/main.go
 
 .PHONY: generate-apiref
 generate-apiref: genref
@@ -387,7 +393,7 @@ generate-apiref: genref
 .PHONY: generate-kueuectl-docs
 generate-kueuectl-docs: kueuectl-docs
 	rm -Rf $(PROJECT_DIR)/site/content/en/docs/reference/kubectl-kueue/commands/kueuectl*
-	$(PROJECT_DIR)/bin/kueuectl-docs \
+	$(BIN_DIR)/kueuectl-docs \
 		$(PROJECT_DIR)/cmd/kueuectl-docs/templates \
 		$(PROJECT_DIR)/site/content/en/docs/reference/kubectl-kueue/commands
 
@@ -396,9 +402,11 @@ generate-kueuectl-docs: kueuectl-docs
 ray-project-mini-image-build:
 	$(IMAGE_BUILD_CMD) \
 		-t $(IMAGE_REGISTRY)/ray-project-mini:$(RAYMINI_VERSION) \
+		-t $(IMAGE_REGISTRY)/ray-project-mini:$(RELEASE_BRANCH) \
 		--platform=$(PLATFORMS) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
 		$(PUSH) \
+		$(IMAGE_BUILD_EXTRA_OPTS) \
 		-f ./hack/internal/test-images/ray/Dockerfile ./ \
 
 # The step is required for local e2e test run
