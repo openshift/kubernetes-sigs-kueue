@@ -236,7 +236,8 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 }
 
 func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
+	kueueNS := GetKueueNamespace()
+	kcmKey := types.NamespacedName{Namespace: kueueNS, Name: "kueue-controller-manager"}
 	waitForOperatorAvailability(ctx, k8sClient, kcmKey)
 }
 
@@ -275,7 +276,8 @@ func WaitForKubeRayOperatorAvailability(ctx context.Context, k8sClient client.Cl
 
 func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *configapi.Configuration {
 	var kueueCfg configapi.Configuration
-	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
+	kueueNS := GetKueueNamespace()
+	kcmKey := types.NamespacedName{Namespace: kueueNS, Name: "kueue-manager-config"}
 	configMap := &corev1.ConfigMap{}
 
 	gomega.Expect(k8sClient.Get(ctx, kcmKey, configMap)).To(gomega.Succeed())
@@ -285,7 +287,8 @@ func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *config
 
 func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueueCfg *configapi.Configuration) {
 	configMap := &corev1.ConfigMap{}
-	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
+	kueueNS := GetKueueNamespace()
+	kcmKey := types.NamespacedName{Namespace: kueueNS, Name: "kueue-manager-config"}
 	config, err := yaml.Marshal(kueueCfg)
 
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
@@ -297,7 +300,8 @@ func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueue
 }
 
 func RestartKueueController(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
+	kueueNS := GetKueueNamespace()
+	kcmKey := types.NamespacedName{Namespace: kueueNS, Name: "kueue-controller-manager"}
 	rolloutOperatorDeployment(ctx, k8sClient, kcmKey)
 }
 
@@ -365,11 +369,12 @@ func CreateNamespaceFromObjectWithLog(ctx context.Context, k8sClient client.Clie
 }
 
 func GetKueueMetrics(ctx context.Context, cfg *rest.Config, restClient *rest.RESTClient, curlPodName, curlContainerName string) (string, error) {
-	metricsOutput, _, err := KExecute(ctx, cfg, restClient, configapi.DefaultNamespace, curlPodName, curlContainerName, []string{
+	kueueNS := GetKueueNamespace()
+	metricsOutput, _, err := KExecute(ctx, cfg, restClient, kueueNS, curlPodName, curlContainerName, []string{
 		"/bin/sh", "-c",
 		fmt.Sprintf(
 			"curl -s -k -H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" https://%s.%s.svc.cluster.local:8443/metrics",
-			defaultMetricsServiceName, configapi.DefaultNamespace,
+			defaultMetricsServiceName, kueueNS,
 		),
 	})
 	return string(metricsOutput), err
