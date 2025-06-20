@@ -64,7 +64,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 				{
 					Kind:      "ServiceAccount",
 					Name:      serviceAccountName,
-					Namespace: configapi.DefaultNamespace,
+					Namespace: kueueNS,
 				},
 			},
 			RoleRef: rbacv1.RoleRef{
