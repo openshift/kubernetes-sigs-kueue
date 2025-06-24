@@ -37,7 +37,7 @@ $ helm install kueue kueue/ --create-namespace --namespace kueue-system
 Or use the charts pushed to `us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue`:
 
 ```bash
-helm install kueue oci://us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue --version="0.11.6" --create-namespace --namespace=kueue-system
+helm install kueue oci://us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts/kueue --version="0.11.7" --create-namespace --namespace=kueue-system
 ```
 
 ##### Verify that controller pods are running properly.
@@ -77,6 +77,7 @@ The following table lists the configurable parameters of the kueue chart and the
 | `enableKueueViz`                                       | enable KueueViz dashboard                              | `false`                                     |
 | `kueueViz.backend.image`                               | KueueViz dashboard backend image                       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue-viz-backend:main-latest` |
 | `kueueViz.frontend.image`                              | KueueViz dashboard frontend image                      | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue-viz-frontend:main-latest` |
+| `controllerManager.manager.priorityClassName`          | controllerManager.manager's Pod priorityClassName      | ``                                          |
 | `controllerManager.manager.image.repository`           | controllerManager.manager's repository and image       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue` |
 | `controllerManager.manager.image.tag`                  | controllerManager.manager's tag                        | `main`                                      |
 | `controllerManager.manager.resources`                  | controllerManager.manager's resources                  | abbr.                                       |
