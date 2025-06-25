@@ -75,7 +75,7 @@ LD_FLAGS += -X '$(version_pkg).GitCommit=$(shell git rev-parse HEAD)'
 
 # Update these variables when preparing a new release or a release branch.
 # Then run `make prepare-release-branch`
-RELEASE_VERSION=v0.11.6
+RELEASE_VERSION=v0.11.7
 RELEASE_BRANCH=release-0.11
 # Version used form Helm which is not using the leading "v"
 CHART_VERSION := $(shell echo $(RELEASE_VERSION) | cut -c2-)
@@ -162,6 +162,8 @@ helm-lint: helm ## Run Helm chart lint test.
 helm-verify: helm helm-lint ## run helm template and detect any rendering failures
 # test default values
 	$(HELM) template charts/kueue > /dev/null
+# test priorityClassName option
+	$(HELM) template charts/kueue --set controllerManager.manager.priorityClassName="system-cluster-critical" > /dev/null
 .PHONY: vet
 vet: ## Run go vet against code.
 	$(GO_CMD) vet ./...
