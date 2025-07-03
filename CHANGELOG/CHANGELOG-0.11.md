@@ -1,3 +1,83 @@
+## v0.11.7
+
+Changes since `v0.11.6`:
+
+## Changes by Kind
+
+### Feature
+
+- Allow setting the controller-manager's Pod `PriorityClassName` from the Helm chart (#5650, @kaisoz)
+
+### Bug or Regression
+
+- Add Cohort Go client library (#5604, @tenzen-y)
+- Fix the bug that Job deleted on the manager cluster didn't trigger deletion of pods on the worker cluster. (#5608, @ichekrygin)
+- Fix the bug that Kueue, upon startup, would incorrectly admit and then immediately deactivate
+  already deactivated Workloads.
+
+  This bug also prevented the ObjectRetentionPolicies feature from deleting Workloads
+  that were deactivated by Kueue before the feature was enabled. (#5630, @mbobrovskyi)
+- Fix the bug that the webhook certificate setting under `controllerManager.webhook.certDir` was ignored by the internal cert manager, effectively always defaulting to /tmp/k8s-webhook-server/serving-certs. (#5490, @ichekrygin)
+- Fixed bug that doesn't allow Kueue to admit Workload after queue-name label set. (#5715, @mbobrovskyi)
+- MultiKueue: Fix a bug that batch/v1 Job final state is not synced from Workload cluster to Management cluster when disabling the `MultiKueueBatchJobWithManagedBy` feature gate. (#5707, @ichekrygin)
+
+## v0.11.6
+
+Changes since `v0.11.5`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fix a bug that would allow a user to bypass localQueueDefaulting. (#5478, @dgrove-oss)
+- RBAC permissions for the Cohort API to update & read by admins are now created out of the box. (#5434, @vladikkuzn)
+- TAS: Fix a bug that LeastFreeCapacity Algorithm does not respect level ordering (#5468, @tenzen-y)
+
+## v0.11.5
+
+Changes since `v0.11.4`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fix Kueue crash caused by race condition when deleting ClusterQueue (#5296, @gabesaba)
+- Fix RayJob webhook validation when `LocalQueueDefaulting` feature is enabled. (#5073, @MaysaMacedo)
+- Fix a bug where PropagateResourceRequests would always trigger an API status patch call. (#5132, @alexeldeib)
+- Fix panic due to nil ptr exception in scheduler when ClusterQueue is deleted concurrently. (#5207, @sohankunkerkar)
+- Fix the bug which prevented running Jobs (with queue-name label) owned by other Jobs for which Kueue does not
+  have the necessary RBAC permissions (for example kserve or CronJob). (#5263, @mimowo)
+- TAS: Fix RBAC configuration for the Topology API (#5122, @qti-haeyoon)
+- TAS: Fix the bug where TAS workloads may be admitted after restart of the Kueue controller. (#5334, @mimowo)
+- TAS: fix accounting of TAS usage for workloads with multiple PodSets. This bug could prevent admitting workloads which otherwise could fit. (#5342, @lchrzaszcz)
+- TAS: fix issues with the initialization of TAS cache in case of errors in event handlers. (#5351, @mimowo)
+
+## v0.11.4
+
+Changes since `v0.11.3`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- TAS: Add support for Node Selectors. (#5079, @mwysokin)
+- Allow one to disable cohorts via a HiearachialCohort feature gate (#4913, @sohankunkerkar)
+- Fix LocalQueue's status message to reference LocalQueue, rather than ClusterQueue, when its status is Ready (#4956, @PBundyra)
+- Fix a bug which caused Kueue's Scheduler to build invalid SSA patch in some scenarios when  using
+  admission checks. This patch would be rejected with the following error message:
+  Workload.kueue.x-k8s.io "job-xxxxxx" is invalid: [admissionChecks[0].lastTransitionTime: Required value (#5086, @alexeldeib)
+- Fix bug where Cohorts with FairWeight set to 0 could have workloads running within Nominal Quota preempted (#4980, @gabesaba)
+- Fix bug where update to Cohort.FairSharing didn't trigger a reconcile. This bug resulted in the new weight not being used until the Cohort was modified in another way. (#4965, @gabesaba)
+- Fix bug which prevented using LeaderWorkerSet with manageJobsWithoutQueueName enabled. In particular, Kueue would create redundant workloads for each Pod, resulting in worker Pods suspended, while the leader Pods could bypass quota checks. (#4936, @mbobrovskyi)
+- Helm: Fix the default configuration for the metrics service. (#4905, @kannon92)
+- Fix the support for pod groups in MutliKueue. (#4909, @mszadkow)
+- Fixed a bug that caused Kueue to create redundant workloads for each Job when manageJobsWithoutQueueName was enabled, JobSet integration was disabled, and AppWrapper was used for JobSet. (#4924, @mbobrovskyi)
+- Fixed a bug that prevented Kueue from retaining the LeaderWorkerSet workload in deactivation status.
+  Fixed a bug that prevented Kueue from automatically deleting the workload when the LeaderWorkerSet was deleted. (#5015, @mbobrovskyi)
+- Fixed bug that allow to create Topology without levels. (#5016, @mbobrovskyi)
+- Helm: fix ServiceMonitor selecting the wrong service. This previously led to missing Kueue metrics, even with `enablePrometheus` set to `true`. (#5082, @j-vizcaino)
+- TAS: Fix bug where scheduling panics when the workload using TopologyAwareScheduling has container request value specified as zero. (#4973, @qti-haeyoon)
+
 ## v0.11.3
 
 Changes since `v0.11.2`:
@@ -18,6 +98,9 @@ Changes since `v0.11.2`:
 
 ## v0.11.2
 
+IMPORTANT: Avoid using this release due to the corrupted [Topology CRD specification](https://github.com/kubernetes-sigs/kueue/issues/4850).
+When upgrading to the newer version please reinstall Kueue. If you are not using TopologyAwareScheduling the upgrading is not urgent.
+
 Changes since `v0.11.1`:
 
 ## Changes by Kind
@@ -32,6 +115,9 @@ Changes since `v0.11.1`:
 
 ## v0.11.1
 
+IMPORTANT: Avoid using this release due to the corrupted [Topology CRD specification](https://github.com/kubernetes-sigs/kueue/issues/4850).
+When upgrading to the newer version please reinstall Kueue. If you are not using TopologyAwareScheduling the upgrading is not urgent.
+
 Changes since `v0.11.0`:
 
 ## Changes by Kind
@@ -42,6 +128,9 @@ Changes since `v0.11.0`:
 - Fixed bug that doesn't allow to use WorkloadPriorityClass on LeaderWorkerSet. (#4725, @mbobrovskyi)
 
 ## v0.11.0
+
+IMPORTANT: Avoid using this release due to the corrupted [Topology CRD specification](https://github.com/kubernetes-sigs/kueue/issues/4850).
+When upgrading to the newer version please reinstall Kueue. If you are not using TopologyAwareScheduling the upgrading is not urgent.
 
 Changes since `0.10.0`:
 

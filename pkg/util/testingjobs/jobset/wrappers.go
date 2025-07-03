@@ -70,7 +70,7 @@ func (j *JobSetWrapper) Obj() *jobsetapi.JobSet {
 
 // Clone returns a DeepCopy of j.
 func (j *JobSetWrapper) Clone() *JobSetWrapper {
-	return &JobSetWrapper{JobSet: *j.JobSet.DeepCopy()}
+	return &JobSetWrapper{JobSet: *j.DeepCopy()}
 }
 
 // ReplicatedJobs sets a new set of ReplicatedJobs in the inner JobSet.
@@ -206,6 +206,6 @@ func (j *JobSetWrapper) ManagedBy(c string) *JobSetWrapper {
 
 // OwnerReference adds a ownerReference to the default container.
 func (j *JobSetWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersionKind) *JobSetWrapper {
-	testing.AppendOwnerReference(j, ownerGVK, ownerName, ownerName, ptr.To(true), nil)
+	testing.AppendOwnerReference(j, ownerGVK, ownerName, ownerName, ptr.To(true), ptr.To(true))
 	return j
 }

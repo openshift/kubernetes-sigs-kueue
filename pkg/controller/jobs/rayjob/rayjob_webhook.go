@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework/webhook"
-	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 )
 
@@ -101,11 +100,11 @@ func (w *RayJobWebhook) validateCreate(job *rayv1.RayJob) field.ErrorList {
 	var allErrors field.ErrorList
 	kueueJob := (*RayJob)(job)
 
-	if w.manageJobsWithoutQueueName || jobframework.QueueName(kueueJob) != "" || features.Enabled(features.LocalQueueDefaulting) {
+	if w.manageJobsWithoutQueueName || jobframework.QueueName(kueueJob) != "" {
 		spec := &job.Spec
 		specPath := field.NewPath("spec")
 
-		// Should always delete the cluster after the sob has ended, otherwise it will continue to the queue's resources.
+		// Should always delete the cluster after the job has ended, otherwise it will continue to the queue's resources.
 		if !spec.ShutdownAfterJobFinishes {
 			allErrors = append(allErrors, field.Invalid(specPath.Child("shutdownAfterJobFinishes"), spec.ShutdownAfterJobFinishes, "a kueue managed job should delete the cluster after finishing"))
 		}
@@ -162,7 +161,7 @@ func (w *RayJobWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runti
 	log := ctrl.LoggerFrom(ctx).WithName("rayjob-webhook")
 	if w.manageJobsWithoutQueueName || jobframework.QueueName((*RayJob)(newJob)) != "" {
 		log.Info("Validating update")
-		allErrors := jobframework.ValidateJobOnUpdate((*RayJob)(oldJob), (*RayJob)(newJob))
+		allErrors := jobframework.ValidateJobOnUpdate((*RayJob)(oldJob), (*RayJob)(newJob), w.queues.DefaultLocalQueueExist)
 		allErrors = append(allErrors, w.validateCreate(newJob)...)
 		return nil, allErrors.ToAggregate()
 	}

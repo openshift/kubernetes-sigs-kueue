@@ -14,13 +14,19 @@ spec:
       labels:
         app: kueueviz-frontend
     spec:
-
       containers:
         - name: frontend
-          image: us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend:main
+          image: frontend:lastest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           env:
             - name: REACT_APP_WEBSOCKET_URL
               value: "wss://backend.kueueviz.local"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 500m
+              memory: 512Mi

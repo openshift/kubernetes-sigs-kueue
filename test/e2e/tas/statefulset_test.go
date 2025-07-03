@@ -77,7 +77,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for StatefulSet", func() {
 
 			const replicas = 3
 			sts := statefulset.MakeStatefulSet("sts", ns.Name).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				RequestAndLimit(extraResource, "1").
 				Replicas(replicas).
 				Queue(localQueue.Name).
@@ -86,7 +86,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for StatefulSet", func() {
 				Obj()
 			util.MustCreate(ctx, k8sClient, sts)
 
-			ginkgo.By("Waiting for replicas is ready", func() {
+			ginkgo.By("Waiting for replicas to be ready", func() {
 				createdStatefulSet := &appsv1.StatefulSet{}
 				gomega.Eventually(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sts), createdStatefulSet)).To(gomega.Succeed())

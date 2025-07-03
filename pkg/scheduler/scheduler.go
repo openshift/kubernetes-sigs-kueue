@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -196,7 +197,7 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 	logSnapshotIfVerbose(log, snapshot)
 
 	// 3. Calculate requirements (resource flavors, borrowing) for admitting workloads.
-	entries := s.nominate(ctx, headWorkloads, snapshot)
+	entries, inadmissibleEntries := s.nominate(ctx, headWorkloads, snapshot)
 
 	// 4. Create iterator which returns ordered entries.
 	iterator := makeIterator(ctx, entries, s.workloadOrdering, s.fairSharing.Enable)
@@ -301,6 +302,11 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 			result = metrics.AdmissionResultSuccess
 		}
 	}
+	for _, e := range inadmissibleEntries {
+		logAdmissionAttemptIfVerbose(log, &e)
+		s.requeueAndUpdate(ctx, e)
+	}
+
 	reportSkippedPreemptions(skippedPreemptions)
 	metrics.AdmissionAttempt(result, s.clock.Since(startTime))
 	if result != metrics.AdmissionResultSuccess {
@@ -336,21 +342,23 @@ type entry struct {
 }
 
 func (e *entry) assignmentUsage() workload.Usage {
-	return e.assignment.Usage
+	return netUsage(e, e.assignment.Usage.Quota)
 }
 
 // nominate returns the workloads with their requirements (resource flavors, borrowing) if
-// they were admitted by the clusterQueues in the snapshot.
-func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, snap *cache.Snapshot) []entry {
+// they were admitted by the clusterQueues in the snapshot. The second return value
+// is the list of inadmissibleEntries.
+func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, snap *cache.Snapshot) ([]entry, []entry) {
 	log := ctrl.LoggerFrom(ctx)
 	entries := make([]entry, 0, len(workloads))
+	var inadmissibleEntries []entry
 	for _, w := range workloads {
 		log := log.WithValues("workload", klog.KObj(w.Obj), "clusterQueue", klog.KRef("", string(w.ClusterQueue)))
 		ns := corev1.Namespace{}
 		e := entry{Info: w}
 		e.clusterQueueSnapshot = snap.ClusterQueue(w.ClusterQueue)
-		if s.cache.IsAssumedOrAdmittedWorkload(w) {
-			log.Info("Workload skipped from admission because it's already assumed or admitted", "workload", klog.KObj(w.Obj))
+		if !workload.NeedsSecondPass(w.Obj) && s.cache.IsAssumedOrAdmittedWorkload(w) {
+			log.Info("Workload skipped from admission because it's already accounted in cache, and it does not need second pass", "workload", klog.KObj(w.Obj))
 			continue
 		} else if workload.HasRetryChecks(w.Obj) || workload.HasRejectedChecks(w.Obj) {
 			e.inadmissibleMsg = "The workload has failed admission checks"
@@ -370,11 +378,13 @@ func (s *Scheduler) nominate(ctx context.Context, workloads []workload.Info, sna
 		} else {
 			e.assignment, e.preemptionTargets = s.getAssignments(log, &e.Info, snap)
 			e.inadmissibleMsg = e.assignment.Message()
-			e.Info.LastAssignment = &e.assignment.LastState
+			e.LastAssignment = &e.assignment.LastState
+			entries = append(entries, e)
+			continue
 		}
-		entries = append(entries, e)
+		inadmissibleEntries = append(inadmissibleEntries, e)
 	}
-	return entries
+	return entries, inadmissibleEntries
 }
 
 func fits(cq *cache.ClusterQueueSnapshot, usage *workload.Usage, preemptedWorkloads preemption.PreemptedWorkloads, newTargets []*preemption.Target) bool {
@@ -389,10 +399,19 @@ func fits(cq *cache.ClusterQueueSnapshot, usage *workload.Usage, preemptedWorklo
 
 // resourcesToReserve calculates how much of the available resources in cq/cohort assignment should be reserved.
 func resourcesToReserve(e *entry, cq *cache.ClusterQueueSnapshot) workload.Usage {
-	return workload.Usage{
-		Quota: quotaResourcesToReserve(e, cq),
-		TAS:   e.assignment.Usage.TAS,
+	return netUsage(e, quotaResourcesToReserve(e, cq))
+}
+
+// netUsage calculates the net usage for quota and TAS to reserve
+func netUsage(e *entry, netQuota resources.FlavorResourceQuantities) workload.Usage {
+	result := workload.Usage{}
+	if features.Enabled(features.TopologyAwareScheduling) {
+		result.TAS = e.assignment.ComputeTASNetUsage(e.Obj.Status.Admission)
 	}
+	if !workload.HasQuotaReservation(e.Obj) {
+		result.Quota = netQuota
+	}
+	return result
 }
 
 func quotaResourcesToReserve(e *entry, cq *cache.ClusterQueueSnapshot) resources.FlavorResourceQuantities {
@@ -402,7 +421,7 @@ func quotaResourcesToReserve(e *entry, cq *cache.ClusterQueueSnapshot) resources
 	reservedUsage := make(resources.FlavorResourceQuantities)
 	for fr, usage := range e.assignment.Usage.Quota {
 		cqQuota := cq.QuotaFor(fr)
-		if e.assignment.Borrowing {
+		if e.assignment.Borrowing > 0 {
 			if cqQuota.BorrowingLimit == nil {
 				reservedUsage[fr] = usage
 			} else {
@@ -468,7 +487,7 @@ func (s *Scheduler) getInitialAssignments(log logr.Logger, wl *workload.Info, sn
 }
 
 func updateAssignmentForTAS(cq *cache.ClusterQueueSnapshot, wl *workload.Info, assignment *flavorassigner.Assignment, targets []*preemption.Target) {
-	if features.Enabled(features.TopologyAwareScheduling) && assignment.RepresentativeMode() == flavorassigner.Preempt && (wl.IsRequestingTAS() || cq.IsTASOnly()) {
+	if features.Enabled(features.TopologyAwareScheduling) && assignment.RepresentativeMode() == flavorassigner.Preempt && (wl.IsRequestingTAS() || cq.IsTASOnly()) && !workload.HasTopologyAssignmentWithNodeToReplace(wl.Obj) {
 		tasRequests := assignment.WorkloadsTopologyRequests(wl, cq)
 		var tasResult cache.TASAssignmentsResult
 		if len(targets) > 0 {
@@ -477,7 +496,7 @@ func updateAssignmentForTAS(cq *cache.ClusterQueueSnapshot, wl *workload.Info, a
 				targetWorkloads = append(targetWorkloads, target.WorkloadInfo)
 			}
 			revertUsage := cq.SimulateWorkloadRemoval(targetWorkloads)
-			tasResult = cq.FindTopologyAssignmentsForWorkload(tasRequests, false)
+			tasResult = cq.FindTopologyAssignmentsForWorkload(tasRequests)
 			revertUsage()
 		} else {
 			// In this scenario we don't have any preemption candidates, yet we need
@@ -486,7 +505,7 @@ func updateAssignmentForTAS(cq *cache.ClusterQueueSnapshot, wl *workload.Info, a
 			// in the next scheduling cycle by the waiting workload. To obtain
 			// a TAS assignment for reserving the resources we run the algorithm
 			// assuming the cluster is empty.
-			tasResult = cq.FindTopologyAssignmentsForWorkload(tasRequests, true)
+			tasResult = cq.FindTopologyAssignmentsForWorkload(tasRequests, cache.WithSimulateEmpty(true))
 		}
 		assignment.UpdateForTASResult(tasResult)
 	}
@@ -508,7 +527,7 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 		// sync Admitted, ignore the result since an API update is always done.
 		_ = workload.SyncAdmittedCondition(newWorkload, s.clock.Now())
 	}
-	if err := s.cache.AssumeWorkload(newWorkload); err != nil {
+	if err := s.cache.AssumeWorkload(log, newWorkload); err != nil {
 		return err
 	}
 	e.status = assumed
@@ -517,31 +536,15 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 	s.admissionRoutineWrapper.Run(func() {
 		err := s.applyAdmission(ctx, newWorkload)
 		if err == nil {
-			waitTime := workload.QueuedWaitTime(newWorkload)
-			s.recorder.Eventf(newWorkload, corev1.EventTypeNormal, "QuotaReserved", "Quota reserved in ClusterQueue %v, wait time since queued was %.0fs", admission.ClusterQueue, waitTime.Seconds())
-			metrics.QuotaReservedWorkload(admission.ClusterQueue, waitTime)
-			if features.Enabled(features.LocalQueueMetrics) {
-				metrics.LocalQueueQuotaReservedWorkload(metrics.LQRefFromWorkload(newWorkload), waitTime)
-			}
-			if workload.IsAdmitted(newWorkload) {
-				s.recorder.Eventf(newWorkload, corev1.EventTypeNormal, "Admitted", "Admitted by ClusterQueue %v, wait time since reservation was 0s", admission.ClusterQueue)
-				metrics.AdmittedWorkload(admission.ClusterQueue, waitTime)
-				if features.Enabled(features.LocalQueueMetrics) {
-					metrics.LocalQueueAdmittedWorkload(metrics.LQRefFromWorkload(newWorkload), waitTime)
-				}
-				if len(newWorkload.Status.AdmissionChecks) > 0 {
-					metrics.AdmissionChecksWaitTime(admission.ClusterQueue, 0)
-					if features.Enabled(features.LocalQueueMetrics) {
-						metrics.LocalQueueAdmissionChecksWaitTime(metrics.LQRefFromWorkload(newWorkload), 0)
-					}
-				}
-			}
+			// Record metrics and events for quota reservation and admission
+			s.recordWorkloadAdmissionMetrics(newWorkload, e.Obj, admission)
+
 			log.V(2).Info("Workload successfully admitted and assigned flavors", "assignments", admission.PodSetAssignments)
 			return
 		}
 		// Ignore errors because the workload or clusterQueue could have been deleted
 		// by an event.
-		_ = s.cache.ForgetWorkload(newWorkload)
+		_ = s.cache.ForgetWorkload(log, newWorkload)
 		if apierrors.IsNotFound(err) {
 			log.V(2).Info("Workload not admitted because it was deleted")
 			return
@@ -576,11 +579,19 @@ func (e entryOrdering) Less(i, j int) bool {
 	a := e.entries[i]
 	b := e.entries[j]
 
+	// First process workloads which already have quota reserved. Such workload
+	// may be considered if this is their second pass.
+	aHasQuota := workload.HasQuotaReservation(a.Obj)
+	bHasQuota := workload.HasQuotaReservation(b.Obj)
+	if aHasQuota != bHasQuota {
+		return aHasQuota
+	}
+
 	// 1. Request under nominal quota.
 	aBorrows := a.assignment.Borrows()
 	bBorrows := b.assignment.Borrows()
 	if aBorrows != bBorrows {
-		return !aBorrows
+		return aBorrows < bBorrows
 	}
 
 	// 2. Higher priority first if not disabled.
@@ -647,12 +658,18 @@ func (s *Scheduler) requeueAndUpdate(ctx context.Context, e entry) {
 		// Failed after nomination is the only reason why a workload would be requeued downstream.
 		e.requeueReason = queue.RequeueReasonFailedAfterNomination
 	}
+
+	if s.queues.QueueSecondPassIfNeeded(ctx, e.Obj) {
+		log.V(2).Info("Workload re-queued for second pass", "workload", klog.KObj(e.Obj), "clusterQueue", klog.KRef("", string(e.ClusterQueue)), "queue", klog.KRef(e.Obj.Namespace, string(e.Obj.Spec.QueueName)), "requeueReason", e.requeueReason, "status", e.status)
+		s.recorder.Eventf(e.Obj, corev1.EventTypeWarning, "SecondPassFailed", api.TruncateEventMessage(e.inadmissibleMsg))
+		return
+	}
+
 	added := s.queues.RequeueWorkload(ctx, &e.Info, e.requeueReason)
-	log.V(2).Info("Workload re-queued", "workload", klog.KObj(e.Obj), "clusterQueue", klog.KRef("", string(e.ClusterQueue)), "queue", klog.KRef(e.Obj.Namespace, e.Obj.Spec.QueueName), "requeueReason", e.requeueReason, "added", added, "status", e.status)
+	log.V(2).Info("Workload re-queued", "workload", klog.KObj(e.Obj), "clusterQueue", klog.KRef("", string(e.ClusterQueue)), "queue", klog.KRef(e.Obj.Namespace, string(e.Obj.Spec.QueueName)), "requeueReason", e.requeueReason, "added", added, "status", e.status)
 
 	if e.status == notNominated || e.status == skipped {
-		patch := workload.BaseSSAWorkload(e.Obj)
-		workload.AdmissionStatusPatch(e.Obj, patch, true)
+		patch := workload.PrepareWorkloadPatch(e.Obj, true, s.clock)
 		reservationIsChanged := workload.UnsetQuotaReservationWithCondition(patch, "Pending", e.inadmissibleMsg, s.clock.Now())
 		resourceRequestsIsChanged := workload.PropagateResourceRequests(patch, &e.Info)
 		if reservationIsChanged || resourceRequestsIsChanged {
@@ -661,5 +678,48 @@ func (s *Scheduler) requeueAndUpdate(ctx context.Context, e entry) {
 			}
 		}
 		s.recorder.Eventf(e.Obj, corev1.EventTypeWarning, "Pending", api.TruncateEventMessage(e.inadmissibleMsg))
+	}
+}
+
+// recordWorkloadAdmissionMetrics records metrics and events for workload admission process
+func (s *Scheduler) recordWorkloadAdmissionMetrics(newWorkload, originalWorkload *kueue.Workload, admission *kueue.Admission) {
+	waitTime := workload.QueuedWaitTime(newWorkload, s.clock)
+
+	s.recordQuotaReservationMetrics(newWorkload, originalWorkload, admission, waitTime)
+	s.recordWorkloadAdmissionEvents(newWorkload, originalWorkload, admission, waitTime)
+}
+
+// recordQuotaReservationMetrics records metrics and events for quota reservation
+func (s *Scheduler) recordQuotaReservationMetrics(newWorkload, originalWorkload *kueue.Workload, admission *kueue.Admission, waitTime time.Duration) {
+	if workload.HasQuotaReservation(originalWorkload) {
+		return
+	}
+
+	s.recorder.Eventf(newWorkload, corev1.EventTypeNormal, "QuotaReserved", "Quota reserved in ClusterQueue %v, wait time since queued was %.0fs", admission.ClusterQueue, waitTime.Seconds())
+
+	metrics.QuotaReservedWorkload(admission.ClusterQueue, waitTime)
+	if features.Enabled(features.LocalQueueMetrics) {
+		metrics.LocalQueueQuotaReservedWorkload(metrics.LQRefFromWorkload(newWorkload), waitTime)
+	}
+}
+
+// recordWorkloadAdmissionEvents records metrics and events for workload admission
+func (s *Scheduler) recordWorkloadAdmissionEvents(newWorkload, originalWorkload *kueue.Workload, admission *kueue.Admission, waitTime time.Duration) {
+	if !workload.IsAdmitted(newWorkload) || workload.HasNodeToReplace(originalWorkload) {
+		return
+	}
+
+	s.recorder.Eventf(newWorkload, corev1.EventTypeNormal, "Admitted", "Admitted by ClusterQueue %v, wait time since reservation was 0s", admission.ClusterQueue)
+	metrics.AdmittedWorkload(admission.ClusterQueue, waitTime)
+
+	if features.Enabled(features.LocalQueueMetrics) {
+		metrics.LocalQueueAdmittedWorkload(metrics.LQRefFromWorkload(newWorkload), waitTime)
+	}
+
+	if len(newWorkload.Status.AdmissionChecks) > 0 {
+		metrics.AdmissionChecksWaitTime(admission.ClusterQueue, 0)
+		if features.Enabled(features.LocalQueueMetrics) {
+			metrics.LocalQueueAdmissionChecksWaitTime(metrics.LQRefFromWorkload(newWorkload), 0)
+		}
 	}
 }

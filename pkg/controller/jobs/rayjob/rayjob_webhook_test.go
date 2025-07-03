@@ -29,6 +29,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
@@ -37,12 +38,7 @@ import (
 	testingrayutil "sigs.k8s.io/kueue/pkg/util/testingjobs/rayjob"
 )
 
-var (
-	labelsPath                    = field.NewPath("metadata", "labels")
-	workloadPriorityClassNamePath = labelsPath.Key(constants.WorkloadPriorityClassLabel)
-)
-
-func TestValidateDefault(t *testing.T) {
+func TestDefault(t *testing.T) {
 	testcases := map[string]struct {
 		oldJob               *rayv1.RayJob
 		newJob               *rayv1.RayJob
@@ -114,7 +110,7 @@ func TestValidateDefault(t *testing.T) {
 			if tc.defaultLqExist {
 				if err := queueManager.AddLocalQueue(ctx, utiltesting.MakeLocalQueue("default", "default").
 					ClusterQueue("cluster-queue").Obj()); err != nil {
-					t.Fatalf("failed to create default local queue: %s", err)
+					t.Fatalf("failed to create default local queue: %v", err)
 				}
 			}
 			wh := &RayJobWebhook{
@@ -124,7 +120,7 @@ func TestValidateDefault(t *testing.T) {
 			}
 			result := tc.oldJob.DeepCopy()
 			if err := wh.Default(t.Context(), result); err != nil {
-				t.Errorf("unexpected Default() error: %s", err)
+				t.Errorf("unexpected Default() error: %v", err)
 			}
 			if diff := cmp.Diff(tc.newJob, result); diff != "" {
 				t.Errorf("Default() mismatch (-want +got):\n%s", diff)
@@ -138,15 +134,23 @@ func TestValidateCreate(t *testing.T) {
 	bigWorkerGroup := []rayv1.WorkerGroupSpec{worker, worker, worker, worker, worker, worker, worker, worker}
 
 	testcases := map[string]struct {
-		job       *rayv1.RayJob
-		manageAll bool
-		wantErr   error
+		job                  *rayv1.RayJob
+		manageAll            bool
+		wantErr              error
+		localQueueDefaulting bool
 	}{
 		"invalid unmanaged": {
 			job: testingrayutil.MakeJob("job", "ns").
 				ShutdownAfterJobFinishes(false).
 				Obj(),
 			wantErr: nil,
+		},
+		"invalid unmanaged - local queue default": {
+			job: testingrayutil.MakeJob("job", "ns").
+				ShutdownAfterJobFinishes(false).
+				Obj(),
+			localQueueDefaulting: true,
+			wantErr:              nil,
 		},
 		"invalid managed - by config": {
 			job: testingrayutil.MakeJob("job", "ns").
@@ -283,6 +287,7 @@ func TestValidateCreate(t *testing.T) {
 			wh := &RayJobWebhook{
 				manageJobsWithoutQueueName: tc.manageAll,
 			}
+			features.SetFeatureGateDuringTest(t, features.LocalQueueDefaulting, tc.localQueueDefaulting)
 			_, result := wh.ValidateCreate(t.Context(), tc.job)
 			if diff := cmp.Diff(tc.wantErr, result); diff != "" {
 				t.Errorf("ValidateCreate() mismatch (-want +got):\n%s", diff)
@@ -344,7 +349,7 @@ func TestValidateUpdate(t *testing.T) {
 				ShutdownAfterJobFinishes(true).
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), "queue2", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), kueue.LocalQueueName("queue2"), apivalidation.FieldImmutableErrorMsg),
 			}.ToAggregate(),
 		},
 		"managed - queue name can change while suspended": {
@@ -369,9 +374,6 @@ func TestValidateUpdate(t *testing.T) {
 				Queue("queue").
 				WorkloadPriorityClass("test-2").
 				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(workloadPriorityClassNamePath, "test-2", apivalidation.FieldImmutableErrorMsg),
-			}.ToAggregate(),
 		},
 	}
 

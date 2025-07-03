@@ -20,12 +20,10 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	awv1beta2 "github.com/project-codeflare/appwrapper/api/v1beta2"
 	awutils "github.com/project-codeflare/appwrapper/pkg/utils"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,20 +55,19 @@ var (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		NewJob:                 NewJob,
-		GVK:                    gvk,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupAppWrapperWebhook,
-		JobType:                &awv1beta2.AppWrapper{},
-		SetupIndexes:           SetupIndexes,
-		AddToScheme:            awv1beta2.AddToScheme,
-		IsManagingObjectsOwner: isAppWrapper,
-		MultiKueueAdapter:      &multiKueueAdapter{},
+		NewJob:            NewJob,
+		GVK:               gvk,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupAppWrapperWebhook,
+		JobType:           &awv1beta2.AppWrapper{},
+		SetupIndexes:      SetupIndexes,
+		AddToScheme:       awv1beta2.AddToScheme,
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update
-// +kubebuilder:rbac:groups=workload.codeflare.dev,resources=appwrappers,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=workload.codeflare.dev,resources=appwrappers,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=workload.codeflare.dev,resources=appwrappers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/status,verbs=get;update;patch
@@ -83,10 +80,6 @@ func init() {
 
 func NewJob() jobframework.GenericJob {
 	return &AppWrapper{}
-}
-
-func isAppWrapper(owner *metav1.OwnerReference) bool {
-	return owner.Kind == awv1beta2.AppWrapperKind && strings.HasPrefix(owner.APIVersion, gvk.Group)
 }
 
 func SetupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
@@ -154,12 +147,13 @@ func (j *AppWrapper) PodSets() ([]kueue.PodSet, error) {
 			Count:    awutils.Replicas(awPodSets[psIndex]),
 		}
 		if features.Enabled(features.TopologyAwareScheduling) {
-			podSets[psIndex].TopologyRequest = jobframework.PodSetTopologyRequest(
-				&(podSpecTemplates[psIndex].ObjectMeta),
-				podIndexLabel,
-				subGroupIndexLabel,
-				subGroupCount,
-			)
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+				&(podSpecTemplates[psIndex].ObjectMeta)).
+				PodIndexLabel(podIndexLabel).SubGroup(subGroupIndexLabel, subGroupCount).Build()
+			if err != nil {
+				return nil, err
+			}
+			podSets[psIndex].TopologyRequest = topologyRequest
 		}
 	}
 	return podSets, nil

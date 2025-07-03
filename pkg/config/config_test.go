@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	corev1 "k8s.io/api/core/v1"
@@ -328,6 +329,18 @@ webhook:
 		t.Fatal(err)
 	}
 
+	objectRetentionPoliciesConfig := filepath.Join(tmpDir, "objectRetentionPolicies.yaml")
+	if err := os.WriteFile(objectRetentionPoliciesConfig, []byte(`apiVersion: config.kueue.x-k8s.io/v1beta1
+kind: Configuration
+namespace: kueue-system
+objectRetentionPolicies:
+  workloads: 
+    afterFinished: 30m
+    afterDeactivatedByKueue: 30m
+`), os.FileMode(0600)); err != nil {
+		t.Fatal(err)
+	}
+
 	defaultControlOptions := ctrl.Options{
 		HealthProbeBindAddress: configapi.DefaultHealthProbeBindAddress,
 		Metrics: metricsserver.Options{
@@ -342,7 +355,8 @@ webhook:
 		RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 		WebhookServer: &webhook.DefaultServer{
 			Options: webhook.Options{
-				Port: configapi.DefaultWebhookPort,
+				Port:    configapi.DefaultWebhookPort,
+				CertDir: configapi.DefaultWebhookCertDir,
 			},
 		},
 	}
@@ -354,7 +368,7 @@ webhook:
 	}
 
 	ctrlOptsCmpOpts := cmp.Options{
-		cmpopts.IgnoreUnexported(ctrl.Options{}),
+		cmpopts.IgnoreUnexported(ctrl.Options{}, logr.Logger{}),
 		cmpopts.IgnoreUnexported(webhook.DefaultServer{}),
 		cmpopts.IgnoreUnexported(ctrlcache.Options{}),
 		cmpopts.IgnoreUnexported(net.ListenConfig{}),
@@ -432,7 +446,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -506,7 +521,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: 9444,
+						Port:    9444,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -586,7 +602,8 @@ webhook:
 				LeaderElection:                false,
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -634,7 +651,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -748,7 +766,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -789,7 +808,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -849,7 +869,8 @@ webhook:
 				RetryPeriod:                   ptr.To(configapi.DefaultLeaderElectionRetryPeriod),
 				WebhookServer: &webhook.DefaultServer{
 					Options: webhook.Options{
-						Port: configapi.DefaultWebhookPort,
+						Port:    configapi.DefaultWebhookPort,
+						CertDir: configapi.DefaultWebhookCertDir,
 					},
 				},
 			},
@@ -931,6 +952,31 @@ webhook:
 				errors.New("unknown field \"namespaces\""),
 			}),
 		},
+		{
+			name:       "objectRetentionPolicies config",
+			configFile: objectRetentionPoliciesConfig,
+			wantConfiguration: configapi.Configuration{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: configapi.GroupVersion.String(),
+					Kind:       "Configuration",
+				},
+				Namespace:                    ptr.To(configapi.DefaultNamespace),
+				ManageJobsWithoutQueueName:   false,
+				InternalCertManagement:       enableDefaultInternalCertManagement,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				ObjectRetentionPolicies: &configapi.ObjectRetentionPolicies{
+					Workloads: &configapi.WorkloadRetentionPolicy{
+						AfterFinished:           &metav1.Duration{Duration: 30 * time.Minute},
+						AfterDeactivatedByKueue: &metav1.Duration{Duration: 30 * time.Minute},
+					},
+				},
+			},
+			wantOptions: defaultControlOptions,
+		},
 	}
 
 	for _, tc := range testcases {
@@ -994,7 +1040,8 @@ func TestEncode(t *testing.T) {
 				"kind":       "Configuration",
 				"namespace":  configapi.DefaultNamespace,
 				"webhook": map[string]any{
-					"port": int64(configapi.DefaultWebhookPort),
+					"port":    int64(configapi.DefaultWebhookPort),
+					"certDir": configapi.DefaultWebhookCertDir,
 				},
 				"metrics": map[string]any{
 					"bindAddress": configapi.DefaultMetricsBindAddress,

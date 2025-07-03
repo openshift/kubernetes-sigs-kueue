@@ -91,7 +91,7 @@ func (r *ResourceFlavorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// as a fallback.
 		if controllerutil.AddFinalizer(&flavor, kueue.ResourceInUseFinalizerName) {
 			if err := r.client.Update(ctx, &flavor); err != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
 			log.V(5).Info("Added finalizer")
 		}
@@ -107,7 +107,7 @@ func (r *ResourceFlavorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 			controllerutil.RemoveFinalizer(&flavor, kueue.ResourceInUseFinalizerName)
 			if err := r.client.Update(ctx, &flavor); err != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
 			log.V(5).Info("Removed finalizer")
 		}
@@ -134,7 +134,7 @@ func (r *ResourceFlavorReconciler) Create(e event.TypedCreateEvent[*kueue.Resour
 
 	// As long as one clusterQueue becomes active,
 	// we should inform clusterQueue controller to broadcast the event.
-	if cqNames := r.cache.AddOrUpdateResourceFlavor(e.Object.DeepCopy()); len(cqNames) > 0 {
+	if cqNames := r.cache.AddOrUpdateResourceFlavor(r.log, e.Object.DeepCopy()); len(cqNames) > 0 {
 		r.qManager.QueueInadmissibleWorkloads(context.Background(), cqNames)
 		// If at least one CQ becomes active, then those CQs should now get evaluated by the scheduler;
 		// note that the workloads in those CQs are not necessarily "inadmissible", and hence we trigger a
@@ -150,7 +150,7 @@ func (r *ResourceFlavorReconciler) Delete(e event.TypedDeleteEvent[*kueue.Resour
 	log := r.log.WithValues("resourceFlavor", klog.KObj(e.Object))
 	log.V(2).Info("ResourceFlavor delete event")
 
-	if cqNames := r.cache.DeleteResourceFlavor(e.Object); len(cqNames) > 0 {
+	if cqNames := r.cache.DeleteResourceFlavor(r.log, e.Object); len(cqNames) > 0 {
 		r.qManager.QueueInadmissibleWorkloads(context.Background(), cqNames)
 	}
 	return false
@@ -162,11 +162,11 @@ func (r *ResourceFlavorReconciler) Update(e event.TypedUpdateEvent[*kueue.Resour
 	log := r.log.WithValues("resourceFlavor", klog.KObj(e.ObjectNew))
 	log.V(2).Info("ResourceFlavor update event")
 
-	if e.ObjectNew.DeletionTimestamp != nil {
+	if !e.ObjectNew.DeletionTimestamp.IsZero() {
 		return true
 	}
 
-	if cqNames := r.cache.AddOrUpdateResourceFlavor(e.ObjectNew.DeepCopy()); len(cqNames) > 0 {
+	if cqNames := r.cache.AddOrUpdateResourceFlavor(r.log, e.ObjectNew.DeepCopy()); len(cqNames) > 0 {
 		r.qManager.QueueInadmissibleWorkloads(context.Background(), cqNames)
 	}
 	return false
@@ -254,7 +254,10 @@ func (r *ResourceFlavorReconciler) SetupWithManager(mgr ctrl.Manager, cfg *confi
 			&handler.TypedEnqueueRequestForObject[*kueue.ResourceFlavor]{},
 			r,
 		)).
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(false),
+			MaxConcurrentReconciles: mgr.GetControllerOptions().GroupKindConcurrency[kueue.GroupVersion.WithKind("ResourceFlavor").GroupKind().String()],
+		}).
 		WatchesRawSource(source.Channel(r.cqUpdateCh, &h)).
 		Complete(WithLeadingManager(mgr, r, &kueue.ResourceFlavor{}, cfg))
 }

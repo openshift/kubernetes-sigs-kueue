@@ -56,7 +56,7 @@ type TFReplicaSpecRequirement struct {
 }
 
 func (j *TFJobWrapper) TFReplicaSpecs(replicaSpecs ...TFReplicaSpecRequirement) *TFJobWrapper {
-	j = j.TFReplicaSpecsDefault()
+	j.TFReplicaSpecsDefault()
 	for _, rs := range replicaSpecs {
 		j.Spec.TFReplicaSpecs[rs.ReplicaType].Replicas = ptr.To[int32](rs.ReplicaCount)
 		j.Spec.TFReplicaSpecs[rs.ReplicaType].Template.Name = rs.Name
@@ -64,7 +64,7 @@ func (j *TFJobWrapper) TFReplicaSpecs(replicaSpecs ...TFReplicaSpecRequirement) 
 		j.Spec.TFReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Name = "tensorflow"
 
 		if rs.Annotations != nil {
-			j.Spec.TFReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.TFReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 

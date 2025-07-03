@@ -43,7 +43,8 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 	if err := acRec.SetupWithManager(mgr, cfg); err != nil {
 		return "AdmissionCheck", err
 	}
-	qRec := NewLocalQueueReconciler(mgr.GetClient(), qManager, cc)
+	qRec := NewLocalQueueReconciler(mgr.GetClient(), qManager, cc,
+		WithAdmissionFairSharingConfig(cfg.AdmissionFairSharing))
 	if err := qRec.SetupWithManager(mgr, cfg); err != nil {
 		return "LocalQueue", err
 	}
@@ -85,6 +86,7 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		mgr.GetEventRecorderFor(constants.WorkloadControllerName),
 		WithWorkloadUpdateWatchers(qRec, cqRec),
 		WithWaitForPodsReady(waitForPodsReady(cfg.WaitForPodsReady)),
+		WithWorkloadRetention(workloadRetention(cfg.ObjectRetentionPolicies)),
 	).SetupWithManager(mgr, cfg); err != nil {
 		return "Workload", err
 	}
@@ -109,6 +111,16 @@ func waitForPodsReady(cfg *configapi.WaitForPodsReady) *waitForPodsReadyConfig {
 		result.requeuingBackoffJitter = 0.0001
 	}
 	return &result
+}
+
+func workloadRetention(cfg *configapi.ObjectRetentionPolicies) *workloadRetentionConfig {
+	if cfg == nil || cfg.Workloads == nil || cfg.Workloads.AfterFinished == nil {
+		return nil
+	}
+
+	return &workloadRetentionConfig{
+		afterFinished: &cfg.Workloads.AfterFinished.Duration,
+	}
 }
 
 func queueVisibilityUpdateInterval(cfg *configapi.Configuration) time.Duration {

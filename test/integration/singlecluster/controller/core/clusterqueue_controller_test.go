@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	config "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/metrics"
@@ -130,7 +131,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Resource(resourceGPU, "5", "5").Obj(),
 				).
 				Cohort("cohort").
-				AdmissionChecks(ac.Name).
+				AdmissionChecks(kueue.AdmissionCheckReference(ac.Name)).
 				Obj()
 			util.MustCreate(ctx, k8sClient, clusterQueue)
 			localQueue = testing.MakeLocalQueue("queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
@@ -148,17 +149,17 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 
 		ginkgo.It("Should update status and report metrics when workloads are assigned and finish", framework.SlowSpec, func() {
 			workloads := []*kueue.Workload{
-				testing.MakeWorkload("one", ns.Name).Queue(localQueue.Name).
+				testing.MakeWorkload("one", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 					Request(corev1.ResourceCPU, "2").Request(resourceGPU, "2").Obj(),
-				testing.MakeWorkload("two", ns.Name).Queue(localQueue.Name).
+				testing.MakeWorkload("two", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 					Request(corev1.ResourceCPU, "3").Request(resourceGPU, "3").Obj(),
-				testing.MakeWorkload("three", ns.Name).Queue(localQueue.Name).
+				testing.MakeWorkload("three", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 					Request(corev1.ResourceCPU, "1").Request(resourceGPU, "1").Obj(),
-				testing.MakeWorkload("four", ns.Name).Queue(localQueue.Name).
+				testing.MakeWorkload("four", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 					Request(corev1.ResourceCPU, "1").Request(resourceGPU, "1").Obj(),
 				testing.MakeWorkload("five", ns.Name).Queue("other").
 					Request(corev1.ResourceCPU, "1").Request(resourceGPU, "1").Obj(),
-				testing.MakeWorkload("six", ns.Name).Queue(localQueue.Name).
+				testing.MakeWorkload("six", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 					Request(corev1.ResourceCPU, "1").Request(resourceGPU, "1").Obj(),
 			}
 
@@ -195,7 +196,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 							Type:    kueue.ClusterQueueActive,
 							Status:  metav1.ConditionFalse,
 							Reason:  "FlavorNotFound",
-							Message: "Can't admit new workloads: references missing ResourceFlavor(s): [on-demand spot model-a model-b].",
+							Message: "Can't admit new workloads: references missing ResourceFlavor(s): on-demand,spot,model-a,model-b.",
 						},
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration, ignorePendingWorkloadsStatus))
@@ -305,7 +306,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 
 			ginkgo.By("Setting the admission check for the first 4 workloads")
 			for _, w := range workloads[:4] {
-				util.SetWorkloadsAdmissionCheck(ctx, k8sClient, w, ac.Name, kueue.CheckStateReady, true)
+				util.SetWorkloadsAdmissionCheck(ctx, k8sClient, w, kueue.AdmissionCheckReference(ac.Name), kueue.CheckStateReady, true)
 			}
 
 			gomega.Eventually(func(g gomega.Gomega) {
@@ -364,7 +365,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 		})
 
 		ginkgo.It("Should update status and report metrics when a pending workload is deleted", func() {
-			workload := testing.MakeWorkload("one", ns.Name).Queue(localQueue.Name).
+			workload := testing.MakeWorkload("one", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).
 				Request(corev1.ResourceCPU, "5").Obj()
 
 			ginkgo.By("Creating a workload", func() {
@@ -385,7 +386,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 							Type:    kueue.ClusterQueueActive,
 							Status:  metav1.ConditionFalse,
 							Reason:  "FlavorNotFound",
-							Message: "Can't admit new workloads: references missing ResourceFlavor(s): [on-demand spot model-a model-b].",
+							Message: "Can't admit new workloads: references missing ResourceFlavor(s): on-demand,spot,model-a,model-b.",
 						},
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration, ignorePendingWorkloadsStatus))
@@ -413,7 +414,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 							Type:    kueue.ClusterQueueActive,
 							Status:  metav1.ConditionFalse,
 							Reason:  "FlavorNotFound",
-							Message: "Can't admit new workloads: references missing ResourceFlavor(s): [on-demand spot model-a model-b].",
+							Message: "Can't admit new workloads: references missing ResourceFlavor(s): on-demand,spot,model-a,model-b.",
 						},
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration, ignorePendingWorkloadsStatus))
@@ -437,7 +438,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			})
 
 			wl := testing.MakeWorkload("one", ns.Name).
-				Queue(localQueue.Name).
+				Queue(kueue.LocalQueueName(localQueue.Name)).
 				PodSets(
 					*testing.MakePodSet("driver", 2).
 						Request(corev1.ResourceCPU, "1").
@@ -630,7 +631,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			util.MustCreate(ctx, k8sClient, cq)
 			lq = testing.MakeLocalQueue("bar-lq", ns.Name).ClusterQueue(cq.Name).Obj()
 			util.MustCreate(ctx, k8sClient, lq)
-			wl = testing.MakeWorkload("bar-wl", ns.Name).Queue(lq.Name).Obj()
+			wl = testing.MakeWorkload("bar-wl", ns.Name).Queue(kueue.LocalQueueName(lq.Name)).Obj()
 			util.MustCreate(ctx, k8sClient, wl)
 		})
 
@@ -645,9 +646,6 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 		})
 
 		ginkgo.It("Should update status conditions when flavors are created", func() {
-			ginkgo.By("Enabling AdmissionCheckValidationRules feature", func() {
-				features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.AdmissionCheckValidationRules, true)
-			})
 			check1 = testing.MakeAdmissionCheck("check1").ControllerName("ac-controller").Obj()
 			util.MustCreate(ctx, k8sClient, check1)
 			util.SetAdmissionCheckActive(ctx, k8sClient, check1, metav1.ConditionTrue)
@@ -666,7 +664,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Type:    kueue.ClusterQueueActive,
 						Status:  metav1.ConditionFalse,
 						Reason:  "FlavorNotFound",
-						Message: "Can't admit new workloads: references missing ResourceFlavor(s): [arch-a arch-b].",
+						Message: "Can't admit new workloads: references missing ResourceFlavor(s): arch-a,arch-b.",
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration))
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -682,7 +680,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Type:    kueue.ClusterQueueActive,
 						Status:  metav1.ConditionFalse,
 						Reason:  "FlavorNotFound",
-						Message: "Can't admit new workloads: references missing ResourceFlavor(s): [arch-b].",
+						Message: "Can't admit new workloads: references missing ResourceFlavor(s): arch-b.",
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration))
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -721,7 +719,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Type:    kueue.ClusterQueueActive,
 						Status:  metav1.ConditionFalse,
 						Reason:  "AdmissionCheckNotFound",
-						Message: "Can't admit new workloads: references missing AdmissionCheck(s): [check1 check2].",
+						Message: "Can't admit new workloads: references missing AdmissionCheck(s): check1,check2.",
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration))
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -738,7 +736,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Type:    kueue.ClusterQueueActive,
 						Status:  metav1.ConditionFalse,
 						Reason:  "AdmissionCheckNotFound",
-						Message: "Can't admit new workloads: references missing AdmissionCheck(s): [check2].",
+						Message: "Can't admit new workloads: references missing AdmissionCheck(s): check2.",
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration))
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -754,7 +752,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 						Type:    kueue.ClusterQueueActive,
 						Status:  metav1.ConditionFalse,
 						Reason:  "AdmissionCheckInactive",
-						Message: "Can't admit new workloads: references inactive AdmissionCheck(s): [check2].",
+						Message: "Can't admit new workloads: references inactive AdmissionCheck(s): check2.",
 					},
 				}, util.IgnoreConditionTimestampsAndObservedGeneration))
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -841,7 +839,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			gomega.Eventually(func(g gomega.Gomega) {
 				var updatedCq kueue.ClusterQueue
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cq), &updatedCq)).Should(gomega.Succeed())
-				updatedCq.Spec.AdmissionChecks = []string{"check1"}
+				updatedCq.Spec.AdmissionChecks = []kueue.AdmissionCheckReference{"check1"}
 				updatedCq.Spec.AdmissionChecksStrategy = nil
 				g.Expect(k8sClient.Update(ctx, &updatedCq)).Should(gomega.Succeed())
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
@@ -872,7 +870,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			check = testing.MakeAdmissionCheck("check").ControllerName("check-controller").Obj()
 			util.MustCreate(ctx, k8sClient, check)
 
-			cq = testing.MakeClusterQueue("foo-cq").AdmissionChecks(check.Name).Obj()
+			cq = testing.MakeClusterQueue("foo-cq").AdmissionChecks(kueue.AdmissionCheckReference(check.Name)).Obj()
 			lq = testing.MakeLocalQueue("queue", ns.Name).ClusterQueue(cq.Name).Obj()
 			util.MustCreate(ctx, k8sClient, lq)
 			util.MustCreate(ctx, k8sClient, cq)
@@ -892,10 +890,10 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			util.ExpectLQByStatusMetric(lq, metav1.ConditionTrue)
 
 			ginkgo.By("Admit workload")
-			wl := testing.MakeWorkload("workload", ns.Name).Queue(lq.Name).Obj()
+			wl := testing.MakeWorkload("workload", ns.Name).Queue(kueue.LocalQueueName(lq.Name)).Obj()
 			util.MustCreate(ctx, k8sClient, wl)
 			gomega.Expect(util.SetQuotaReservation(ctx, k8sClient, wl, testing.MakeAdmission(cq.Name).Obj())).To(gomega.Succeed())
-			util.SetWorkloadsAdmissionCheck(ctx, k8sClient, wl, check.Name, kueue.CheckStateReady, true)
+			util.SetWorkloadsAdmissionCheck(ctx, k8sClient, wl, kueue.AdmissionCheckReference(check.Name), kueue.CheckStateReady, true)
 			gomega.Eventually(func(g gomega.Gomega) {
 				key := client.ObjectKeyFromObject(wl)
 				updatedWl := &kueue.Workload{}
@@ -927,7 +925,7 @@ var _ = ginkgo.Describe("ClusterQueue controller", ginkgo.Ordered, ginkgo.Contin
 			util.ExpectLQByStatusMetric(lq, metav1.ConditionTrue)
 
 			ginkgo.By("Setting quota reservation")
-			wl := testing.MakeWorkload("workload", ns.Name).Queue(lq.Name).Obj()
+			wl := testing.MakeWorkload("workload", ns.Name).Queue(kueue.LocalQueueName(lq.Name)).Obj()
 			util.MustCreate(ctx, k8sClient, wl)
 			gomega.Expect(util.SetQuotaReservation(ctx, k8sClient, wl, testing.MakeAdmission(cq.Name).Obj())).To(gomega.Succeed())
 
@@ -944,7 +942,19 @@ var _ = ginkgo.Describe("ClusterQueue controller with queue visibility is enable
 		ginkgo.By("Enabling queue visibility feature", func() {
 			gomega.Expect(features.SetEnable(features.QueueVisibility, true)).To(gomega.Succeed())
 		})
-		fwk.StartManager(ctx, cfg, managerSetup)
+		fwk.StartManager(
+			ctx, cfg,
+			managerAndControllerSetup(
+				&config.Configuration{
+					QueueVisibility: &config.QueueVisibility{
+						UpdateIntervalSeconds: 2,
+						ClusterQueues: &config.ClusterQueueVisibility{
+							MaxCount: 3,
+						},
+					},
+				},
+			),
+		)
 	})
 
 	ginkgo.AfterAll(func() {
@@ -989,9 +999,9 @@ var _ = ginkgo.Describe("ClusterQueue controller with queue visibility is enable
 		ginkgo.It("Should update of the pending workloads when a new workload is scheduled", framework.SlowSpec, func() {
 			const lowPrio, midLowerPrio, midHigherPrio, highPrio = 0, 10, 20, 100
 			workloadsFirstBatch := []*kueue.Workload{
-				testing.MakeWorkload("one", ns.Name).Queue(localQueue.Name).Priority(highPrio).
+				testing.MakeWorkload("one", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).Priority(highPrio).
 					Request(corev1.ResourceCPU, "2").Request(resourceGPU, "2").Obj(),
-				testing.MakeWorkload("two", ns.Name).Queue(localQueue.Name).Priority(midHigherPrio).
+				testing.MakeWorkload("two", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).Priority(midHigherPrio).
 					Request(corev1.ResourceCPU, "3").Request(resourceGPU, "3").Obj(),
 			}
 
@@ -1027,9 +1037,9 @@ var _ = ginkgo.Describe("ClusterQueue controller with queue visibility is enable
 
 			ginkgo.By("Creating new workloads to so that the number of workloads exceeds the MaxCount")
 			workloadsSecondBatch := []*kueue.Workload{
-				testing.MakeWorkload("three", ns.Name).Queue(localQueue.Name).Priority(midLowerPrio).
+				testing.MakeWorkload("three", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).Priority(midLowerPrio).
 					Request(corev1.ResourceCPU, "2").Request(resourceGPU, "2").Obj(),
-				testing.MakeWorkload("four", ns.Name).Queue(localQueue.Name).Priority(lowPrio).
+				testing.MakeWorkload("four", ns.Name).Queue(kueue.LocalQueueName(localQueue.Name)).Priority(lowPrio).
 					Request(corev1.ResourceCPU, "3").Request(resourceGPU, "3").Obj(),
 			}
 			for _, w := range workloadsSecondBatch {

@@ -90,18 +90,13 @@ var (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:           SetupIndexes,
-		NewJob:                 NewJob,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupWebhook,
-		JobType:                &corev1.Pod{},
-		MultiKueueAdapter:      &multiKueueAdapter{},
-		IsManagingObjectsOwner: isPod,
+		SetupIndexes:      SetupIndexes,
+		NewJob:            NewJob,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupWebhook,
+		JobType:           &corev1.Pod{},
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
-}
-
-func isPod(ref *metav1.OwnerReference) bool {
-	return ref.Kind == "Pod" && ref.APIVersion == "v1"
 }
 
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
@@ -230,11 +225,9 @@ func (p *Pod) isUnretriableGroup() bool {
 		return *p.unretriableGroup
 	}
 
-	for _, pod := range p.list.Items {
-		if isUnretriablePod(pod) {
-			p.unretriableGroup = ptr.To(true)
-			return true
-		}
+	if slices.ContainsFunc(p.list.Items, isUnretriablePod) {
+		p.unretriableGroup = ptr.To(true)
+		return true
 	}
 
 	p.unretriableGroup = ptr.To(false)
@@ -345,6 +338,10 @@ func (p *Pod) RestorePodSetsInfo(_ []podset.PodSetInfo) bool {
 // Finished means whether the job is completed/failed or not,
 // condition represents the workload finished condition.
 func (p *Pod) Finished() (message string, success, finished bool) {
+	if p.isServing() {
+		return "", true, false
+	}
+
 	finished = true
 	success = true
 
@@ -388,7 +385,7 @@ func (p *Pod) Finished() (message string, success, finished bool) {
 // PodSets will build workload podSets corresponding to the job.
 func (p *Pod) PodSets() ([]kueue.PodSet, error) {
 	if !p.isGroup {
-		return constructPodSets(&p.pod), nil
+		return constructPodSets(&p.pod)
 	} else {
 		return p.constructGroupPodSets()
 	}
@@ -645,13 +642,17 @@ func (p *Pod) constructGroupPodSets() ([]kueue.PodSet, error) {
 	return constructGroupPodSets(p.list.Items)
 }
 
-func constructPodSets(p *corev1.Pod) []kueue.PodSet {
-	return []kueue.PodSet{
-		constructPodSet(p),
+func constructPodSets(p *corev1.Pod) ([]kueue.PodSet, error) {
+	podSet, err := constructPodSet(p)
+	if err != nil {
+		return nil, err
 	}
+	return []kueue.PodSet{
+		podSet,
+	}, nil
 }
 
-func constructPodSet(p *corev1.Pod) kueue.PodSet {
+func constructPodSet(p *corev1.Pod) (kueue.PodSet, error) {
 	podSet := kueue.PodSet{
 		Name:  kueue.DefaultPodSetName,
 		Count: 1,
@@ -660,13 +661,15 @@ func constructPodSet(p *corev1.Pod) kueue.PodSet {
 		},
 	}
 	if features.Enabled(features.TopologyAwareScheduling) {
-		podSet.TopologyRequest = jobframework.PodSetTopologyRequest(
-			&p.ObjectMeta,
-			ptr.To(kueuealpha.PodGroupPodIndexLabel),
-			nil, nil,
-		)
+		topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+			&p.ObjectMeta).PodIndexLabel(
+			ptr.To(kueuealpha.PodGroupPodIndexLabel)).Build()
+		if err != nil {
+			return kueue.PodSet{}, err
+		}
+		podSet.TopologyRequest = topologyRequest
 	}
-	return podSet
+	return podSet, nil
 }
 
 func constructGroupPodSetsFast(pods []corev1.Pod, groupTotalCount int) ([]kueue.PodSet, error) {
@@ -678,7 +681,10 @@ func constructGroupPodSetsFast(pods []corev1.Pod, groupTotalCount int) ([]kueue.
 		if err != nil {
 			return nil, fmt.Errorf("failed to calculate pod role hash: %w", err)
 		}
-		podSets := constructPodSets(&podInGroup)
+		podSets, err := constructPodSets(&podInGroup)
+		if err != nil {
+			return nil, err
+		}
 		podSets[0].Name = kueue.NewPodSetReference(roleHash)
 		podSets[0].Count = int32(groupTotalCount)
 		return podSets, nil
@@ -710,7 +716,10 @@ func constructGroupPodSets(pods []corev1.Pod) ([]kueue.PodSet, error) {
 		}
 
 		if !podRoleFound {
-			podSet := constructPodSet(&podInGroup)
+			podSet, err := constructPodSet(&podInGroup)
+			if err != nil {
+				return nil, err
+			}
 			podSet.Name = kueue.NewPodSetReference(roleHash)
 
 			resultPodSets = append(resultPodSets, podSet)
@@ -788,7 +797,7 @@ func (p *Pod) notRunnableNorSucceededPods() []corev1.Pod {
 // isPodRunnableOrSucceeded returns whether the Pod can eventually run, is Running or Succeeded.
 // A Pod cannot run if it's gated or has no node assignment while having a deletionTimestamp.
 func isPodRunnableOrSucceeded(p *corev1.Pod) bool {
-	if p.DeletionTimestamp != nil && len(p.Spec.NodeName) == 0 {
+	if !p.DeletionTimestamp.IsZero() && len(p.Spec.NodeName) == 0 {
 		return false
 	}
 	return p.Status.Phase != corev1.PodFailed
@@ -1077,7 +1086,7 @@ func (p *Pod) ListChildWorkloads(ctx context.Context, c client.Client, key types
 
 	// List related workloads for the single pod
 	if err := c.List(ctx, workloads, client.InNamespace(key.Namespace),
-		client.MatchingFields{jobframework.GetOwnerKey(gvk): key.Name}); err != nil {
+		client.MatchingFields{jobframework.OwnerReferenceIndexKey(gvk): key.Name}); err != nil {
 		log.Error(err, "Unable to get related workload for the single pod")
 		return nil, err
 	}

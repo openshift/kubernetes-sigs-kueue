@@ -19,11 +19,9 @@ package raycluster
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	rayutils "github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -48,19 +46,18 @@ const (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:           SetupIndexes,
-		NewJob:                 NewJob,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupRayClusterWebhook,
-		JobType:                &rayv1.RayCluster{},
-		AddToScheme:            rayv1.AddToScheme,
-		IsManagingObjectsOwner: isRayCluster,
-		MultiKueueAdapter:      &multiKueueAdapter{},
+		SetupIndexes:      SetupIndexes,
+		NewJob:            NewJob,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupRayClusterWebhook,
+		JobType:           &rayv1.RayCluster{},
+		AddToScheme:       rayv1.AddToScheme,
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update
-// +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=ray.io,resources=rayclusters,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=ray.io,resources=rayclusters/status,verbs=get;patch;update
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads/status,verbs=get;update;patch
@@ -116,10 +113,12 @@ func (j *RayCluster) PodSets() ([]kueue.PodSet, error) {
 	}
 
 	if features.Enabled(features.TopologyAwareScheduling) {
-		podSets[0].TopologyRequest = jobframework.PodSetTopologyRequest(
-			&j.Spec.HeadGroupSpec.Template.ObjectMeta,
-			nil, nil, nil,
-		)
+		topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+			&j.Spec.HeadGroupSpec.Template.ObjectMeta).Build()
+		if err != nil {
+			return nil, err
+		}
+		podSets[0].TopologyRequest = topologyRequest
 	}
 
 	// workers
@@ -138,10 +137,12 @@ func (j *RayCluster) PodSets() ([]kueue.PodSet, error) {
 			Count:    count,
 		}
 		if features.Enabled(features.TopologyAwareScheduling) {
-			podSets[index+1].TopologyRequest = jobframework.PodSetTopologyRequest(
-				&wgs.Template.ObjectMeta,
-				nil, nil, nil,
-			)
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+				&wgs.Template.ObjectMeta).Build()
+			if err != nil {
+				return nil, err
+			}
+			podSets[index+1].TopologyRequest = topologyRequest
 		}
 	}
 	return podSets, nil
@@ -207,10 +208,6 @@ func SetupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
 
 func GetWorkloadNameForRayCluster(jobName string, jobUID types.UID) string {
 	return jobframework.GetWorkloadNameForOwnerWithGVK(jobName, jobUID, gvk)
-}
-
-func isRayCluster(owner *metav1.OwnerReference) bool {
-	return owner.Kind == "RayCluster" && strings.HasPrefix(owner.APIVersion, "ray.io/v1")
 }
 
 func fromObject(o runtime.Object) *RayCluster {

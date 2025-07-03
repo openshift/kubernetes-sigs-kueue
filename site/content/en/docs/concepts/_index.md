@@ -49,7 +49,8 @@ A mechanism allowing internal or external components to influence the timing of 
 ### [Topology Aware Scheduling](/docs/concepts/topology_aware_scheduling)
 
 A mechanism allowing to schedule Workloads optimizing Pod placement for
-network throuput between the Pods.
+network throughput between the Pods.
+
 
 ## Glossary
 
@@ -82,3 +83,7 @@ quota based on the Fair Sharing rules of the ClusterQueue.
 _Preemption_ is the process of evicting one or more admitted Workloads to accommodate another Workload.
 The Workload being evicted might be of a lower priority or might be borrowing
 resources that are now required by the owning ClusterQueue.
+
+### [Fair Sharing](/docs/concepts/fair_sharing)
+
+Mechanisms in Kueue to share quota between tenants fairly.

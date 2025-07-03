@@ -16,7 +16,14 @@ spec:
     spec:
       containers:
         - name: backend
-          image: us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-backend:main
+          image: backend:lastest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 500m
+              memory: 512Mi

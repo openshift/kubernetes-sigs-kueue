@@ -29,17 +29,13 @@ import (
 	"k8s.io/utils/ptr"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	testingrayutil "sigs.k8s.io/kueue/pkg/util/testingjobs/raycluster"
-)
-
-var (
-	labelsPath                    = field.NewPath("metadata", "labels")
-	workloadPriorityClassNamePath = labelsPath.Key(constants.WorkloadPriorityClassLabel)
 )
 
 func TestValidateDefault(t *testing.T) {
@@ -288,7 +284,7 @@ func TestValidateUpdate(t *testing.T) {
 				Suspend(false).
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), "queue2", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(field.NewPath("metadata", "labels").Key(constants.QueueLabel), kueue.LocalQueueName("queue2"), apivalidation.FieldImmutableErrorMsg),
 			}.ToAggregate(),
 		},
 		"managed - queue name can change while suspended": {
@@ -302,7 +298,7 @@ func TestValidateUpdate(t *testing.T) {
 				Obj(),
 			wantErr: nil,
 		},
-		"priorityClassName is immutable": {
+		"priorityClassName is mutable": {
 			oldJob: testingrayutil.MakeCluster("job", "ns").
 				Queue("queue").
 				WorkloadPriorityClass("test-1").
@@ -311,9 +307,6 @@ func TestValidateUpdate(t *testing.T) {
 				Queue("queue").
 				WorkloadPriorityClass("test-2").
 				Obj(),
-			wantErr: field.ErrorList{
-				field.Invalid(workloadPriorityClassNamePath, "test-2", apivalidation.FieldImmutableErrorMsg),
-			}.ToAggregate(),
 		},
 	}
 

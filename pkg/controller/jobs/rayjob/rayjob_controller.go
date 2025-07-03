@@ -19,13 +19,11 @@ package rayjob
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	rayutils "github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,19 +48,18 @@ const (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:           SetupIndexes,
-		NewJob:                 NewJob,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupRayJobWebhook,
-		JobType:                &rayv1.RayJob{},
-		AddToScheme:            rayv1.AddToScheme,
-		IsManagingObjectsOwner: isRayJob,
-		MultiKueueAdapter:      &multiKueueAdapter{},
+		SetupIndexes:      SetupIndexes,
+		NewJob:            NewJob,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupRayJobWebhook,
+		JobType:           &rayv1.RayJob{},
+		AddToScheme:       rayv1.AddToScheme,
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update
-// +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=ray.io,resources=rayjobs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ray.io,resources=rayjobs/finalizers,verbs=get;update
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
@@ -96,7 +93,7 @@ func (j *RayJob) IsSuspended() bool {
 
 func (j *RayJob) IsActive() bool {
 	// When the status is Suspended or New there should be no running Pods, and so the Job is not active.
-	return !(j.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusSuspended || j.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusNew)
+	return j.Status.JobDeploymentStatus != rayv1.JobDeploymentStatusSuspended && j.Status.JobDeploymentStatus != rayv1.JobDeploymentStatusNew
 }
 
 func (j *RayJob) Suspend() {
@@ -124,10 +121,12 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 		Count:    1,
 	}
 	if features.Enabled(features.TopologyAwareScheduling) {
-		headPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(
-			&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta,
-			nil, nil, nil,
-		)
+		topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+			&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta).Build()
+		if err != nil {
+			return nil, err
+		}
+		headPodSet.TopologyRequest = topologyRequest
 	}
 	podSets = append(podSets, headPodSet)
 
@@ -147,7 +146,11 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 			Count:    count,
 		}
 		if features.Enabled(features.TopologyAwareScheduling) {
-			workerPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&wgs.Template.ObjectMeta, nil, nil, nil)
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(&wgs.Template.ObjectMeta).Build()
+			if err != nil {
+				return nil, err
+			}
+			workerPodSet.TopologyRequest = topologyRequest
 		}
 		podSets = append(podSets, workerPodSet)
 	}
@@ -163,7 +166,11 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 		// Create the TopologyRequest for the Submitter Job PodSet, based on the annotations
 		// in rayJob.Spec.SubmitterPodTemplate, which can be specified by the user.
 		if features.Enabled(features.TopologyAwareScheduling) {
-			submitterJobPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta, nil, nil, nil)
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta).Build()
+			if err != nil {
+				return nil, err
+			}
+			submitterJobPodSet.TopologyRequest = topologyRequest
 		}
 		podSets = append(podSets, submitterJobPodSet)
 	}
@@ -259,10 +266,6 @@ func SetupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
 
 func GetWorkloadNameForRayJob(jobName string, jobUID types.UID) string {
 	return jobframework.GetWorkloadNameForOwnerWithGVK(jobName, jobUID, gvk)
-}
-
-func isRayJob(owner *metav1.OwnerReference) bool {
-	return owner.Kind == "RayJob" && strings.HasPrefix(owner.APIVersion, "ray.io/v1")
 }
 
 // getSubmitterTemplate returns the PodTemplteSpec of the submitter Job used for RayJob when submissionMode=K8sJobMode

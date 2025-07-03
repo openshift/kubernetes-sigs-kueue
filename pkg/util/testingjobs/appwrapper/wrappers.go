@@ -29,6 +29,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 // AppWrapperWrapper wraps an AppWrapper.
@@ -97,13 +98,7 @@ func (aw *AppWrapperWrapper) UID(uid string) *AppWrapperWrapper {
 
 // OwnerReference adds a ownerReference to the default container.
 func (aw *AppWrapperWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersionKind) *AppWrapperWrapper {
-	aw.ObjectMeta.OwnerReferences = append(aw.ObjectMeta.OwnerReferences, metav1.OwnerReference{
-		APIVersion: ownerGVK.GroupVersion().String(),
-		Kind:       ownerGVK.Kind,
-		Name:       ownerName,
-		UID:        types.UID(ownerName),
-		Controller: ptr.To(true),
-	})
+	testing.AppendOwnerReference(&aw.AppWrapper, ownerGVK, ownerName, ownerName, ptr.To(true), ptr.To(true))
 	return aw
 }
 
@@ -129,7 +124,7 @@ func (aw *AppWrapperWrapper) Component(component Component) *AppWrapperWrapper {
 				Raw: []byte(patchedData),
 			},
 		}
-		aw.AppWrapper.Spec.Components = append(aw.AppWrapper.Spec.Components, awc)
+		aw.Spec.Components = append(aw.Spec.Components, awc)
 	}
 	return aw
 }
@@ -148,12 +143,12 @@ func (aw *AppWrapperWrapper) SetCondition(condition metav1.Condition) *AppWrappe
 
 // SetPhase sets the status phase of the AppWrapeer.
 func (aw *AppWrapperWrapper) SetPhase(phase awv1beta2.AppWrapperPhase) *AppWrapperWrapper {
-	aw.AppWrapper.Status.Phase = phase
+	aw.Status.Phase = phase
 	return aw
 }
 
 // ManagedBy adds a managedby.
 func (aw *AppWrapperWrapper) ManagedBy(c string) *AppWrapperWrapper {
-	aw.AppWrapper.Spec.ManagedBy = &c
+	aw.Spec.ManagedBy = &c
 	return aw
 }

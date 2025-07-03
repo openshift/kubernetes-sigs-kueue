@@ -165,7 +165,8 @@ func TestValidateWorkload(t *testing.T) {
 				).
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(podSetUpdatePath.Index(0).Child("labels"), "@abc", ""),
+				field.Invalid(podSetUpdatePath.Index(0).Child("labels"), "@abc", "").
+					WithOrigin("labelKey"),
 			},
 		},
 		"invalid node selector name of podSetUpdate": {
@@ -175,7 +176,8 @@ func TestValidateWorkload(t *testing.T) {
 				).
 				Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(podSetUpdatePath.Index(0).Child("nodeSelector"), "@abc", ""),
+				field.Invalid(podSetUpdatePath.Index(0).Child("nodeSelector"), "@abc", "").
+					WithOrigin("labelKey"),
 			},
 		},
 		"invalid label value of podSetUpdate": {
@@ -227,6 +229,8 @@ func TestValidateWorkload(t *testing.T) {
 
 func TestValidateWorkloadUpdate(t *testing.T) {
 	testCases := map[string]struct {
+		enableTopologyAwareScheduling bool
+
 		before, after *kueue.Workload
 		wantErr       field.ErrorList
 	}{
@@ -368,6 +372,208 @@ func TestValidateWorkloadUpdate(t *testing.T) {
 				PodSetUpdates:      []kueue.PodSetUpdate{{Name: "first", Labels: map[string]string{"foo": "bar"}}, {Name: "second"}},
 				State:              kueue.CheckStateReady,
 			}).Obj(),
+		},
+		"TopologyAssignment cannot be mutated": {
+			enableTopologyAwareScheduling: true,
+			before: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: []string{"level"},
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Values: []string{"abc"},
+										Count:  2,
+									},
+								},
+							},
+						}).
+						Obj(),
+				).
+				Obj(),
+			after: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: []string{"level"},
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Values: []string{"abc"},
+										Count:  3,
+									},
+								},
+							},
+						}).
+						Obj(),
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(field.NewPath("status", "admission"), nil, ""),
+			},
+		},
+		"TopologyAssignment cannot be set without delayedTopologyRequest": {
+			enableTopologyAwareScheduling: true,
+			before: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+						}).
+						Obj(),
+				).
+				Obj(),
+			after: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: []string{"level"},
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Values: []string{"abc"},
+										Count:  3,
+									},
+								},
+							},
+						}).
+						Obj(),
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(field.NewPath("status", "admission"), nil, ""),
+			},
+		},
+		"TopologyAssignment can be set if delayedTopologyRequest is Pending": {
+			enableTopologyAwareScheduling: true,
+			before: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name:                   "ps1",
+							DelayedTopologyRequest: ptr.To(kueue.DelayedTopologyRequestStatePending),
+						}).
+						Obj(),
+				).
+				Obj(),
+			after: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: []string{"level"},
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Values: []string{"abc"},
+										Count:  3,
+									},
+								},
+							},
+						}).
+						Obj(),
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(field.NewPath("status", "admission"), nil, ""),
+			},
+		},
+		"TopologyAssignment cannot be set if delayedTopologyRequest is Ready": {
+			enableTopologyAwareScheduling: true,
+			before: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name:                   "ps1",
+							DelayedTopologyRequest: ptr.To(kueue.DelayedTopologyRequestStateReady),
+						}).
+						Obj(),
+				).
+				Obj(),
+			after: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: []string{"level"},
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Values: []string{"abc"},
+										Count:  3,
+									},
+								},
+							},
+						}).
+						Obj(),
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(field.NewPath("status", "admission"), nil, ""),
+			},
+		},
+		"PodSets cannot be removed from admission": {
+			enableTopologyAwareScheduling: true,
+			before: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+					*testingutil.MakePodSet("ps2", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+						}).
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps2",
+						}).
+						Obj(),
+				).
+				Obj(),
+			after: testingutil.MakeWorkload(testWorkloadName, testWorkloadNamespace).
+				PodSets(
+					*testingutil.MakePodSet("ps1", 3).Obj(),
+					*testingutil.MakePodSet("ps2", 3).Obj(),
+				).
+				ReserveQuota(
+					testingutil.MakeAdmission("cluster-queue").
+						PodSets(kueue.PodSetAssignment{
+							Name: "ps1",
+						}).
+						Obj(),
+				).
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(field.NewPath("status", "admission"), nil, ""),
+			},
 		},
 	}
 	for name, tc := range testCases {

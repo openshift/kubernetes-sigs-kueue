@@ -123,12 +123,12 @@ func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
 	}
 	tasSnapshots := make(map[kueue.ResourceFlavorReference]*TASFlavorSnapshot)
 	if features.Enabled(features.TopologyAwareScheduling) {
-		for key, cache := range c.tasCache.Clone() {
+		for flavor, cache := range c.tasCache.Clone() {
 			s, err := cache.snapshot(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("%w: failed to construct snapshot for TAS flavor: %q", err, key)
+				return nil, fmt.Errorf("%w: failed to construct snapshot for TAS flavor: %q", err, flavor)
 			} else {
-				tasSnapshots[key] = s
+				tasSnapshots[flavor] = s
 			}
 		}
 	}
@@ -150,32 +150,31 @@ func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
 			}
 		}
 	}
-	for name, rf := range c.resourceFlavors {
-		// Shallow copy is enough
-		snap.ResourceFlavors[name] = rf
-	}
+	// Shallow copy is enough
+	maps.Copy(snap.ResourceFlavors, c.resourceFlavors)
 	return &snap, nil
 }
 
 // snapshotClusterQueue creates a copy of ClusterQueue that includes
 // references to immutable objects and deep copies of changing ones.
-func snapshotClusterQueue(c *clusterQueue) *ClusterQueueSnapshot {
+func snapshotClusterQueue(cq *clusterQueue) *ClusterQueueSnapshot {
 	cc := &ClusterQueueSnapshot{
-		Name:                          c.Name,
-		ResourceGroups:                make([]ResourceGroup, len(c.ResourceGroups)),
-		FlavorFungibility:             c.FlavorFungibility,
-		FairWeight:                    c.FairWeight,
-		AllocatableResourceGeneration: c.AllocatableResourceGeneration,
-		Workloads:                     maps.Clone(c.Workloads),
-		Preemption:                    c.Preemption,
-		NamespaceSelector:             c.NamespaceSelector,
-		Status:                        c.Status,
-		AdmissionChecks:               utilmaps.DeepCopySets[kueue.ResourceFlavorReference](c.AdmissionChecks),
-		ResourceNode:                  c.resourceNode.Clone(),
+		Name:                          cq.Name,
+		ResourceGroups:                make([]ResourceGroup, len(cq.ResourceGroups)),
+		FlavorFungibility:             cq.FlavorFungibility,
+		FairWeight:                    cq.FairWeight,
+		AllocatableResourceGeneration: cq.AllocatableResourceGeneration,
+		Workloads:                     maps.Clone(cq.Workloads),
+		Preemption:                    cq.Preemption,
+		NamespaceSelector:             cq.NamespaceSelector,
+		Status:                        cq.Status,
+		AdmissionChecks:               utilmaps.DeepCopySets(cq.AdmissionChecks),
+		ResourceNode:                  cq.resourceNode.Clone(),
 		TASFlavors:                    make(map[kueue.ResourceFlavorReference]*TASFlavorSnapshot),
-		tasOnly:                       c.isTASOnly(),
+		tasOnly:                       cq.isTASOnly(),
+		flavorsForProvReqACs:          cq.flavorsWithProvReqAdmissionCheck(),
 	}
-	for i, rg := range c.ResourceGroups {
+	for i, rg := range cq.ResourceGroups {
 		cc.ResourceGroups[i] = rg.Clone()
 	}
 	return cc
@@ -184,6 +183,6 @@ func snapshotClusterQueue(c *clusterQueue) *ClusterQueueSnapshot {
 func newCohortSnapshot(name kueue.CohortReference) *CohortSnapshot {
 	return &CohortSnapshot{
 		Name:   name,
-		Cohort: hierarchy.NewCohort[*ClusterQueueSnapshot, *CohortSnapshot](),
+		Cohort: hierarchy.NewCohort[*ClusterQueueSnapshot](),
 	}
 }

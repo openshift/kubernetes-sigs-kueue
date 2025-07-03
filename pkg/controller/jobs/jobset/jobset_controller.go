@@ -19,7 +19,6 @@ package jobset
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -46,20 +45,19 @@ var (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:           SetupIndexes,
-		NewJob:                 NewJob,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupJobSetWebhook,
-		JobType:                &jobsetapi.JobSet{},
-		AddToScheme:            jobsetapi.AddToScheme,
-		IsManagingObjectsOwner: isJobSet,
-		MultiKueueAdapter:      &multiKueueAdapter{},
+		SetupIndexes:      SetupIndexes,
+		NewJob:            NewJob,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupJobSetWebhook,
+		JobType:           &jobsetapi.JobSet{},
+		AddToScheme:       jobsetapi.AddToScheme,
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=list;get;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch
-// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/finalizers,verbs=get;update
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
@@ -73,10 +71,6 @@ func NewJob() jobframework.GenericJob {
 }
 
 var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
-
-func isJobSet(owner *metav1.OwnerReference) bool {
-	return owner.Kind == "JobSet" && strings.HasPrefix(owner.APIVersion, "jobset.x-k8s.io/v1")
-}
 
 type JobSet jobsetapi.JobSet
 
@@ -126,12 +120,15 @@ func (j *JobSet) PodSets() ([]kueue.PodSet, error) {
 			Count:    podsCount(&replicatedJob),
 		}
 		if features.Enabled(features.TopologyAwareScheduling) {
-			podSets[index].TopologyRequest = jobframework.PodSetTopologyRequest(
-				&replicatedJob.Template.Spec.Template.ObjectMeta,
-				ptr.To(batchv1.JobCompletionIndexAnnotation),
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+				&replicatedJob.Template.Spec.Template.ObjectMeta).PodIndexLabel(
+				ptr.To(batchv1.JobCompletionIndexAnnotation)).SubGroup(
 				ptr.To(jobsetapi.JobIndexKey),
-				ptr.To(replicatedJob.Replicas),
-			)
+				ptr.To(replicatedJob.Replicas)).Build()
+			if err != nil {
+				return nil, err
+			}
+			podSets[index].TopologyRequest = topologyRequest
 		}
 	}
 	return podSets, nil

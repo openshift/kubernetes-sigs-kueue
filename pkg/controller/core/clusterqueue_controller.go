@@ -177,7 +177,7 @@ func (r *ClusterQueueReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	log := ctrl.LoggerFrom(ctx)
 	log.V(2).Info("Reconcile ClusterQueue")
 
-	if cqObj.ObjectMeta.DeletionTimestamp.IsZero() {
+	if cqObj.DeletionTimestamp.IsZero() {
 		// Although we'll add the finalizer via webhook mutation now, this is still useful
 		// as a fallback.
 		if !controllerutil.ContainsFinalizer(&cqObj, kueue.ResourceInUseFinalizerName) {
@@ -297,14 +297,14 @@ func (r *ClusterQueueReconciler) NotifyResourceFlavorUpdate(oldRF, newRF *kueue.
 }
 
 func (r *ClusterQueueReconciler) NotifyAdmissionCheckUpdate(oldAc, newAc *kueue.AdmissionCheck) {
-	var acName string
+	var acName kueue.AdmissionCheckReference
 	switch {
 	case oldAc != nil:
 		// Delete or Update Event.
-		acName = oldAc.Name
+		acName = kueue.AdmissionCheckReference(oldAc.Name)
 	case newAc != nil:
 		// Create Event.
-		acName = newAc.Name
+		acName = kueue.AdmissionCheckReference(newAc.Name)
 	default:
 		return
 	}
@@ -355,13 +355,13 @@ func (r *ClusterQueueReconciler) Update(e event.TypedUpdateEvent[*kueue.ClusterQ
 	log := r.log.WithValues("clusterQueue", klog.KObj(e.ObjectNew))
 	log.V(2).Info("ClusterQueue update event")
 
-	if e.ObjectNew.DeletionTimestamp != nil {
+	if !e.ObjectNew.DeletionTimestamp.IsZero() {
 		return true
 	}
 	defer r.notifyWatchers(e.ObjectOld, e.ObjectNew)
 	specUpdated := !equality.Semantic.DeepEqual(e.ObjectOld.Spec, e.ObjectNew.Spec)
 
-	if err := r.cache.UpdateClusterQueue(e.ObjectNew); err != nil {
+	if err := r.cache.UpdateClusterQueue(r.log, e.ObjectNew); err != nil {
 		log.Error(err, "Failed to update clusterQueue in cache")
 	}
 	if err := r.qManager.UpdateClusterQueue(context.Background(), e.ObjectNew, specUpdated); err != nil {
@@ -559,10 +559,7 @@ func (h *cqSnapshotHandler) Generic(_ context.Context, e event.GenericEvent, q w
 	}
 	remainingTime := constants.UpdatesBatchPeriod
 	if cq.Status.PendingWorkloadsStatus != nil {
-		remainingTime = h.queueVisibilityUpdateInterval - time.Since(cq.Status.PendingWorkloadsStatus.LastChangeTime.Time)
-		if remainingTime <= constants.UpdatesBatchPeriod {
-			remainingTime = constants.UpdatesBatchPeriod
-		}
+		remainingTime = max(h.queueVisibilityUpdateInterval-time.Since(cq.Status.PendingWorkloadsStatus.LastChangeTime.Time), constants.UpdatesBatchPeriod)
 	}
 	q.AddAfter(reconcile.Request{
 		NamespacedName: types.NamespacedName{
@@ -587,7 +584,10 @@ func (r *ClusterQueueReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.
 			&handler.TypedEnqueueRequestForObject[*kueue.ClusterQueue]{},
 			r,
 		)).
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(false),
+			MaxConcurrentReconciles: mgr.GetControllerOptions().GroupKindConcurrency[kueue.GroupVersion.WithKind("ClusterQueue").GroupKind().String()],
+		}).
 		Watches(&corev1.Namespace{}, &nsHandler).
 		WatchesRawSource(source.Channel(r.snapUpdateCh, &snapHandler)).
 		WatchesRawSource(source.Channel(r.nonCQObjectUpdateCh, &nonCQObjectHandler{})).
@@ -671,7 +671,7 @@ func (r *ClusterQueueReconciler) Start(ctx context.Context) error {
 
 	defer r.snapshotsQueue.ShutDown()
 
-	for i := 0; i < snapshotWorkers; i++ {
+	for range snapshotWorkers {
 		go wait.UntilWithContext(ctx, r.takeSnapshot, r.queueVisibilityUpdateInterval)
 	}
 

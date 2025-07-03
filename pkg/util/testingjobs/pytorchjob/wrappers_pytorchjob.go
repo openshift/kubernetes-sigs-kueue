@@ -58,7 +58,7 @@ type PyTorchReplicaSpecRequirement struct {
 }
 
 func (j *PyTorchJobWrapper) PyTorchReplicaSpecs(replicaSpecs ...PyTorchReplicaSpecRequirement) *PyTorchJobWrapper {
-	j = j.PyTorchReplicaSpecsDefault()
+	j.PyTorchReplicaSpecsDefault()
 	for _, rs := range replicaSpecs {
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Replicas = ptr.To[int32](rs.ReplicaCount)
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Name = rs.Name
@@ -68,7 +68,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecs(replicaSpecs ...PyTorchReplicaSp
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Args = rs.Args
 
 		if rs.Annotations != nil {
-			j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 
@@ -83,7 +83,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecsDefault() *PyTorchJobWrapper {
 				RestartPolicy: "Never",
 				Containers: []corev1.Container{
 					{
-						Name:    "c",
+						Name:    "pytorch",
 						Image:   "pause",
 						Command: []string{},
 						Resources: corev1.ResourceRequirements{
@@ -104,7 +104,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecsDefault() *PyTorchJobWrapper {
 				RestartPolicy: "Never",
 				Containers: []corev1.Container{
 					{
-						Name:    "c",
+						Name:    "pytorch",
 						Image:   "pause",
 						Command: []string{},
 						Resources: corev1.ResourceRequirements{

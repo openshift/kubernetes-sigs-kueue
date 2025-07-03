@@ -264,7 +264,7 @@ func TestValidateCreate(t *testing.T) {
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-required-topology"), "some required value",
-					invalidLabelKeyMessage),
+					invalidLabelKeyMessage).WithOrigin("labelKey"),
 			},
 		},
 		{
@@ -274,8 +274,87 @@ func TestValidateCreate(t *testing.T) {
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-preferred-topology"), "some preferred value",
-					invalidLabelKeyMessage),
+					invalidLabelKeyMessage).WithOrigin("labelKey"),
 			},
+		},
+		{
+			name: "valid slice topology request",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "1").
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "valid topology request - slice-only topology - unconstrained with slices defined",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetUnconstrainedTopologyAnnotation, "true").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "1").
+				Obj(),
+			wantErr: nil,
+		},
+		{
+			name: "invalid topology request - slice requested without slice size",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Required(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "slice size is required if slice topology is requested"),
+			},
+		},
+		{
+			name: "invalid topology request - slice size is not a number",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "not a number").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "not a number", "must be a numeric value"),
+			},
+		},
+		{
+			name: "invalid topology request - slice size is negative",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "-1").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "-1", "must be greater than or equal to 1"),
+			},
+		},
+		{
+			name: "invalid topology request - slice size is zero",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "0").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Invalid(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "0", "must be greater than or equal to 1"),
+			},
+		},
+		{
+			name: "invalid topology request - slice size provided without slice topology",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "1").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Forbidden(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "cannot be set when 'kueue.x-k8s.io/podset-slice-required-topology' is not present"),
+			},
+		},
+		{
+			name: "valid topology request - slice-only topology",
+			job: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "1").
+				Obj(),
+			wantErr: nil,
 		},
 	}
 
@@ -310,7 +389,7 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob: testingutil.MakeJob("job", "default").Obj(),
 			newJob: testingutil.MakeJob("job", "default").Queue("queue").Suspend(false).Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(queueNameLabelPath, "queue", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(queueNameLabelPath, kueue.LocalQueueName("queue"), apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -324,7 +403,7 @@ func TestValidateUpdate(t *testing.T) {
 			oldJob: testingutil.MakeJob("job", "default").Queue("queue").Obj(),
 			newJob: testingutil.MakeJob("job", "default").Queue("queue2").Suspend(false).Obj(),
 			wantErr: field.ErrorList{
-				field.Invalid(queueNameLabelPath, "queue2", apivalidation.FieldImmutableErrorMsg),
+				field.Invalid(queueNameLabelPath, kueue.LocalQueueName("queue2"), apivalidation.FieldImmutableErrorMsg),
 			},
 		},
 		{
@@ -407,9 +486,14 @@ func TestValidateUpdate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:   "workloadPriorityClassName is immutable",
+			name:   "workloadPriorityClassName is mutable when job is suspended",
 			oldJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-1").Obj(),
 			newJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-2").Obj(),
+		},
+		{
+			name:   "workloadPriorityClassName is immutable when job is running",
+			oldJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-1").Suspend(false).Obj(),
+			newJob: testingutil.MakeJob("job", "default").WorkloadPriorityClass("test-2").Suspend(false).Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(workloadPriorityClassNamePath, "test-2", apivalidation.FieldImmutableErrorMsg),
 			},
@@ -436,7 +520,7 @@ func TestValidateUpdate(t *testing.T) {
 				Suspend(false).
 				Label(constants.QueueLabel, "new-queue").
 				Obj(),
-			wantErr: apivalidation.ValidateImmutableField("new-queue", "old-queue", queueNameLabelPath),
+			wantErr: apivalidation.ValidateImmutableField(kueue.LocalQueueName("new-queue"), "old-queue", queueNameLabelPath),
 		},
 		{
 			name: "queue name can changes when it is  suspend",
@@ -535,6 +619,28 @@ func TestValidateUpdate(t *testing.T) {
 				field.Invalid(replicaMetaPath.Child("annotations"), field.OmitValueType{},
 					`must not contain more than one topology annotation: ["kueue.x-k8s.io/podset-required-topology", `+
 						`"kueue.x-k8s.io/podset-preferred-topology", "kueue.x-k8s.io/podset-unconstrained-topology"]`)},
+		},
+		{
+			name: "valid slice topology request",
+			oldJob: testingutil.MakeJob("job", "default").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceSizeAnnotation, "1").
+				Obj(),
+		},
+		{
+			name: "attempt to set invalid slice topology request",
+			oldJob: testingutil.MakeJob("job", "default").
+				Obj(),
+			newJob: testingutil.MakeJob("job", "default").
+				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kueuealpha.PodSetSliceRequiredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErr: field.ErrorList{
+				field.Required(replicaMetaPath.Child("annotations").Key("kueue.x-k8s.io/podset-slice-size"), "slice size is required if slice topology is requested"),
+			},
 		},
 	}
 
@@ -695,7 +801,6 @@ func TestDefault(t *testing.T) {
 				OwnerReference("owner", jobsetapi.SchemeGroupVersion.WithKind("JobSet")).
 				Queue("default").
 				Obj(),
-			wantErr: jobframework.ErrWorkloadOwnerNotFound,
 		},
 	}
 	for name, tc := range testcases {
@@ -704,7 +809,7 @@ func TestDefault(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.MultiKueueBatchJobWithManagedBy, tc.multiKueueBatchJobWithManagedByEnabled)
 			features.SetFeatureGateDuringTest(t, features.LocalQueueDefaulting, tc.localQueueDefaulting)
 
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder(kfmpi.AddToScheme).
 				WithObjects(utiltesting.MakeNamespace("default")).
@@ -729,7 +834,7 @@ func TestDefault(t *testing.T) {
 					t.Fatalf("Inserting clusterQueue %s in cache: %v", cq.Name, err)
 				}
 				if tc.admissionCheck != nil {
-					cqCache.AddOrUpdateAdmissionCheck(tc.admissionCheck)
+					cqCache.AddOrUpdateAdmissionCheck(log, tc.admissionCheck)
 					if err := queueManager.AddClusterQueue(ctx, &cq); err != nil {
 						t.Fatalf("Inserting clusterQueue %s in manager: %v", cq.Name, err)
 					}

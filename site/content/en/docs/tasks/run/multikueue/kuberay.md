@@ -15,7 +15,7 @@ For the ease of setup and use we recommend using at least Kueue v0.11.0 and for 
 
 See [KubeRay Operator Installation](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/raycluster-quick-start.html#step-2-deploy-a-kuberay-operator) for installation and configuration details of KubeRay Operator.
 
-{{% alert title="Note" color="info" %}}
+{{% alert title="Note" color="primary" %}}
 Before the [ManagedBy feature](https://github.com/ray-project/kuberay/issues/2544) was supported in Kueue (below v0.11.0), the installation of KubeRay Operator in the <b>Manager Cluster</b> must be limited to CRDs only.
 
 To install the CRDs run:
@@ -29,7 +29,7 @@ kubectl create -k "github.com/ray-project/kuberay/ray-operator/config/crd?ref=v1
 Once the setup is complete you can test it by running a RayJob [`ray-job-sample.yaml`](/docs/tasks/run/rayjobs/#example-rayjob).
 
 {{% alert title="Note" color="primary" %}}
-Note: Kueue defaults the `spec.managedBy` field to `kueue.x-k8s.io/multikueue` on the management cluster for KubeRay Jobs (RayJob, RayCluster, RayService). 
+Kueue defaults the `spec.managedBy` field to `kueue.x-k8s.io/multikueue` on the management cluster for KubeRay Jobs (RayJob, RayCluster, RayService). 
 
 This allows the KubeRay Operator to ignore the Jobs managed by MultiKueue on the management cluster, and in particular skip Pod creation. 
 

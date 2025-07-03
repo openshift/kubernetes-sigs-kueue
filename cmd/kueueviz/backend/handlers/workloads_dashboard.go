@@ -30,17 +30,23 @@ import (
 // WorkloadsDashboardWebSocketHandler streams workloads along with attached pod details
 func WorkloadsDashboardWebSocketHandler(dynamicClient dynamic.Interface) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		GenericWebSocketHandler(func() (any, error) {
-			return fetchDashboardData(dynamicClient)
-		})(c)
+		// Extract namespace query parameter if provided
+		namespace := c.Query("namespace")
+
+		// Create a closure that captures the namespace parameter
+		dataFetcher := func() (any, error) {
+			return fetchDashboardData(dynamicClient, namespace)
+		}
+
+		GenericWebSocketHandler(dataFetcher)(c)
 	}
 }
 
-func fetchDashboardData(dynamicClient dynamic.Interface) (map[string]any, error) {
+func fetchDashboardData(dynamicClient dynamic.Interface, namespace string) (map[string]any, error) {
 	resourceFlavors, _ := fetchResourceFlavors(dynamicClient)
 	clusterQueues, _ := fetchClusterQueues(dynamicClient)
 	localQueues, _ := fetchLocalQueues(dynamicClient)
-	workloads := fetchWorkloadsDashboardData(dynamicClient)
+	workloads := fetchWorkloadsDashboardData(dynamicClient, namespace)
 	result := map[string]any{
 		"flavors":       removeManagedFields(resourceFlavors),
 		"clusterQueues": removeManagedFields(clusterQueues),
@@ -48,11 +54,12 @@ func fetchDashboardData(dynamicClient dynamic.Interface) (map[string]any, error)
 		"workloads":     removeManagedFields(workloads),
 	}
 	return result, nil
-
 }
 
-func fetchWorkloadsDashboardData(dynamicClient dynamic.Interface) any {
-	workloadList, err := dynamicClient.Resource(WorkloadsGVR()).List(context.TODO(), metav1.ListOptions{})
+func fetchWorkloadsDashboardData(dynamicClient dynamic.Interface, namespace string) any {
+	// Filter workloads by namespace if provided, otherwise fetch all
+	workloadList, err := dynamicClient.Resource(WorkloadsGVR()).Namespace(namespace).List(context.TODO(), metav1.ListOptions{})
+
 	if err != nil {
 		fmt.Printf("error fetching workloads: %v", err)
 	}
@@ -103,8 +110,14 @@ func fetchWorkloadsDashboardData(dynamicClient dynamic.Interface) any {
 		}
 
 		preemption := map[string]any{"preempted": preempted, "reason": preemptionReason}
-		unstructured.SetNestedField(workload.Object, preemption, "preemption")
-		addPodsToWorkload(&workload, workloadPods)
+		if err := unstructured.SetNestedField(workload.Object, preemption, "preemption"); err != nil {
+			fmt.Printf("error setting nested field %v", err)
+			return nil
+		}
+		if err := addPodsToWorkload(&workload, workloadPods); err != nil {
+			fmt.Printf("error adding pods to workload: %v", err)
+			return nil
+		}
 		workloadsByUID[workloadUID] = workloadName
 		processedWorkloads = append(processedWorkloads, workload)
 	}

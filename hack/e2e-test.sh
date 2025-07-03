@@ -30,7 +30,7 @@ function cleanup {
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-        cluster_cleanup "$KIND_CLUSTER_NAME"
+        cluster_cleanup "$KIND_CLUSTER_NAME" ""
     fi
     #do the image restore here for the case when an error happened during deploy
     restore_managers_image
@@ -42,48 +42,26 @@ function startup {
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-        cluster_create "$KIND_CLUSTER_NAME"  "$SOURCE_DIR/$KIND_CLUSTER_FILE"
-    fi
-}
-
-function kind_load {
-    prepare_docker_images
-
-    if [ "$CREATE_KIND_CLUSTER" == 'true' ]; then
-	      cluster_kind_load "$KIND_CLUSTER_NAME"
-    fi
-
-    if [[ -n ${APPWRAPPER_VERSION:-} ]]; then
-        install_appwrapper "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${JOBSET_VERSION:-} ]]; then
-        install_jobset "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${KUBEFLOW_VERSION:-} ]]; then
-        install_kubeflow "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${KUBEFLOW_MPI_VERSION:-} ]]; then
-        install_mpi "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${LEADERWORKERSET_VERSION:-} ]]; then
-        install_lws "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${KUBERAY_VERSION:-} ]]; then
-        install_kuberay "$KIND_CLUSTER_NAME"
-    fi
-    if [[ -n ${CERTMANAGER_VERSION:-} ]]; then
-        install_cert_manager "$KIND_CLUSTER_NAME"
+        cluster_create "$KIND_CLUSTER_NAME"  "$SOURCE_DIR/$KIND_CLUSTER_FILE" ""
     fi
 }
 
 function kueue_deploy {
     (cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
-    cluster_kueue_deploy "$KIND_CLUSTER_NAME"
+    cluster_kueue_deploy ""
 }
 
 trap cleanup EXIT
-startup
-kind_load
+startup &
+prepare_docker_images
+wait
+kind_load "$KIND_CLUSTER_NAME" ""
 kueue_deploy
-# shellcheck disable=SC2086
-$GINKGO $GINKGO_ARGS --junit-report=junit.xml --json-report=e2e.json --output-dir="$ARTIFACTS" -v ./test/e2e/$E2E_TARGET_FOLDER/...
+
+if [ "$E2E_RUN_ONLY_ENV" == 'true' ]; then
+  read -rp "Press Enter to cleanup."
+else
+  # shellcheck disable=SC2086
+  $GINKGO $GINKGO_ARGS --junit-report=junit.xml --json-report=e2e.json --output-dir="$ARTIFACTS" -v ./test/e2e/$E2E_TARGET_FOLDER/...
+  "$ROOT_DIR/bin/ginkgo-top" -i "$ARTIFACTS/e2e.json" > "$ARTIFACTS/e2e-top.yaml"
+fi

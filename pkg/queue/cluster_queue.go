@@ -28,9 +28,12 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	config "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/hierarchy"
 	"sigs.k8s.io/kueue/pkg/util/heap"
 	utilpriority "sigs.k8s.io/kueue/pkg/util/priority"
@@ -53,12 +56,12 @@ var (
 type ClusterQueue struct {
 	hierarchy.ClusterQueue[*cohort]
 	name              kueue.ClusterQueueReference
-	heap              heap.Heap[workload.Info]
+	heap              heap.Heap[workload.Info, workload.Reference]
 	namespaceSelector labels.Selector
 	active            bool
 
 	// inadmissibleWorkloads are workloads that have been tried at least once and couldn't be admitted.
-	inadmissibleWorkloads map[string]*workload.Info
+	inadmissibleWorkloads map[workload.Reference]*workload.Info
 
 	// popCycle identifies the last call to Pop. It's incremented when calling Pop.
 	// popCycle and queueInadmissibleCycle are used to track when there is a requeuing
@@ -85,12 +88,13 @@ func (c *ClusterQueue) GetName() kueue.ClusterQueueReference {
 	return c.name
 }
 
-func workloadKey(i *workload.Info) string {
+func workloadKey(i *workload.Info) workload.Reference {
 	return workload.Key(i.Obj)
 }
 
-func newClusterQueue(cq *kueue.ClusterQueue, wo workload.Ordering) (*ClusterQueue, error) {
-	cqImpl := newClusterQueueImpl(wo, realClock)
+func newClusterQueue(ctx context.Context, client client.Client, cq *kueue.ClusterQueue, wo workload.Ordering, afsConfig *config.AdmissionFairSharing) (*ClusterQueue, error) {
+	enableAdmissionFs, fsResWeights := afsResourceWeights(cq, afsConfig)
+	cqImpl := newClusterQueueImpl(ctx, client, wo, realClock, fsResWeights, enableAdmissionFs)
 	err := cqImpl.Update(cq)
 	if err != nil {
 		return nil, err
@@ -98,11 +102,20 @@ func newClusterQueue(cq *kueue.ClusterQueue, wo workload.Ordering) (*ClusterQueu
 	return cqImpl, nil
 }
 
-func newClusterQueueImpl(wo workload.Ordering, clock clock.Clock) *ClusterQueue {
-	lessFunc := queueOrderingFunc(wo)
+func afsResourceWeights(cq *kueue.ClusterQueue, afsConfig *config.AdmissionFairSharing) (bool, map[corev1.ResourceName]float64) {
+	enableAdmissionFs, fsResWeights := false, make(map[corev1.ResourceName]float64)
+	if afsConfig != nil && cq.Spec.AdmissionScope != nil && cq.Spec.AdmissionScope.AdmissionMode == kueue.UsageBasedAdmissionFairSharing && features.Enabled(features.AdmissionFairSharing) {
+		enableAdmissionFs = true
+		fsResWeights = afsConfig.ResourceWeights
+	}
+	return enableAdmissionFs, fsResWeights
+}
+
+func newClusterQueueImpl(ctx context.Context, client client.Client, wo workload.Ordering, clock clock.Clock, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool) *ClusterQueue {
+	lessFunc := queueOrderingFunc(ctx, client, wo, fsResWeights, enableAdmissionFs)
 	return &ClusterQueue{
 		heap:                   *heap.New(workloadKey, lessFunc),
-		inadmissibleWorkloads:  make(map[string]*workload.Info),
+		inadmissibleWorkloads:  make(map[workload.Reference]*workload.Info),
 		queueInadmissibleCycle: -1,
 		lessFunc:               lessFunc,
 		rwm:                    sync.RWMutex{},
@@ -169,6 +182,16 @@ func (c *ClusterQueue) PushOrUpdate(wInfo *workload.Info) {
 		return
 	}
 	c.heap.PushOrUpdate(wInfo)
+}
+
+func (c *ClusterQueue) Heapify(lqName string) {
+	c.rwm.Lock()
+	defer c.rwm.Unlock()
+	for _, wl := range c.heap.List() {
+		if string(wl.Obj.Spec.QueueName) == lqName {
+			c.heap.PushOrUpdate(wl)
+		}
+	}
 }
 
 // backoffWaitingTimeExpired returns true if the current time is after the requeueAt
@@ -251,7 +274,7 @@ func (c *ClusterQueue) requeueIfNotPresent(wInfo *workload.Info, immediate bool)
 	return true
 }
 
-func (c *ClusterQueue) forgetInflightByKey(key string) {
+func (c *ClusterQueue) forgetInflightByKey(key workload.Reference) {
 	if c.inflight != nil && workload.Key(c.inflight.Obj) == key {
 		c.inflight = nil
 	}
@@ -267,7 +290,7 @@ func (c *ClusterQueue) QueueInadmissibleWorkloads(ctx context.Context, client cl
 		return false
 	}
 
-	inadmissibleWorkloads := make(map[string]*workload.Info)
+	inadmissibleWorkloads := make(map[workload.Reference]*workload.Info)
 	moved := false
 	for key, wInfo := range c.inadmissibleWorkloads {
 		ns := corev1.Namespace{}
@@ -324,26 +347,26 @@ func (c *ClusterQueue) Pop() *workload.Info {
 // Dump produces a dump of the current workloads in the heap of
 // this ClusterQueue. It returns false if the queue is empty,
 // otherwise returns true.
-func (c *ClusterQueue) Dump() ([]string, bool) {
+func (c *ClusterQueue) Dump() ([]workload.Reference, bool) {
 	c.rwm.RLock()
 	defer c.rwm.RUnlock()
 	if c.heap.Len() == 0 {
 		return nil, false
 	}
-	elements := make([]string, c.heap.Len())
+	elements := make([]workload.Reference, c.heap.Len())
 	for i, info := range c.heap.List() {
 		elements[i] = workload.Key(info.Obj)
 	}
 	return elements, true
 }
 
-func (c *ClusterQueue) DumpInadmissible() ([]string, bool) {
+func (c *ClusterQueue) DumpInadmissible() ([]workload.Reference, bool) {
 	c.rwm.RLock()
 	defer c.rwm.RUnlock()
 	if len(c.inadmissibleWorkloads) == 0 {
 		return nil, false
 	}
-	elements := make([]string, 0, len(c.inadmissibleWorkloads))
+	elements := make([]workload.Reference, 0, len(c.inadmissibleWorkloads))
 	for _, info := range c.inadmissibleWorkloads {
 		elements = append(elements, workload.Key(info.Obj))
 	}
@@ -362,7 +385,7 @@ func (c *ClusterQueue) Snapshot() []*workload.Info {
 
 // Info returns workload.Info for the workload key.
 // Users of this method should not modify the returned object.
-func (c *ClusterQueue) Info(key string) *workload.Info {
+func (c *ClusterQueue) Info(key workload.Reference) *workload.Info {
 	c.rwm.RLock()
 	defer c.rwm.RUnlock()
 	return c.heap.GetByKey(key)
@@ -410,8 +433,25 @@ func (c *ClusterQueue) RequeueIfNotPresent(wInfo *workload.Info, reason RequeueR
 // to sort workloads. The function sorts workloads based on their priority.
 // When priorities are equal, it uses the workload's creation or eviction
 // time.
-func queueOrderingFunc(wo workload.Ordering) func(a, b *workload.Info) bool {
+func queueOrderingFunc(ctx context.Context, c client.Client, wo workload.Ordering, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool) func(a, b *workload.Info) bool {
+	log := ctrl.LoggerFrom(ctx)
 	return func(a, b *workload.Info) bool {
+		if enableAdmissionFs {
+			lqAUsage, errA := a.LocalQueueUsage(ctx, c, fsResWeights)
+			lqBUsage, errB := b.LocalQueueUsage(ctx, c, fsResWeights)
+			switch {
+			case errA != nil:
+				log.V(2).Error(errA, "Error determining LocalQueue usage")
+			case errB != nil:
+				log.V(2).Error(errB, "Error determining LocalQueue usage")
+			default:
+				log.V(3).Info("Resource usage from LocalQueue", "LocalQueue", a.Obj.Spec.QueueName, "Usage", lqAUsage)
+				log.V(3).Info("Resource usage from LocalQueue", "LocalQueue", b.Obj.Spec.QueueName, "Usage", lqBUsage)
+				if lqAUsage != lqBUsage {
+					return lqAUsage < lqBUsage
+				}
+			}
+		}
 		p1 := utilpriority.Priority(a.Obj)
 		p2 := utilpriority.Priority(b.Obj)
 

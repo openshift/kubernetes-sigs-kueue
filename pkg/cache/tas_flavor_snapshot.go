@@ -23,14 +23,19 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/utils/ptr"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/podset"
 	"sigs.k8s.io/kueue/pkg/resources"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
@@ -64,6 +69,15 @@ type domain struct {
 	// assigned to the given domain.
 	state int32
 
+	// sliceState is a temporary state of the topology domains during the
+	// assignment algorithm that denotes the number of slices that can fit within
+	// that domain.
+	//
+	// For domains that are below the requested topology level the algorithm
+	// assigns 0 to that field as this field makes no sense for lower level
+	// domains.
+	sliceState int32
+
 	// levelValues stores the mapping from domain ID back to the
 	// ordered list of values
 	levelValues []string
@@ -83,6 +97,10 @@ type leafDomain struct {
 	// nodeTaints contains the list of taints for the node, only applies for
 	// lowest level of topology, if the lowest level is node
 	nodeTaints []corev1.Taint
+
+	// nodeLabels contains the list of labels on the node, only applies for
+	// lowest level of topology, if the lowest level is node
+	nodeLabels map[string]string
 }
 
 type domainByID map[utiltas.TopologyDomainID]*domain
@@ -150,6 +168,7 @@ func (s *TASFlavorSnapshot) addNode(node corev1.Node) utiltas.TopologyDomainID {
 		}
 		if s.isLowestLevelNode() {
 			leafDomain.nodeTaints = slices.Clone(node.Spec.Taints)
+			leafDomain.nodeLabels = node.GetLabels()
 		}
 		s.leaves[domainID] = &leafDomain
 	}
@@ -164,6 +183,10 @@ func (s *TASFlavorSnapshot) isLowestLevelNode() bool {
 
 func (s *TASFlavorSnapshot) lowestLevel() string {
 	return s.levelKeys[len(s.levelKeys)-1]
+}
+
+func (s *TASFlavorSnapshot) highestLevel() string {
+	return s.levelKeys[0]
 }
 
 // initialize prepares the topology tree structure. This structure holds
@@ -234,7 +257,7 @@ func (s *TASFlavorSnapshot) addTASUsage(domainID utiltas.TopologyDomainID, usage
 		// this can happen if there is an admitted workload for which the
 		// backing node was deleted or is no longer Ready (so the addCapacity
 		// function was not called).
-		s.log.Info("skip accounting for TAS usage in domain", "domain", domainID, "usage", usage)
+		s.log.V(3).Info("skip accounting for TAS usage in domain", "domain", domainID, "usage", usage)
 		return
 	}
 	if s.leaves[domainID].tasUsage == nil {
@@ -244,6 +267,13 @@ func (s *TASFlavorSnapshot) addTASUsage(domainID utiltas.TopologyDomainID, usage
 }
 
 func (s *TASFlavorSnapshot) removeTASUsage(domainID utiltas.TopologyDomainID, usage resources.Requests) {
+	if s.leaves[domainID] == nil {
+		// this can happen if there is an admitted workload for which the
+		// backing node was deleted or is no longer Ready (so the addCapacity
+		// function was not called).
+		s.log.V(3).Info("skip removing TAS usage in domain", "domain", domainID, "usage", usage)
+		return
+	}
 	if s.leaves[domainID].tasUsage == nil {
 		s.leaves[domainID].tasUsage = resources.Requests{}
 	}
@@ -313,6 +343,7 @@ func (s *TASFlavorSnapshot) SerializeFreeCapacityPerDomain() (string, error) {
 
 type TASPodSetRequests struct {
 	PodSet            *kueue.PodSet
+	PodSetUpdates     []*kueue.PodSetUpdate
 	SinglePodRequests resources.Requests
 	Count             int32
 	Flavor            kueue.ResourceFlavorReference
@@ -367,66 +398,247 @@ func (s *TASFlavorSnapshot) Fits(flavorUsage workload.TASFlavorUsage) bool {
 	return true
 }
 
+type findTopologyAssignmentsOption struct {
+	simulateEmpty bool
+	workload      *kueue.Workload
+}
+
+type FindTopologyAssignmentsOption func(*findTopologyAssignmentsOption)
+
+// WithSimulateEmpty sets parameter allows to look for the assignment under the
+// assumption that all TAS workloads are preempted.
+func WithSimulateEmpty(simulateEmpty bool) FindTopologyAssignmentsOption {
+	return func(o *findTopologyAssignmentsOption) {
+		o.simulateEmpty = simulateEmpty
+	}
+}
+
+func WithWorkload(wl *kueue.Workload) FindTopologyAssignmentsOption {
+	return func(o *findTopologyAssignmentsOption) {
+		o.workload = wl
+	}
+}
+
 // FindTopologyAssignmentsForFlavor returns TAS assignment, if possible, for all
 // the TAS requests in the flavor handled by the snapshot.
-// The simulateEmpty parameter allows to look for the assignment under the
-// assumption that all TAS workloads are preempted.
-func (s *TASFlavorSnapshot) FindTopologyAssignmentsForFlavor(flavorTASRequests FlavorTASRequests, simulateEmpty bool) TASAssignmentsResult {
+func (s *TASFlavorSnapshot) FindTopologyAssignmentsForFlavor(flavorTASRequests FlavorTASRequests, options ...FindTopologyAssignmentsOption) TASAssignmentsResult {
+	opts := &findTopologyAssignmentsOption{}
+	for _, option := range options {
+		option(opts)
+	}
+
 	result := make(map[kueue.PodSetReference]tasPodSetAssignmentResult)
 	assumedUsage := make(map[utiltas.TopologyDomainID]resources.Requests)
 	for _, tr := range flavorTASRequests {
-		assignment, reason := s.findTopologyAssignment(tr, assumedUsage, simulateEmpty)
-		result[tr.PodSet.Name] = tasPodSetAssignmentResult{TopologyAssignment: assignment, FailureReason: reason}
-		if reason != "" {
-			return result
-		}
-		for _, domain := range assignment.Domains {
-			domainID := utiltas.DomainID(domain.Values)
-			if assumedUsage[domainID] == nil {
-				assumedUsage[domainID] = resources.Requests{}
+		if workload.HasNodeToReplace(opts.workload) {
+			// In case of looking for Node replacement, TopologyRequest has only
+			// PodSets with the Node to replace, so we match PodSetAssignment
+			psa := findPSA(opts.workload, tr.PodSet.Name)
+			if psa == nil || psa.TopologyAssignment == nil {
+				continue
 			}
-			assumedUsage[domainID].Add(tr.TotalRequests())
+			// We deepCopy the existing TopologyAssignment, so if we delete unwanted domain,
+			// And there is no fit, we have the original newAssignment to retry with
+			newAssignment, replacementAssignment, reason := s.findReplacementAssignment(&tr, psa.TopologyAssignment.DeepCopy(), opts.workload, assumedUsage)
+			result[tr.PodSet.Name] = tasPodSetAssignmentResult{TopologyAssignment: newAssignment, FailureReason: reason}
+			if reason != "" {
+				return result
+			}
+			addAssumedUsage(assumedUsage, replacementAssignment, &tr)
+		} else {
+			assignment, reason := s.findTopologyAssignment(tr, assumedUsage, opts.simulateEmpty, "")
+			result[tr.PodSet.Name] = tasPodSetAssignmentResult{TopologyAssignment: assignment, FailureReason: reason}
+			if reason != "" {
+				return result
+			}
+			addAssumedUsage(assumedUsage, assignment, &tr)
 		}
 	}
 	return result
 }
 
+// findReplacementAssignment finds the topology assignment for the replacement node
+// it return new corrected topologyAssignment, a replacement topologyAssignment used to patched the old, faulty one, and
+// reason if finding fails
+func (s *TASFlavorSnapshot) findReplacementAssignment(tr *TASPodSetRequests, existingAssignment *kueue.TopologyAssignment, wl *kueue.Workload, assumedUsage map[utiltas.TopologyDomainID]resources.Requests) (*kueue.TopologyAssignment, *kueue.TopologyAssignment, string) {
+	nodeToReplace := wl.Annotations[kueuealpha.NodeToReplaceAnnotation]
+	tr.Count = deleteDomain(existingAssignment, nodeToReplace)
+	if isStale, staleDomain := s.IsTopologyAssignmentStale(existingAssignment); isStale {
+		return nil, nil, fmt.Sprintf("Cannot replace the node, because the existing topologyAssignment is invalid, as it contains the stale domain %v", staleDomain)
+	}
+	requiredReplacementDomain := s.requiredReplacementDomain(tr, existingAssignment)
+	replacementAssignment, reason := s.findTopologyAssignment(*tr, assumedUsage, false, requiredReplacementDomain)
+	if reason != "" {
+		return nil, nil, reason
+	}
+	newAssignment := s.mergeTopologyAssignments(replacementAssignment, existingAssignment)
+	return newAssignment, replacementAssignment, ""
+}
+
+func addAssumedUsage(assumedUsage map[utiltas.TopologyDomainID]resources.Requests, ta *kueue.TopologyAssignment, tr *TASPodSetRequests) {
+	for _, domain := range ta.Domains {
+		domainID := utiltas.DomainID(domain.Values)
+		if assumedUsage[domainID] == nil {
+			assumedUsage[domainID] = resources.Requests{}
+		}
+		assumedUsage[domainID].Add(tr.SinglePodRequests.ScaledUp(int64(domain.Count)))
+	}
+}
+
+func findPSA(wl *kueue.Workload, psName kueue.PodSetReference) *kueue.PodSetAssignment {
+	if wl.Status.Admission == nil {
+		return nil
+	}
+	for _, psAssignment := range wl.Status.Admission.PodSetAssignments {
+		if psAssignment.Name == psName {
+			return &psAssignment
+		}
+	}
+	return nil
+}
+
+// requiredReplacementDomain returns required domain for the next pass of findingTopologyAssignment to be compliant with the existing one
+func (s *TASFlavorSnapshot) requiredReplacementDomain(tr *TASPodSetRequests, ta *kueue.TopologyAssignment) utiltas.TopologyDomainID {
+	key := s.levelKeyWithImpliedFallback(tr)
+	if key == nil {
+		return ""
+	}
+	levelIdx, found := s.resolveLevelIdx(*key)
+	if !found {
+		return ""
+	}
+	required := isRequired(tr.PodSet.TopologyRequest)
+	if !required {
+		return ""
+	}
+	// no domain to comply with so we don't require any domain at all
+	// this happens when the faulty node was the only one in the assignment
+	if len(ta.Domains) == 0 {
+		return ""
+	}
+
+	nodeLevel := len(s.levelKeys) - 1
+	// Since all Domains comply with the required policy, take a random one
+	// in this case, the first one
+	// We know at this point that values contains only hostname
+	nodeDomain := ta.Domains[0].Values[0]
+	domain := s.domainsPerLevel[nodeLevel][utiltas.TopologyDomainID(nodeDomain)]
+	// Find a domain that complies with the required policy
+	for i := nodeLevel; i > levelIdx; i-- {
+		domain = domain.parent
+	}
+	return domain.id
+}
+
+// IsTopologyAssignmentStale indicates whether the topologyAssignment have Nodes
+// that don't exists in the snapshot. It may be cause e.g. by Node deletion, or change
+// in Node's NodeReady condition
+func (s *TASFlavorSnapshot) IsTopologyAssignmentStale(ta *kueue.TopologyAssignment) (bool, string) {
+	for _, domain := range ta.Domains {
+		if _, found := s.domains[utiltas.DomainID(domain.Values)]; !found {
+			return true, domain.Values[0]
+		}
+	}
+	return false, ""
+}
+
+// deleteDomain deletes the domain the has faulty node and returns number of affected pods by the node
+func deleteDomain(currentTopologyAssignment *kueue.TopologyAssignment, nodeToReplace string) int32 {
+	var noAffectedPods int32 = 0
+	updatedAssignment := make([]kueue.TopologyDomainAssignment, 0, len(currentTopologyAssignment.Domains))
+	for _, domain := range currentTopologyAssignment.Domains {
+		if domain.Values[len(domain.Values)-1] == nodeToReplace {
+			noAffectedPods = domain.Count
+		} else {
+			updatedAssignment = append(updatedAssignment, domain)
+		}
+	}
+	currentTopologyAssignment.Domains = updatedAssignment
+	return noAffectedPods
+}
+
 // Algorithm overview:
 // Phase 1:
 //
-//	determine pod counts for each topology domain. Start at the lowest level
+//	determine pod counts and slice count for each topology domain. Start at the lowest level
 //	and bubble up the numbers to the top level
 //
 // Phase 2:
 //
-//	a) select the domain at requested level with count >= requestedCount
-//	b) traverse the structure down level-by-level optimizing the number of used
-//	  domains at each level
-//	c) build the assignment for the lowest level in the hierarchy
+//	a) sort domains using chosen strategy (i.e. starting from the highest free capacity)
+//	b) select consecutive domains at requested level that can fit the workload
+//	c) traverse the structure down level-by-level optimizing the number of used
+//	domains at each level
+//	d) build the assignment for the lowest level in the hierarchy
 func (s *TASFlavorSnapshot) findTopologyAssignment(
 	tasPodSetRequests TASPodSetRequests,
 	assumedUsage map[utiltas.TopologyDomainID]resources.Requests,
-	simulateEmpty bool) (*kueue.TopologyAssignment, string) {
+	simulateEmpty bool, requiredReplacementDomain utiltas.TopologyDomainID) (*kueue.TopologyAssignment, string) {
 	requests := tasPodSetRequests.SinglePodRequests.Clone()
 	requests.Add(resources.Requests{corev1.ResourcePods: 1})
-	podSetTolerations := tasPodSetRequests.PodSet.Template.Spec.Tolerations
+	info := podset.FromPodSet(tasPodSetRequests.PodSet)
+	for _, podSetUpdate := range tasPodSetRequests.PodSetUpdates {
+		if err := info.Merge(podset.FromUpdate(podSetUpdate)); err != nil {
+			return nil, fmt.Sprintf("invalid podSetUpdate for PodSet %s, error: %s", tasPodSetRequests.PodSet.Name, err.Error())
+		}
+	}
+	podSetTolerations := info.Tolerations
+	podSetNodeSelectors := info.NodeSelector
 	count := tasPodSetRequests.Count
+
+	// If slice topology is not requested then we can assume that slice is a single pod
+	sliceSize, reason := getSliceSizeWithSinglePodAsDefault(tasPodSetRequests.PodSet.TopologyRequest)
+	if len(reason) > 0 {
+		return nil, reason
+	}
+
 	required := isRequired(tasPodSetRequests.PodSet.TopologyRequest)
-	key := s.levelKeyWithImpliedFallback(&tasPodSetRequests)
+	topologyKey := s.levelKeyWithImpliedFallback(&tasPodSetRequests)
+	sliceTopologyKey := s.sliceLevelKeyWithDefault(&tasPodSetRequests, s.lowestLevel())
+
 	unconstrained := isUnconstrained(tasPodSetRequests.PodSet.TopologyRequest, &tasPodSetRequests)
-	if key == nil {
+	if topologyKey == nil {
 		return nil, "topology level not specified"
 	}
-	levelIdx, found := s.resolveLevelIdx(*key)
+	levelIdx, found := s.resolveLevelIdx(*topologyKey)
 	if !found {
-		return nil, fmt.Sprintf("no requested topology level: %s", *key)
+		return nil, fmt.Sprintf("no requested topology level: %s", *topologyKey)
 	}
-	// phase 1 - determine the number of pods which can fit in each topology domain
-	s.fillInCounts(requests, assumedUsage, simulateEmpty, append(podSetTolerations, s.tolerations...))
+
+	sliceLevelIdx, found := s.resolveLevelIdx(sliceTopologyKey)
+	if !found {
+		return nil, fmt.Sprintf("no requested topology level for slices: %s", sliceTopologyKey)
+	}
+
+	if levelIdx > sliceLevelIdx {
+		return nil, fmt.Sprintf("podset slice topology %s is above the podset topology %s", sliceTopologyKey, *topologyKey)
+	}
+
+	var selector labels.Selector
+	if s.isLowestLevelNode() {
+		sel, err := labels.ValidatedSelectorFromSet(podSetNodeSelectors)
+		if err != nil {
+			return nil, fmt.Sprintf("invalid node selectors: %s, reason: %s", podSetNodeSelectors, err)
+		}
+		selector = sel
+	} else {
+		selector = labels.Everything()
+	}
+	// phase 1 - determine the number of pods and slices which can fit in each topology domain
+	s.fillInCounts(
+		requests,
+		assumedUsage,
+		sliceSize,
+		sliceLevelIdx,
+		simulateEmpty,
+		append(podSetTolerations, s.tolerations...),
+		selector,
+		requiredReplacementDomain,
+	)
 
 	// phase 2a: determine the level at which the assignment is done along with
-	// the domains which can accommodate all pods
-	fitLevelIdx, currFitDomain, reason := s.findLevelWithFitDomains(levelIdx, required, count, unconstrained)
+	// the domains which can accommodate all pods/slices
+	fitLevelIdx, currFitDomain, reason := s.findLevelWithFitDomains(levelIdx, required, count, sliceSize, unconstrained)
 	if len(reason) > 0 {
 		return nil, reason
 	}
@@ -434,13 +646,73 @@ func (s *TASFlavorSnapshot) findTopologyAssignment(
 	// phase 2b: traverse the tree down level-by-level optimizing the number of
 	// topology domains at each level
 	// if unconstrained is set, we'll only do it once
-	currFitDomain = s.updateCountsToMinimum(currFitDomain, count, unconstrained)
+	currFitDomain = s.updateSliceCountsToMinimum(currFitDomain, count, sliceSize, unconstrained)
 	for levelIdx := fitLevelIdx; levelIdx+1 < len(s.domainsPerLevel); levelIdx++ {
-		lowerFitDomains := s.lowerLevelDomains(currFitDomain)
-		sortedLowerDomains := s.sortedDomains(lowerFitDomains, unconstrained)
-		currFitDomain = s.updateCountsToMinimum(sortedLowerDomains, count, unconstrained)
+		if levelIdx < sliceLevelIdx {
+			// If we are "above" the requested slice topology level, we're greedily assigning pods/slices to
+			// all domains without checking what we've assigned to parent domains.
+			sortedLowerDomains := s.sortedDomains(s.lowerLevelDomains(currFitDomain), unconstrained)
+			currFitDomain = s.updateSliceCountsToMinimum(sortedLowerDomains, count, sliceSize, unconstrained)
+		} else {
+			// If we are "at" or "below" the requested slice topology level, we have to carefully assign pods
+			// to domains based on what we've assigned to parent domains, that's why we're iterating through
+			// each parent domain and assigning `domain.state` amount of pods its child domains.
+			newCurrFitDomain := make([]*domain, 0)
+			for _, domain := range currFitDomain {
+				sortedLowerDomains := s.sortedDomains(domain.children, unconstrained)
+
+				addCurrFitDomain := s.updateCountsToMinimum(sortedLowerDomains, domain.state, unconstrained)
+				newCurrFitDomain = append(newCurrFitDomain, addCurrFitDomain...)
+			}
+			currFitDomain = newCurrFitDomain
+		}
 	}
 	return s.buildAssignment(currFitDomain), ""
+}
+
+func getSliceSizeWithSinglePodAsDefault(podSetTopologyRequest *kueue.PodSetTopologyRequest) (int32, string) {
+	if podSetTopologyRequest == nil || podSetTopologyRequest.PodSetSliceRequiredTopology == nil {
+		return 1, ""
+	}
+
+	if podSetTopologyRequest.PodSetSliceSize == nil {
+		return 0, "slice topology requested, but slice size not provided"
+	}
+
+	return *podSetTopologyRequest.PodSetSliceSize, ""
+}
+
+// Merges two topology assignments keeping the lexicographical order of levelValues
+func (s *TASFlavorSnapshot) mergeTopologyAssignments(a, b *kueue.TopologyAssignment) *kueue.TopologyAssignment {
+	nodeLevel := len(s.levelKeys) - 1
+	sortedDomains := make([]kueue.TopologyDomainAssignment, 0, len(a.Domains)+len(b.Domains))
+	sortedDomains = append(sortedDomains, a.Domains...)
+	sortedDomains = append(sortedDomains, b.Domains...)
+	sort.Slice(sortedDomains, func(i, j int) bool {
+		a, b := sortedDomains[i], sortedDomains[j]
+		aDomain, bDomain := s.domainsPerLevel[nodeLevel][utiltas.DomainID(a.Values)], s.domainsPerLevel[nodeLevel][utiltas.DomainID(b.Values)]
+		return utiltas.DomainID(aDomain.levelValues) < utiltas.DomainID(bDomain.levelValues)
+	})
+	mergedDomains := make([]kueue.TopologyDomainAssignment, 0, len(sortedDomains))
+	for _, domain := range sortedDomains {
+		if canMerge(mergedDomains, domain) {
+			mergedDomains[len(mergedDomains)-1].Count += domain.Count
+		} else {
+			mergedDomains = append(mergedDomains, domain)
+		}
+	}
+	return &kueue.TopologyAssignment{
+		Levels:  a.Levels,
+		Domains: mergedDomains,
+	}
+}
+
+func canMerge(mergedDomains []kueue.TopologyDomainAssignment, domain kueue.TopologyDomainAssignment) bool {
+	if len(mergedDomains) == 0 {
+		return false
+	}
+	lastDomain := mergedDomains[len(mergedDomains)-1]
+	return utiltas.DomainID(domain.Values) == utiltas.DomainID(lastDomain.Values)
 }
 
 func (s *TASFlavorSnapshot) HasLevel(r *kueue.PodSetTopologyRequest) bool {
@@ -465,6 +737,9 @@ func isRequired(tr *kueue.PodSetTopologyRequest) bool {
 }
 
 func (s *TASFlavorSnapshot) levelKeyWithImpliedFallback(tasRequests *TASPodSetRequests) *string {
+	if isSliceTopologyOnlyRequest(tasRequests.PodSet.TopologyRequest) {
+		return ptr.To(s.highestLevel())
+	}
 	if key := s.levelKey(tasRequests.PodSet.TopologyRequest); key != nil {
 		return key
 	}
@@ -490,27 +765,61 @@ func (s *TASFlavorSnapshot) levelKey(topologyRequest *kueue.PodSetTopologyReques
 	}
 }
 
-func isUnconstrained(tr *kueue.PodSetTopologyRequest, tasRequests *TASPodSetRequests) bool {
-	return (tr != nil && tr.Unconstrained != nil && *tr.Unconstrained) || tasRequests.Implied
+func (s *TASFlavorSnapshot) sliceLevelKeyWithDefault(tasRequests *TASPodSetRequests, defaultSliceLevelKey string) string {
+	if tasRequests.PodSet.TopologyRequest != nil && tasRequests.PodSet.TopologyRequest.PodSetSliceRequiredTopology != nil {
+		return *tasRequests.PodSet.TopologyRequest.PodSetSliceRequiredTopology
+	}
+	return defaultSliceLevelKey
 }
 
-// findBestFitDomainIdx finds an index of the first domain with the lowest
+func isUnconstrained(tr *kueue.PodSetTopologyRequest, tasRequests *TASPodSetRequests) bool {
+	return (tr != nil && tr.Unconstrained != nil && *tr.Unconstrained) || tasRequests.Implied || isSliceTopologyOnlyRequest(tr)
+}
+
+func isSliceTopologyOnlyRequest(tr *kueue.PodSetTopologyRequest) bool {
+	return tr != nil && tr.Required == nil && tr.Preferred == nil && tr.PodSetSliceRequiredTopology != nil
+}
+
+// findBestFitDomain finds an index of the first domain with the lowest
 // value of state, higher or equal than count.
-// If such a domain doesn't exist, it returns 0 as it's an index of the domain with the
+// If such a domain doesn't exist, it returns first domain as it's the domain with the
 // most available resources
-func findBestFitDomainIdx(domains []*domain, count int32) int {
-	bestFitIdx := 0
-	for i, domain := range domains {
-		if domain.state >= count && domain.state != domains[bestFitIdx].state {
+func findBestFitDomain(domains []*domain, count int32) *domain {
+	return findBestFitDomainBy(domains, count, func(d *domain) int32 {
+		return d.state
+	})
+}
+
+// findBestFitDomainForSlices finds an index of the first domain with the lowest
+// value of sliceState, higher or equal than sliceCount.
+// If such a domain doesn't exist, it returns first domain as it's the domain with the
+// most available resources
+func findBestFitDomainForSlices(domains []*domain, sliceCount int32) *domain {
+	return findBestFitDomainBy(domains, sliceCount, func(d *domain) int32 {
+		return d.sliceState
+	})
+}
+
+type domainState func(d *domain) int32
+
+func findBestFitDomainBy(domains []*domain, needed int32, state domainState) *domain {
+	bestDomain := domains[0]
+	bestDomainState := state(bestDomain)
+
+	for _, domain := range domains {
+		domainState := state(domain)
+
+		if domainState >= needed && domainState < bestDomainState {
 			// choose the first occurrence of fitting domains
 			// to make it consecutive with other podSet's
-			bestFitIdx = i
+			bestDomain = domain
+			bestDomainState = state(bestDomain)
 		}
 	}
-	return bestFitIdx
+	return bestDomain
 }
 
-func (s *TASFlavorSnapshot) findLevelWithFitDomains(levelIdx int, required bool, count int32, unconstrained bool) (int, []*domain, string) {
+func (s *TASFlavorSnapshot) findLevelWithFitDomains(levelIdx int, required bool, podSetSize int32, sliceSize int32, unconstrained bool) (int, []*domain, string) {
 	domains := s.domainsPerLevel[levelIdx]
 	if len(domains) == 0 {
 		return 0, nil, fmt.Sprintf("no topology domains at level: %s", s.levelKeys[levelIdx])
@@ -518,30 +827,44 @@ func (s *TASFlavorSnapshot) findLevelWithFitDomains(levelIdx int, required bool,
 	levelDomains := slices.Collect(maps.Values(domains))
 	sortedDomain := s.sortedDomains(levelDomains, unconstrained)
 	topDomain := sortedDomain[0]
-	if useBestFitAlgorithm(unconstrained) && topDomain.state >= count {
+
+	sliceCount := podSetSize / sliceSize
+	if useBestFitAlgorithm(unconstrained) && topDomain.sliceState >= sliceCount {
 		// optimize the potentially last domain
-		topDomain = sortedDomain[findBestFitDomainIdx(sortedDomain, count)]
+		topDomain = findBestFitDomainForSlices(sortedDomain, sliceCount)
 	}
-	if topDomain.state < count {
+	if useLeastFreeCapacityAlgorithm(unconstrained) {
+		for _, candidateDomain := range sortedDomain {
+			if candidateDomain.sliceState >= sliceCount {
+				return levelIdx, []*domain{candidateDomain}, ""
+			}
+		}
 		if required {
-			return 0, nil, s.notFitMessage(topDomain.state, count)
+			maxCapacityFound := sortedDomain[len(sortedDomain)-1].state
+			return 0, nil, s.notFitMessage(maxCapacityFound, sliceCount, sliceSize)
+		}
+	}
+	if topDomain.sliceState < sliceCount {
+		if required {
+			return 0, nil, s.notFitMessage(topDomain.sliceState, sliceCount, sliceSize)
 		}
 		if levelIdx > 0 && !unconstrained {
-			return s.findLevelWithFitDomains(levelIdx-1, required, count, unconstrained)
+			return s.findLevelWithFitDomains(levelIdx-1, required, podSetSize, sliceSize, unconstrained)
 		}
 		results := []*domain{}
-		remainingCount := count
-		for idx := 0; remainingCount > 0 && idx < len(sortedDomain) && sortedDomain[idx].state > 0; idx++ {
-			offset := 0
-			if useBestFitAlgorithm(unconstrained) && sortedDomain[idx].state >= remainingCount {
+		remainingSliceCount := sliceCount
+		for idx := 0; remainingSliceCount > 0 && idx < len(sortedDomain) && sortedDomain[idx].sliceState > 0; idx++ {
+			domain := sortedDomain[idx]
+			if useBestFitAlgorithm(unconstrained) && sortedDomain[idx].sliceState >= remainingSliceCount {
 				// optimize the last domain
-				offset = findBestFitDomainIdx(sortedDomain[idx:], remainingCount)
+				domain = findBestFitDomainForSlices(sortedDomain[idx:], remainingSliceCount)
 			}
-			results = append(results, sortedDomain[idx+offset])
-			remainingCount -= sortedDomain[idx].state
+			results = append(results, domain)
+
+			remainingSliceCount -= domain.sliceState
 		}
-		if remainingCount > 0 {
-			return 0, nil, s.notFitMessage(count-remainingCount, count)
+		if remainingSliceCount > 0 {
+			return 0, nil, s.notFitMessage(sliceCount-remainingSliceCount, sliceCount, sliceSize)
 		}
 		return levelIdx, results, ""
 	}
@@ -549,22 +872,40 @@ func (s *TASFlavorSnapshot) findLevelWithFitDomains(levelIdx int, required bool,
 }
 
 func useBestFitAlgorithm(unconstrained bool) bool {
-	if features.Enabled(features.TASProfileMostFreeCapacity) ||
-		features.Enabled(features.TASProfileLeastFreeCapacity) ||
-		(unconstrained && features.Enabled(features.TASProfileMixed)) {
-		// following the matrix from KEP#2724
-		return false
-	}
-	return true
+	// following the matrix from KEP#2724
+	return !useLeastFreeCapacityAlgorithm(unconstrained)
 }
 
 func useLeastFreeCapacityAlgorithm(unconstrained bool) bool {
-	if features.Enabled(features.TASProfileLeastFreeCapacity) ||
-		(unconstrained && features.Enabled(features.TASProfileMixed)) {
-		// following the matrix from KEP#2724
-		return true
+	// following the matrix from KEP#2724
+	return features.Enabled(features.TASProfileLeastFreeCapacity) ||
+		(unconstrained && features.Enabled(features.TASProfileMixed))
+}
+
+func (s *TASFlavorSnapshot) updateSliceCountsToMinimum(domains []*domain, count int32, sliceSize int32, unconstrained bool) []*domain {
+	result := make([]*domain, 0)
+	remainingSlices := count / sliceSize
+	for i, domain := range domains {
+		if useBestFitAlgorithm(unconstrained) && domain.sliceState >= remainingSlices {
+			// optimize the last domain
+			domain = findBestFitDomainForSlices(domains[i:], remainingSlices)
+		}
+
+		if domain.sliceState >= remainingSlices {
+			domain.state = remainingSlices * sliceSize
+			domain.sliceState = remainingSlices
+			result = append(result, domain)
+			return result
+		}
+		domain.state = domain.sliceState * sliceSize
+		remainingSlices -= domain.sliceState
+		result = append(result, domain)
 	}
-	return false
+	s.log.Error(errCodeAssumptionsViolated, "unexpected remainingCount",
+		"remainingSlices", remainingSlices,
+		"count", count,
+		"leaves", s.leaves)
+	return nil
 }
 
 func (s *TASFlavorSnapshot) updateCountsToMinimum(domains []*domain, count int32, unconstrained bool) []*domain {
@@ -573,8 +914,7 @@ func (s *TASFlavorSnapshot) updateCountsToMinimum(domains []*domain, count int32
 	for i, domain := range domains {
 		if useBestFitAlgorithm(unconstrained) && domain.state >= remainingCount {
 			// optimize the last domain
-			mostAllocatedIdx := findBestFitDomainIdx(domains[i:], remainingCount)
-			domain = domains[i+mostAllocatedIdx]
+			domain = findBestFitDomain(domains[i:], remainingCount)
 		}
 
 		if domain.state >= remainingCount {
@@ -628,70 +968,137 @@ func (s *TASFlavorSnapshot) lowerLevelDomains(domains []*domain) []*domain {
 	return result
 }
 
+// This function sorts domains based on a specified algorithm: BestFit or LeastFreeCapacity.
+//
+// The sorting criteria are:
+// - **BestFit**: `sliceState` (descending), `state` (ascending), `levelValues` (ascending)
+// - **LeastFreeCapacity**: `sliceState` (ascending), `state` (ascending), `levelValues` (ascending)
+//
+// `state` is always sorted ascending. This prioritizes domains that can accommodate slices with minimal leftover pod capacity.
 func (s *TASFlavorSnapshot) sortedDomains(domains []*domain, unconstrained bool) []*domain {
+	isLeastFreeCapacity := useLeastFreeCapacityAlgorithm(unconstrained)
 	result := slices.Clone(domains)
 	slices.SortFunc(result, func(a, b *domain) int {
-		if a.state == b.state {
-			return slices.Compare(a.levelValues, b.levelValues)
+		if a.sliceState != b.sliceState {
+			if isLeastFreeCapacity {
+				// Start from the domain with the least amount of free resources.
+				// Ascending order.
+				return cmp.Compare(a.sliceState, b.sliceState)
+			}
+			return cmp.Compare(b.sliceState, a.sliceState)
 		}
-		// descending order.
-		return cmp.Compare(b.state, a.state)
+
+		if a.state != b.state {
+			return cmp.Compare(a.state, b.state)
+		}
+
+		return slices.Compare(a.levelValues, b.levelValues)
 	})
-	if useLeastFreeCapacityAlgorithm(unconstrained) {
-		// start from the domain with the least amount of free resources
-		slices.Reverse(result)
-	}
 	return result
 }
 
 func (s *TASFlavorSnapshot) fillInCounts(requests resources.Requests,
 	assumedUsage map[utiltas.TopologyDomainID]resources.Requests,
+	sliceSize int32,
+	sliceLevelIdx int,
 	simulateEmpty bool,
-	tolerations []corev1.Toleration) {
+	tolerations []corev1.Toleration,
+	selector labels.Selector,
+	requiredReplacementDomain utiltas.TopologyDomainID) {
 	for _, domain := range s.domains {
 		// cleanup the state in case some remaining values are present from computing
 		// assignments for previous PodSets.
 		domain.state = 0
+		domain.sliceState = 0
 	}
 	for _, leaf := range s.leaves {
+		// 1. Check Tolerations against Node Taints
 		taint, untolerated := corev1helpers.FindMatchingUntoleratedTaint(leaf.nodeTaints, tolerations, func(t *corev1.Taint) bool {
 			return t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute
 		})
 		if untolerated {
-			s.log.V(2).Info("excluding node with untolerated taint", "domainID", leaf.id, "taint", taint)
+			s.log.V(3).Info("excluding node with untolerated taint", "domainID", leaf.id, "taint", taint)
+			continue
+		}
+		// 2. Check Node Labels against Compiled Selector
+		var nodeLabelSet labels.Set
+		if leaf.nodeLabels != nil {
+			nodeLabelSet = leaf.nodeLabels
+		}
+
+		// 3. While correcting the topologyAssignment with a failed node
+		// check if the leaf belongs to the required domain
+		if !belongsToRequiredDomain(leaf, requiredReplacementDomain) {
+			continue
+		}
+
+		// isLowestLevelNode() is necessary because we gather node level information only when
+		// node is the lowest level of the topology
+		if s.isLowestLevelNode() && !selector.Matches(nodeLabelSet) {
+			s.log.V(3).Info("excluding node that doesn't match nodeSelectors", "domainID", leaf.id, "nodeLabels", nodeLabelSet)
 			continue
 		}
 		remainingCapacity := leaf.freeCapacity.Clone()
 		if !simulateEmpty {
 			remainingCapacity.Sub(leaf.tasUsage)
 		}
-		if leafAssumedUsage, found := assumedUsage[leaf.domain.id]; found {
+		if leafAssumedUsage, found := assumedUsage[leaf.id]; found {
 			remainingCapacity.Sub(leafAssumedUsage)
 		}
 		leaf.state = requests.CountIn(remainingCapacity)
 	}
 	for _, root := range s.roots {
-		root.state = s.fillInCountsHelper(root)
+		root.state, root.sliceState = s.fillInCountsHelper(root, sliceSize, sliceLevelIdx, 0)
 	}
 }
 
-func (s *TASFlavorSnapshot) fillInCountsHelper(domain *domain) int32 {
+func belongsToRequiredDomain(leaf *leafDomain, requiredReplacementDomain utiltas.TopologyDomainID) bool {
+	if requiredReplacementDomain == "" {
+		return true
+	}
+	// Uses levelValues instead of leaf.id since for topologies with hostname as lowest level it points directly to the hostname
+	// TODO(#5322): Use util function that compare two DomainIDs
+	return strings.HasPrefix(string(utiltas.DomainID(leaf.levelValues)), string(requiredReplacementDomain))
+}
+
+func (s *TASFlavorSnapshot) fillInCountsHelper(domain *domain, sliceSize int32, sliceLevelIdx int, level int) (int32, int32) {
 	// logic for a leaf
 	if len(domain.children) == 0 {
-		return domain.state
+		if level == sliceLevelIdx {
+			// initialize the sliceState if leaf is the request slice level
+			domain.sliceState = domain.state / sliceSize
+		}
+		return domain.state, domain.sliceState
 	}
 	// logic for a parent
 	childrenCapacity := int32(0)
+	sliceCapacity := int32(0)
+
 	for _, child := range domain.children {
-		childrenCapacity += s.fillInCountsHelper(child)
+		addChildrenCapacity, addChildrenSliceCapacity := s.fillInCountsHelper(child, sliceSize, sliceLevelIdx, level+1)
+		childrenCapacity += addChildrenCapacity
+		sliceCapacity += addChildrenSliceCapacity
 	}
 	domain.state = childrenCapacity
-	return childrenCapacity
+	if level == sliceLevelIdx {
+		// initialize the sliceState for the requested slice level.
+		sliceCapacity = domain.state / sliceSize
+	}
+	domain.sliceState = sliceCapacity
+	return childrenCapacity, sliceCapacity
 }
 
-func (s *TASFlavorSnapshot) notFitMessage(fitCount, totalCount int32) string {
-	if fitCount == 0 {
-		return fmt.Sprintf("topology %q doesn't allow to fit any of %v pod(s)", s.topologyName, totalCount)
+func (s *TASFlavorSnapshot) notFitMessage(slicesFitCount, totalRequestsSlicesCount, sliceSize int32) string {
+	if sliceSize == 1 {
+		// each slice is a single pod, so let's refer to them as pods
+		if slicesFitCount == 0 {
+			return fmt.Sprintf("topology %q doesn't allow to fit any of %d pod(s)", s.topologyName, totalRequestsSlicesCount)
+		}
+		return fmt.Sprintf("topology %q allows to fit only %d out of %d pod(s)", s.topologyName, slicesFitCount, totalRequestsSlicesCount)
 	}
-	return fmt.Sprintf("topology %q allows to fit only %v out of %v pod(s)", s.topologyName, fitCount, totalCount)
+
+	if slicesFitCount == 0 {
+		return fmt.Sprintf("topology %q doesn't allow to fit any of %d slice(s)", s.topologyName, totalRequestsSlicesCount)
+	}
+	return fmt.Sprintf("topology %q allows to fit only %d out of %d slice(s)", s.topologyName, slicesFitCount, totalRequestsSlicesCount)
 }

@@ -73,7 +73,7 @@ import (
 var defaultEnabledIntegrations sets.Set[string] = sets.New(
 	"batch/job", "kubeflow.org/mpijob", "ray.io/rayjob", "ray.io/raycluster",
 	"jobset.x-k8s.io/jobset", "kubeflow.org/paddlejob",
-	"kubeflow.org/pytorchjob", "kubeflow.org/tfjob", "kubeflow.org/xgboostjob",
+	"kubeflow.org/pytorchjob", "kubeflow.org/tfjob", "kubeflow.org/xgboostjob", "kubeflow.org/jaxjob",
 	"pod", "workload.codeflare.dev/appwrapper")
 
 var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
@@ -166,22 +166,28 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 		})
 
 		managerCq = utiltesting.MakeClusterQueue("q1").
-			AdmissionChecks(multiKueueAC.Name).
+			AdmissionChecks(kueue.AdmissionCheckReference(multiKueueAC.Name)).
 			Obj()
 		util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, managerCq)
+		util.ExpectClusterQueuesToBeActive(managerTestCluster.ctx, managerTestCluster.client, managerCq)
 
 		managerLq = utiltesting.MakeLocalQueue(managerCq.Name, managerNs.Name).ClusterQueue(managerCq.Name).Obj()
 		util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, managerLq)
+		util.ExpectLocalQueuesToBeActive(managerTestCluster.ctx, managerTestCluster.client, managerLq)
 
 		worker1Cq = utiltesting.MakeClusterQueue("q1").Obj()
 		util.MustCreate(worker1TestCluster.ctx, worker1TestCluster.client, worker1Cq)
+		util.ExpectClusterQueuesToBeActive(worker1TestCluster.ctx, worker1TestCluster.client, worker1Cq)
 		worker1Lq = utiltesting.MakeLocalQueue(worker1Cq.Name, worker1Ns.Name).ClusterQueue(worker1Cq.Name).Obj()
 		util.MustCreate(worker1TestCluster.ctx, worker1TestCluster.client, worker1Lq)
+		util.ExpectLocalQueuesToBeActive(worker1TestCluster.ctx, worker1TestCluster.client, worker1Lq)
 
 		worker2Cq = utiltesting.MakeClusterQueue("q1").Obj()
 		util.MustCreate(worker2TestCluster.ctx, worker2TestCluster.client, worker2Cq)
+		util.ExpectClusterQueuesToBeActive(worker2TestCluster.ctx, worker2TestCluster.client, worker2Cq)
 		worker2Lq = utiltesting.MakeLocalQueue(worker2Cq.Name, worker2Ns.Name).ClusterQueue(worker2Cq.Name).Obj()
 		util.MustCreate(worker2TestCluster.ctx, worker2TestCluster.client, worker2Lq)
+		util.ExpectLocalQueuesToBeActive(worker2TestCluster.ctx, worker2TestCluster.client, worker2Lq)
 	})
 
 	ginkgo.AfterEach(func() {
@@ -201,7 +207,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 	ginkgo.It("Should run a job on worker if admitted", func() {
 		job := testingjob.MakeJob("job", managerNs.Name).
-			Queue(managerLq.Name).
+			Queue(kueue.LocalQueueName(managerLq.Name)).
 			Obj()
 		util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, job)
 
@@ -237,7 +243,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 			gomega.Eventually(func(g gomega.Gomega) {
 				g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, multiKueueAC.Name)
+				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(multiKueueAC.Name))
 				g.Expect(acs).NotTo(gomega.BeNil())
 				g.Expect(acs.State).To(gomega.Equal(kueue.CheckStatePending))
 				g.Expect(acs.Message).To(gomega.Equal(`The workload got reservation on "worker1"`))
@@ -258,10 +264,20 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 		ginkgo.By("finishing the worker job", func() {
 			reachedPodsReason := "Reached expected number of succeeded pods"
 			finishJobReason := "Job finished successfully"
+			now := metav1.Now()
+			// completedJobCondition that we will add to the remote job to indicate job completions,
+			// and the same condition that we expect to see on the local job status.
+			completedJobCondition := batchv1.JobCondition{
+				Type:               batchv1.JobComplete,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Message:            finishJobReason,
+			}
+
 			gomega.Eventually(func(g gomega.Gomega) {
 				createdJob := batchv1.Job{}
 				g.Expect(worker1TestCluster.client.Get(worker1TestCluster.ctx, client.ObjectKeyFromObject(job), &createdJob)).To(gomega.Succeed())
-				now := metav1.Now()
 				createdJob.Status.Conditions = append(createdJob.Status.Conditions,
 					batchv1.JobCondition{
 						Type:               batchv1.JobSuccessCriteriaMet,
@@ -270,14 +286,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 						LastTransitionTime: now,
 						Message:            reachedPodsReason,
 					},
-					batchv1.JobCondition{
-						Type:               batchv1.JobComplete,
-						Status:             corev1.ConditionTrue,
-						LastProbeTime:      now,
-						LastTransitionTime: now,
-						Message:            finishJobReason,
-					},
-				)
+					completedJobCondition)
 				createdJob.Status.Succeeded = 1
 				createdJob.Status.StartTime = ptr.To(now)
 				createdJob.Status.CompletionTime = ptr.To(now)
@@ -285,6 +294,16 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 
 			waitForWorkloadToFinishAndRemoteWorkloadToBeDeleted(wlLookupKey, finishJobReason)
+
+			// Assert job complete condition.
+			localJob := &batchv1.Job{}
+			gomega.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, client.ObjectKeyFromObject(job), localJob)).To(gomega.Succeed())
+			gomega.Expect(localJob.Status.Conditions).Should(gomega.ContainElement(gomega.WithTransform(func(condition batchv1.JobCondition) batchv1.JobCondition {
+				// Compare on all condition attributes excluding Time values.
+				condition.LastProbeTime = completedJobCondition.LastProbeTime
+				condition.LastTransitionTime = completedJobCondition.LastTransitionTime
+				return condition
+			}, gomega.Equal(completedJobCondition))))
 		})
 	})
 
@@ -295,7 +314,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 		features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.MultiKueueBatchJobWithManagedBy, true)
 		job := testingjob.MakeJob("job", managerNs.Name).
 			ManagedBy(kueue.MultiKueueControllerName).
-			Queue(managerLq.Name).
+			Queue(kueue.LocalQueueName(managerLq.Name)).
 			Obj()
 		util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, job)
 
@@ -331,7 +350,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 			gomega.Eventually(func(g gomega.Gomega) {
 				g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, multiKueueAC.Name)
+				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(multiKueueAC.Name))
 				g.Expect(acs).NotTo(gomega.BeNil())
 				g.Expect(acs.State).To(gomega.Equal(kueue.CheckStateReady))
 				g.Expect(acs.Message).To(gomega.Equal(`The workload got reservation on "worker1"`))
@@ -371,10 +390,21 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 		ginkgo.By("finishing the worker job", func() {
 			reachedPodsReason := "Reached expected number of succeeded pods"
 			finishJobReason := "Job finished successfully"
+
+			now := metav1.Now()
+			// completedJobCondition that we will add to the remote job to indicate job completions,
+			// and the same condition that we expect to see on the local job status.
+			completedJobCondition := batchv1.JobCondition{
+				Type:               batchv1.JobComplete,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Message:            finishJobReason,
+			}
+
 			gomega.Eventually(func(g gomega.Gomega) {
 				createdJob := batchv1.Job{}
 				g.Expect(worker1TestCluster.client.Get(worker1TestCluster.ctx, client.ObjectKeyFromObject(job), &createdJob)).To(gomega.Succeed())
-				now := metav1.Now()
 				createdJob.Status.Conditions = append(createdJob.Status.Conditions,
 					batchv1.JobCondition{
 						Type:               batchv1.JobSuccessCriteriaMet,
@@ -382,15 +412,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 						LastProbeTime:      now,
 						LastTransitionTime: now,
 						Message:            reachedPodsReason,
-					},
-					batchv1.JobCondition{
-						Type:               batchv1.JobComplete,
-						Status:             corev1.ConditionTrue,
-						LastProbeTime:      now,
-						LastTransitionTime: now,
-						Message:            finishJobReason,
-					},
-				)
+					}, completedJobCondition)
 				createdJob.Status.Active = 0
 				createdJob.Status.Ready = ptr.To[int32](0)
 				createdJob.Status.Succeeded = 1
@@ -399,6 +421,16 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 
 			waitForWorkloadToFinishAndRemoteWorkloadToBeDeleted(wlLookupKey, finishJobReason)
+
+			// Assert job complete condition.
+			localJob := &batchv1.Job{}
+			gomega.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, client.ObjectKeyFromObject(job), localJob)).To(gomega.Succeed())
+			gomega.Expect(localJob.Status.Conditions).Should(gomega.ContainElement(gomega.WithTransform(func(condition batchv1.JobCondition) batchv1.JobCondition {
+				// Compare on all condition attributes excluding Time values.
+				condition.LastProbeTime = completedJobCondition.LastProbeTime
+				condition.LastTransitionTime = completedJobCondition.LastTransitionTime
+				return condition
+			}, gomega.Equal(completedJobCondition))))
 		})
 	})
 
@@ -1033,7 +1065,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 			gomega.Eventually(func(g gomega.Gomega) {
 				g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, multiKueueAC.Name)
+				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(multiKueueAC.Name))
 				g.Expect(acs).NotTo(gomega.BeNil())
 				g.Expect(acs.State).To(gomega.Equal(kueue.CheckStatePending))
 				g.Expect(acs.Message).To(gomega.Equal(`The workload got reservation on "worker1"`))
@@ -1150,7 +1182,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 			gomega.Eventually(func(g gomega.Gomega) {
 				g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, multiKueueAC.Name)
+				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(multiKueueAC.Name))
 				g.Expect(acs).NotTo(gomega.BeNil())
 				g.Expect(acs.State).To(gomega.Equal(kueue.CheckStatePending))
 				g.Expect(acs.Message).To(gomega.Equal(`The workload got reservation on "worker1"`))
@@ -1215,7 +1247,7 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 
 	ginkgo.It("Should remove the worker's workload and job after reconnect when the managers job and workload are deleted", func() {
 		job := testingjob.MakeJob("job", managerNs.Name).
-			Queue(managerLq.Name).
+			Queue(kueue.LocalQueueName(managerLq.Name)).
 			Obj()
 		util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, job)
 		jobLookupKey := client.ObjectKeyFromObject(job)
@@ -1368,10 +1400,10 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 		})
 
-		ginkgo.By("the worker1 wl and job are removed by the garbage collector", func() {
+		ginkgo.By("the wl and job are removed on the worker1", func() {
 			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(worker1TestCluster.client.Get(worker1TestCluster.ctx, jobLookupKey, createdJob)).To(utiltesting.BeNotFoundError())
 				g.Expect(worker1TestCluster.client.Get(worker1TestCluster.ctx, wlLookupKey, createdWorkload)).To(utiltesting.BeNotFoundError())
-				g.Expect(worker1TestCluster.client.Get(worker1TestCluster.ctx, jobLookupKey, createdJob)).To(gomega.Succeed())
 			}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
 		})
 	})
@@ -1434,9 +1466,9 @@ var _ = ginkgo.Describe("MultiKueue", ginkgo.Ordered, ginkgo.ContinueOnFailure, 
 			gomega.Eventually(func(g gomega.Gomega) {
 				createdWorkload := &kueue.Workload{}
 				g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, multiKueueAC.Name)
+				acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(multiKueueAC.Name))
 				g.Expect(acs).To(gomega.BeComparableTo(&kueue.AdmissionCheckState{
-					Name:  multiKueueAC.Name,
+					Name:  kueue.AdmissionCheckReference(multiKueueAC.Name),
 					State: kueue.CheckStatePending,
 				}, cmpopts.IgnoreFields(kueue.AdmissionCheckState{}, "LastTransitionTime", "Message")))
 
@@ -1596,7 +1628,7 @@ func admitWorkloadAndCheckWorkerCopies(acName string, wlLookupKey types.Namespac
 
 		gomega.Eventually(func(g gomega.Gomega) {
 			g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
-			acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, acName)
+			acs := workload.FindAdmissionCheck(createdWorkload.Status.AdmissionChecks, kueue.AdmissionCheckReference(acName))
 			g.Expect(acs).NotTo(gomega.BeNil())
 			g.Expect(acs.State).To(gomega.Equal(kueue.CheckStateReady))
 			g.Expect(acs.Message).To(gomega.Equal(`The workload got reservation on "worker2"`))

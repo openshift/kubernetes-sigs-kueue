@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
@@ -48,6 +49,7 @@ import (
 
 func TestDefault(t *testing.T) {
 	testCases := map[string]struct {
+		initObjs                   []client.Object
 		statefulset                *appsv1.StatefulSet
 		manageJobsWithoutQueueName bool
 		localQueueDefaulting       bool
@@ -55,6 +57,24 @@ func TestDefault(t *testing.T) {
 		enableIntegrations         []string
 		want                       *appsv1.StatefulSet
 	}{
+		"statefulset without queue with manageJobsWithoutQueueName": {
+			enableIntegrations:         []string{"pod"},
+			manageJobsWithoutQueueName: true,
+			initObjs:                   []client.Object{utiltesting.MakeNamespace("test-ns")},
+			statefulset: testingstatefulset.MakeStatefulSet("test-pod", "test-ns").
+				Replicas(10).
+				Obj(),
+			want: testingstatefulset.MakeStatefulSet("test-pod", "test-ns").
+				Replicas(10).
+				PodTemplateManagedByKueue().
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
+				PodTemplateSpecPodGroupTotalCountAnnotation(10).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
+				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
+				Obj(),
+		},
 		"statefulset with queue": {
 			enableIntegrations: []string{"pod"},
 			statefulset: testingstatefulset.MakeStatefulSet("test-pod", "").
@@ -159,7 +179,7 @@ func TestDefault(t *testing.T) {
 			t.Cleanup(jobframework.EnableIntegrationsForTest(t, tc.enableIntegrations...))
 			ctx, _ := utiltesting.ContextWithLog(t)
 
-			builder := utiltesting.NewClientBuilder()
+			builder := utiltesting.NewClientBuilder().WithObjects(tc.initObjs...)
 			cli := builder.Build()
 			cqCache := cache.New(cli)
 			queueManager := queue.NewManager(cli, cqCache)
@@ -337,7 +357,7 @@ func TestValidateUpdate(t *testing.T) {
 				},
 			}.ToAggregate(),
 		},
-		"change in priority class label": {
+		"change in priority class label when suspended": {
 			oldObj: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -352,6 +372,30 @@ func TestValidateUpdate(t *testing.T) {
 						constants.QueueLabel:                 "queue1",
 						constants.WorkloadPriorityClassLabel: "priority2",
 					},
+				},
+			},
+		},
+		"change in priority class label when replicas ready": {
+			oldObj: &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						constants.QueueLabel:                 "queue1",
+						constants.WorkloadPriorityClassLabel: "priority1",
+					},
+				},
+				Status: appsv1.StatefulSetStatus{
+					ReadyReplicas: int32(1),
+				},
+			},
+			newObj: &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						constants.QueueLabel:                 "queue1",
+						constants.WorkloadPriorityClassLabel: "priority2",
+					},
+				},
+				Status: appsv1.StatefulSetStatus{
+					ReadyReplicas: int32(1),
 				},
 			},
 			wantErr: field.ErrorList{
