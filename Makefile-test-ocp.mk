@@ -78,7 +78,7 @@ gotestsum-ocp: ## Download gotestsum locally if necessary.
 	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod gotest.tools/gotestsum@$(GOTESTSUM_OCP_VERSION)
 
 .PHONY: test-ocp
-test-ocp: ## Run tests.
+test-ocp: gotestsum-ocp ## Run tests.
 # Configs were filtered out due to a failure
 # Running this in openshift CI we are hitting failures in the unit tests
 # due to how kueue grabs the namespace for default configs
