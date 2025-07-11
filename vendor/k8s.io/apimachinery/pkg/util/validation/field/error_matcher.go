@@ -88,11 +88,7 @@ func (m ErrorMatcher) Render(e *Error) string {
 	}
 	if m.matchValue {
 		comma()
-		if s, ok := e.BadValue.(string); ok {
-			buf.WriteString(fmt.Sprintf("Value=%q", s))
-		} else {
-			buf.WriteString(fmt.Sprintf("Value=%v", e.BadValue))
-		}
+		buf.WriteString(fmt.Sprintf("Value=%v", e.BadValue))
 	}
 	if m.matchOrigin || m.requireOriginWhenInvalid && e.Type == ErrorTypeInvalid {
 		comma()
