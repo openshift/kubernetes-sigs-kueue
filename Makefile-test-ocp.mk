@@ -109,7 +109,7 @@ run-test-e2e-ocp-singlecluster:
 
 .PHONY: ginkgo-top-ocp
 ginkgo-top-ocp:
-	$(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/ginkgo-top ./pkg/openshift/ginkgo-top
+	$(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/ginkgo-top ./hack/internal/tools/ginkgo-top/ginkgo-top.go
 
 .PHONY: kueuectl-ocp
 kueuectl-ocp:
