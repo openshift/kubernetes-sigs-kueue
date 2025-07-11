@@ -46,11 +46,11 @@ ARTIFACTS ?= $(BIN_DIR)
 TOOLS_DIR := $(PROJECT_DIR)/hack/internal/tools
 
 # Use go.mod go version as source.
-KUSTOMIZE_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/kustomize/kustomize/v5)
-GINKGO_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/onsi/ginkgo/v2)
-YQ_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/mikefarah/yq/v4)
-ENVTEST_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/controller-runtime/tools/setup-envtest)
-GOTESTSUM_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' gotest.tools/gotestsum)
+KUSTOMIZE_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/kustomize/kustomize/v5)
+GINKGO_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/onsi/ginkgo/v2)
+YQ_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/mikefarah/yq/v4)
+ENVTEST_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/controller-runtime/tools/setup-envtest)
+GOTESTSUM_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' gotest.tools/gotestsum)
 
 KUSTOMIZE = $(PROJECT_DIR)/bin/kustomize
 .PHONY: kustomize-ocp
