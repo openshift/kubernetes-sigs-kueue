@@ -56,7 +56,7 @@ type PaddleReplicaSpecRequirement struct {
 }
 
 func (j *PaddleJobWrapper) PaddleReplicaSpecs(replicaSpecs ...PaddleReplicaSpecRequirement) *PaddleJobWrapper {
-	j = j.PaddleReplicaSpecsDefault()
+	j.PaddleReplicaSpecsDefault()
 	for _, rs := range replicaSpecs {
 		j.Spec.PaddleReplicaSpecs[rs.ReplicaType].Replicas = ptr.To[int32](rs.ReplicaCount)
 		j.Spec.PaddleReplicaSpecs[rs.ReplicaType].Template.Name = rs.Name
@@ -64,7 +64,7 @@ func (j *PaddleJobWrapper) PaddleReplicaSpecs(replicaSpecs ...PaddleReplicaSpecR
 		j.Spec.PaddleReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Name = "paddle"
 
 		if rs.Annotations != nil {
-			j.Spec.PaddleReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.PaddleReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 

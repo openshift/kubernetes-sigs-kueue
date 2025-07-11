@@ -64,12 +64,7 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 		ns *corev1.Namespace
 	)
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -79,7 +74,7 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 		ginkgo.By("checking the job gets suspended when created unsuspended")
 		priorityClass := testing.MakePriorityClass(priorityClassName).
 			PriorityValue(priorityValue).Obj()
-		gomega.Expect(k8sClient.Create(ctx, priorityClass)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, priorityClass)
 		defer func() {
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, priorityClass, true)
 		}()
@@ -88,8 +83,7 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 			Suspend(false).
 			WithPriorityClassName(priorityClassName).
 			Obj()
-		err := k8sClient.Create(ctx, job)
-		gomega.Expect(err).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, job)
 		createdJob := &rayv1.RayCluster{}
 
 		gomega.Eventually(func(g gomega.Gomega) {
@@ -103,7 +97,7 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 		gomega.Eventually(func(g gomega.Gomega) {
 			g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
 		}, util.Timeout, util.Interval).Should(gomega.Succeed())
-		gomega.Expect(createdWorkload.Spec.QueueName).Should(gomega.Equal(""), "The Workload shouldn't have .spec.queueName set")
+		gomega.Expect(createdWorkload.Spec.QueueName).Should(gomega.Equal(kueue.LocalQueueName("")), "The Workload shouldn't have .spec.queueName set")
 		gomega.Expect(metav1.IsControlledBy(createdWorkload, createdJob)).To(gomega.BeTrue(), "The Workload should be owned by the Job")
 
 		ginkgo.By("checking the workload is created with priority and priorityName")
@@ -111,8 +105,8 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 		gomega.Expect(*createdWorkload.Spec.Priority).Should(gomega.Equal(priorityValue))
 
 		ginkgo.By("checking the workload is updated with queue name when the job does")
-		jobQueueName := "test-queue"
-		createdJob.Annotations = map[string]string{constants.QueueAnnotation: jobQueueName}
+		var jobQueueName kueue.LocalQueueName = "test-queue"
+		createdJob.Annotations = map[string]string{constants.QueueAnnotation: string(jobQueueName)}
 		gomega.Expect(k8sClient.Update(ctx, createdJob)).Should(gomega.Succeed())
 		gomega.Eventually(func(g gomega.Gomega) {
 			g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
@@ -131,7 +125,7 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 		gomega.Expect(ctrl.SetControllerReference(createdJob, secondWl, k8sClient.Scheme())).Should(gomega.Succeed())
 		secondWl.Spec.PodSets[0].Count++
 
-		gomega.Expect(k8sClient.Create(ctx, secondWl)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, secondWl)
 		gomega.Eventually(func(g gomega.Gomega) {
 			wl := &kueue.Workload{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(secondWl), wl)).Should(testing.BeNotFoundError())
@@ -143,9 +137,9 @@ var _ = ginkgo.Describe("RayCluster controller", ginkgo.Ordered, ginkgo.Continue
 
 		ginkgo.By("checking the job is unsuspended when workload is assigned")
 		onDemandFlavor := testing.MakeResourceFlavor("on-demand").NodeLabel(instanceKey, "on-demand").Obj()
-		gomega.Expect(k8sClient.Create(ctx, onDemandFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, onDemandFlavor)
 		spotFlavor := testing.MakeResourceFlavor("spot").NodeLabel(instanceKey, "spot").Obj()
-		gomega.Expect(k8sClient.Create(ctx, spotFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, spotFlavor)
 		defer func() {
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, spotFlavor, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, onDemandFlavor, true)
@@ -242,12 +236,7 @@ var _ = ginkgo.Describe("Job controller RayCluster for workloads when only jobs 
 		ns *corev1.Namespace
 	)
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -256,7 +245,7 @@ var _ = ginkgo.Describe("Job controller RayCluster for workloads when only jobs 
 	ginkgo.It("Should reconcile jobs only when queue is set", func() {
 		ginkgo.By("checking the workload is not created when queue name is not set")
 		job := testingraycluster.MakeCluster(jobName, ns.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, job)
 		lookupKey := types.NamespacedName{Name: jobName, Namespace: ns.Name}
 		createdJob := &rayv1.RayCluster{}
 		gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
@@ -286,14 +275,14 @@ var _ = ginkgo.Describe("Job controller RayCluster for workloads when only jobs 
 			Queue("test").
 			Suspend(false).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, parentJob)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, parentJob)
 
 		ginkgo.By("Creating the child cluster.")
 		childCluster := testingraycluster.MakeCluster(jobName, ns.Name).
 			Suspend(false).
 			Obj()
 		gomega.Expect(ctrl.SetControllerReference(parentJob, childCluster, k8sClient.Scheme())).To(gomega.Succeed())
-		gomega.Expect(k8sClient.Create(ctx, childCluster)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, childCluster)
 
 		childClusterKey := client.ObjectKeyFromObject(childCluster)
 		ginkgo.By("checking that the child cluster is suspended")
@@ -319,7 +308,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true})))
 
 		ginkgo.By("Create a resource flavor")
-		gomega.Expect(k8sClient.Create(ctx, defaultFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, defaultFlavor)
 	})
 
 	ginkgo.AfterAll(func() {
@@ -331,12 +320,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 		ns *corev1.Namespace
 	)
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -348,7 +332,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 			job := testingraycluster.MakeCluster(jobName, ns.Name).Obj()
 			jobQueueName := "test-queue"
 			job.Annotations = map[string]string{constants.QueueAnnotation: jobQueueName}
-			gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, job)
 			lookupKey := types.NamespacedName{Name: jobName, Namespace: ns.Name}
 			createdJob := &rayv1.RayCluster{}
 			gomega.Expect(k8sClient.Get(ctx, lookupKey, createdJob)).Should(gomega.Succeed())
@@ -505,25 +489,20 @@ var _ = ginkgo.Describe("RayCluster Job controller interacting with scheduler", 
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 
 		onDemandFlavor = testing.MakeResourceFlavor("on-demand").NodeLabel(instanceKey, "on-demand").Obj()
-		gomega.Expect(k8sClient.Create(ctx, onDemandFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, onDemandFlavor)
 
 		spotUntaintedFlavor = testing.MakeResourceFlavor("spot-untainted").NodeLabel(instanceKey, "spot-untainted").Obj()
-		gomega.Expect(k8sClient.Create(ctx, spotUntaintedFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, spotUntaintedFlavor)
 
 		clusterQueue = testing.MakeClusterQueue("dev-clusterqueue").
 			ResourceGroup(
 				*testing.MakeFlavorQuotas("spot-untainted").Resource(corev1.ResourceCPU, "4").Obj(),
 				*testing.MakeFlavorQuotas("on-demand").Resource(corev1.ResourceCPU, "4").Obj(),
 			).Obj()
-		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, clusterQueue)
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -535,14 +514,14 @@ var _ = ginkgo.Describe("RayCluster Job controller interacting with scheduler", 
 	ginkgo.It("Should schedule jobs as they fit in their ClusterQueue", func() {
 		ginkgo.By("creating localQueue")
 		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, localQueue)
 
 		ginkgo.By("checking a dev job starts")
 		job := testingraycluster.MakeCluster("dev-job", ns.Name).Queue(localQueue.Name).
 			RequestHead(corev1.ResourceCPU, "3").
 			RequestWorkerGroup(corev1.ResourceCPU, "4").
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, job)
 		createdJob := &rayv1.RayCluster{}
 		gomega.Eventually(func(g gomega.Gomega) {
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), createdJob)).Should(gomega.Succeed())
@@ -558,7 +537,7 @@ var _ = ginkgo.Describe("RayCluster Job controller interacting with scheduler", 
 			RequestHead(corev1.ResourceCPU, "2").
 			RequestWorkerGroup(corev1.ResourceCPU, "2").
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, job2)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, job2)
 		createdJob2 := &rayv1.RayCluster{}
 		gomega.Eventually(func(g gomega.Gomega) {
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job2), createdJob2)).Should(gomega.Succeed())
@@ -612,15 +591,10 @@ var _ = ginkgo.Describe("Job controller with preemption enabled", ginkgo.Ordered
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 
 		onDemandFlavor = testing.MakeResourceFlavor("on-demand").NodeLabel(instanceKey, "on-demand").Obj()
-		gomega.Expect(k8sClient.Create(ctx, onDemandFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, onDemandFlavor)
 
 		clusterQueue = testing.MakeClusterQueue("clusterqueue").
 			ResourceGroup(
@@ -630,16 +604,16 @@ var _ = ginkgo.Describe("Job controller with preemption enabled", ginkgo.Ordered
 				WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
 			}).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, clusterQueue)
 
 		ginkgo.By("creating localQueue")
 		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, localQueue)
 
 		ginkgo.By("creating priority")
 		priorityClass = testing.MakePriorityClass(priorityClassName).
 			PriorityValue(priorityValue).Obj()
-		gomega.Expect(k8sClient.Create(ctx, priorityClass)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, priorityClass)
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -654,7 +628,7 @@ var _ = ginkgo.Describe("Job controller with preemption enabled", ginkgo.Ordered
 			RequestHead(corev1.ResourceCPU, "1").
 			RequestWorkerGroup(corev1.ResourceCPU, "2").
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, lowPriorityJob)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lowPriorityJob)
 
 		ginkgo.By("Await for the low priority workload to be admitted")
 		createdJob := &rayv1.RayCluster{}
@@ -669,7 +643,7 @@ var _ = ginkgo.Describe("Job controller with preemption enabled", ginkgo.Ordered
 			WithPriorityClassName(priorityClassName).
 			RequestWorkerGroup(corev1.ResourceCPU, "2").
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, highPriorityJob)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, highPriorityJob)
 
 		ginkgo.By("High priority workload should be admitted")
 		highPriorityWL := &kueue.Workload{}

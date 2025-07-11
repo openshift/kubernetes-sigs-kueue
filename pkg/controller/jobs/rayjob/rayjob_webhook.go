@@ -29,9 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework/webhook"
-	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 )
 
@@ -46,6 +46,7 @@ type RayJobWebhook struct {
 	queues                       *queue.Manager
 	manageJobsWithoutQueueName   bool
 	managedJobsNamespaceSelector labels.Selector
+	cache                        *cache.Cache
 }
 
 // SetupRayJobWebhook configures the webhook for RayJob.
@@ -56,11 +57,12 @@ func SetupRayJobWebhook(mgr ctrl.Manager, opts ...jobframework.Option) error {
 		queues:                       options.Queues,
 		manageJobsWithoutQueueName:   options.ManageJobsWithoutQueueName,
 		managedJobsNamespaceSelector: options.ManagedJobsNamespaceSelector,
+		cache:                        options.Cache,
 	}
 	obj := &rayv1.RayJob{}
 	return webhook.WebhookManagedBy(mgr).
 		For(obj).
-		WithMutationHandler(webhook.WithLosslessDefaulter(mgr.GetScheme(), obj, wh)).
+		WithMutationHandler(admission.WithCustomDefaulter(mgr.GetScheme(), obj, wh)).
 		WithValidator(wh).
 		Complete()
 }
@@ -71,11 +73,15 @@ var _ admission.CustomDefaulter = &RayJobWebhook{}
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the type
 func (w *RayJobWebhook) Default(ctx context.Context, obj runtime.Object) error {
-	job := obj.(*rayv1.RayJob)
+	job := fromObject(obj)
 	log := ctrl.LoggerFrom(ctx).WithName("rayjob-webhook")
 	log.V(5).Info("Applying defaults")
-	jobframework.ApplyDefaultLocalQueue((*RayJob)(job).Object(), w.queues.DefaultLocalQueueExist)
-	return jobframework.ApplyDefaultForSuspend(ctx, (*RayJob)(job), w.client, w.manageJobsWithoutQueueName, w.managedJobsNamespaceSelector)
+	jobframework.ApplyDefaultLocalQueue(job.Object(), w.queues.DefaultLocalQueueExist)
+	if err := jobframework.ApplyDefaultForSuspend(ctx, job, w.client, w.manageJobsWithoutQueueName, w.managedJobsNamespaceSelector); err != nil {
+		return err
+	}
+	jobframework.ApplyDefaultForManagedBy(job, w.queues, w.cache, log)
+	return nil
 }
 
 // +kubebuilder:webhook:path=/validate-ray-io-v1-rayjob,mutating=false,failurePolicy=fail,sideEffects=None,groups=ray.io,resources=rayjobs,verbs=create;update,versions=v1,name=vrayjob.kb.io,admissionReviewVersions=v1
@@ -94,11 +100,11 @@ func (w *RayJobWebhook) validateCreate(job *rayv1.RayJob) field.ErrorList {
 	var allErrors field.ErrorList
 	kueueJob := (*RayJob)(job)
 
-	if w.manageJobsWithoutQueueName || jobframework.QueueName(kueueJob) != "" || features.Enabled(features.LocalQueueDefaulting) {
+	if w.manageJobsWithoutQueueName || jobframework.QueueName(kueueJob) != "" {
 		spec := &job.Spec
 		specPath := field.NewPath("spec")
 
-		// Should always delete the cluster after the sob has ended, otherwise it will continue to the queue's resources.
+		// Should always delete the cluster after the job has ended, otherwise it will continue to the queue's resources.
 		if !spec.ShutdownAfterJobFinishes {
 			allErrors = append(allErrors, field.Invalid(specPath.Child("shutdownAfterJobFinishes"), spec.ShutdownAfterJobFinishes, "a kueue managed job should delete the cluster after finishing"))
 		}
@@ -155,7 +161,7 @@ func (w *RayJobWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runti
 	log := ctrl.LoggerFrom(ctx).WithName("rayjob-webhook")
 	if w.manageJobsWithoutQueueName || jobframework.QueueName((*RayJob)(newJob)) != "" {
 		log.Info("Validating update")
-		allErrors := jobframework.ValidateJobOnUpdate((*RayJob)(oldJob), (*RayJob)(newJob))
+		allErrors := jobframework.ValidateJobOnUpdate((*RayJob)(oldJob), (*RayJob)(newJob), w.queues.DefaultLocalQueueExist)
 		allErrors = append(allErrors, w.validateCreate(newJob)...)
 		return nil, allErrors.ToAggregate()
 	}

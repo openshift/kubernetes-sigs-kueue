@@ -25,6 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -45,6 +47,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
@@ -55,6 +58,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -69,6 +73,22 @@ import (
 	"sigs.k8s.io/kueue/pkg/util/testing"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
+
+const (
+	defaultLogLevel = -3
+)
+
+func logLevel() int {
+	level, err := strconv.Atoi(os.Getenv("TEST_LOG_LEVEL"))
+	if err != nil {
+		return defaultLogLevel
+	}
+	return level
+}
+
+var SetupLogger = sync.OnceFunc(func() {
+	ctrl.SetLogger(NewTestingLogger(ginkgo.GinkgoWriter, logLevel()))
+})
 
 type objAsPtr[T any] interface {
 	client.Object
@@ -138,6 +158,10 @@ func DeleteNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace)
 	return nil
 }
 
+func DeleteAllCronJobsInNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace) error {
+	return deleteAllObjectsInNamespace(ctx, c, ns, &batchv1.CronJob{})
+}
+
 func DeleteAllJobsInNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace) error {
 	return deleteAllObjectsInNamespace(ctx, c, ns, &batchv1.Job{})
 }
@@ -156,6 +180,10 @@ func DeleteAllMPIJobsInNamespace(ctx context.Context, c client.Client, ns *corev
 
 func DeleteAllPyTorchJobsInNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace) error {
 	return deleteAllObjectsInNamespace(ctx, c, ns, &kftraining.PyTorchJob{})
+}
+
+func DeleteAllJAXJobsInNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace) error {
+	return deleteAllObjectsInNamespace(ctx, c, ns, &kftraining.JAXJob{})
 }
 
 func DeleteAllAppWrappersInNamespace(ctx context.Context, c client.Client, ns *corev1.Namespace) error {
@@ -196,6 +224,7 @@ func deleteAllPodsInNamespace(ctx context.Context, c client.Client, ns *corev1.N
 }
 
 func ExpectAllPodsInNamespaceDeleted(ctx context.Context, c client.Client, ns *corev1.Namespace) {
+	ginkgo.GinkgoHelper()
 	pods := corev1.PodList{}
 	gomega.Eventually(func(g gomega.Gomega) {
 		g.Expect(c.List(ctx, &pods, client.InNamespace(ns.Name))).Should(gomega.Succeed())
@@ -497,18 +526,18 @@ func ExpectLQAdmittedWorkloadsTotalMetric(lq *kueue.LocalQueue, value int) {
 }
 
 func ExpectLQByStatusMetric(lq *kueue.LocalQueue, status metav1.ConditionStatus) {
-	for i, s := range metrics.ConditionStatusValues {
-		var wantV float64
-		if metrics.ConditionStatusValues[i] == status {
-			wantV = 1
-		}
-		metric := metrics.LocalQueueByStatus.WithLabelValues(lq.Name, lq.Namespace, string(s))
-		gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+		for i, s := range metrics.ConditionStatusValues {
+			var wantV float64
+			if metrics.ConditionStatusValues[i] == status {
+				wantV = 1
+			}
+			metric := metrics.LocalQueueByStatus.WithLabelValues(lq.Name, lq.Namespace, string(s))
 			v, err := testutil.GetGaugeMetricValue(metric)
 			g.Expect(err).ToNot(gomega.HaveOccurred())
 			g.Expect(v).Should(gomega.Equal(wantV), "local_queue_status with status=%s", s)
-		}, Timeout, Interval).Should(gomega.Succeed())
-	}
+		}
+	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
 func ExpectPendingWorkloadsMetric(cq *kueue.ClusterQueue, active, inadmissible int) {
@@ -542,6 +571,11 @@ func ExpectEvictedWorkloadsTotalMetric(cqName, reason string, v int) {
 	expectCounterMetric(metric, v)
 }
 
+func ExpectEvictedWorkloadsOnceTotalMetric(cqName string, reason, underlyingCause string, v int) {
+	metric := metrics.EvictedWorkloadsOnceTotal.WithLabelValues(cqName, reason, underlyingCause)
+	expectCounterMetric(metric, v)
+}
+
 func ExpectPreemptedWorkloadsTotalMetric(preemptorCqName, reason string, v int) {
 	metric := metrics.PreemptedWorkloadsTotal.WithLabelValues(preemptorCqName, reason)
 	expectCounterMetric(metric, v)
@@ -553,7 +587,7 @@ func ExpectQuotaReservedWorkloadsTotalMetric(cq *kueue.ClusterQueue, v int) {
 }
 
 func expectCounterMetric(metric prometheus.Counter, count int) {
-	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+	gomega.EventuallyWithOffset(2, func(g gomega.Gomega) {
 		v, err := testutil.GetCounterMetricValue(metric)
 		g.Expect(err).ToNot(gomega.HaveOccurred())
 		g.Expect(int(v)).Should(gomega.Equal(count))
@@ -695,7 +729,7 @@ func SetAdmissionCheckActive(ctx context.Context, k8sClient client.Client, admis
 	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
-func SetWorkloadsAdmissionCheck(ctx context.Context, k8sClient client.Client, wl *kueue.Workload, check string, state kueue.CheckState, expectExisting bool) {
+func SetWorkloadsAdmissionCheck(ctx context.Context, k8sClient client.Client, wl *kueue.Workload, check kueue.AdmissionCheckReference, state kueue.CheckState, expectExisting bool) {
 	var updatedWorkload kueue.Workload
 	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
 		g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(wl), &updatedWorkload)).To(gomega.Succeed())
@@ -713,7 +747,7 @@ func SetWorkloadsAdmissionCheck(ctx context.Context, k8sClient client.Client, wl
 	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
-func AwaitAndVerifyWorkloadQueueName(ctx context.Context, client client.Client, createdWorkload *kueue.Workload, wlLookupKey types.NamespacedName, jobQueueName string) {
+func AwaitAndVerifyWorkloadQueueName(ctx context.Context, client client.Client, createdWorkload *kueue.Workload, wlLookupKey types.NamespacedName, jobQueueName kueue.LocalQueueName) {
 	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
 		g.Expect(client.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
 		g.Expect(createdWorkload.Spec.QueueName).Should(gomega.Equal(jobQueueName))
@@ -1006,4 +1040,60 @@ func FindDeploymentCondition(deployment *appsv1.Deployment, deploymentType appsv
 		}
 	}
 	return nil
+}
+
+func GetListOptsFromLabel(label string) *client.ListOptions {
+	selector, err := labels.Parse(label)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return &client.ListOptions{
+		LabelSelector: selector,
+	}
+}
+
+func MustCreate(ctx context.Context, c client.Client, obj client.Object) {
+	ginkgo.GinkgoHelper()
+	gomega.ExpectWithOffset(1, c.Create(ctx, obj)).Should(gomega.Succeed())
+}
+
+func MustHaveOwnerReference(g gomega.Gomega, ownerRefs []metav1.OwnerReference, obj client.Object, scheme *runtime.Scheme) {
+	hasOwnerRef, err := controllerutil.HasOwnerReference(ownerRefs, obj, scheme)
+	g.Expect(err).ToNot(gomega.HaveOccurred())
+	g.Expect(hasOwnerRef).To(gomega.BeTrue())
+}
+
+func DeactivateWorkload(ctx context.Context, c client.Client, key client.ObjectKey) {
+	ginkgo.GinkgoHelper()
+	wl := &kueue.Workload{}
+	gomega.Eventually(func(g gomega.Gomega) {
+		g.Expect(c.Get(ctx, key, wl)).To(gomega.Succeed())
+		wl.Spec.Active = ptr.To(false)
+		g.Expect(c.Update(ctx, wl)).To(gomega.Succeed())
+	}, Timeout, Interval).Should(gomega.Succeed())
+}
+
+func SetNodeCondition(ctx context.Context, k8sClient client.Client, node *corev1.Node, newCondition *corev1.NodeCondition) {
+	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+		var updatedNode corev1.Node
+		g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(node), &updatedNode)).To(gomega.Succeed())
+		condition := utiltas.GetNodeCondition(&updatedNode, newCondition.Type)
+		changed := false
+		if condition == nil {
+			updatedNode.Status.Conditions = append(updatedNode.Status.Conditions, *newCondition)
+			changed = true
+		}
+		if newCondition.LastTransitionTime.IsZero() {
+			condition.LastTransitionTime = metav1.Now()
+			changed = true
+		} else if condition.LastTransitionTime != newCondition.LastTransitionTime {
+			condition.LastTransitionTime = newCondition.LastTransitionTime
+			changed = true
+		}
+		if condition.Status != newCondition.Status {
+			condition.Status = newCondition.Status
+			changed = true
+		}
+		if changed {
+			g.Expect(k8sClient.Status().Update(ctx, &updatedNode)).To(gomega.Succeed())
+		}
+	}, Timeout, Interval).Should(gomega.Succeed(), "Failed to set node condition %s to %s for node %s", newCondition.Type, newCondition.Status, node.Name)
 }

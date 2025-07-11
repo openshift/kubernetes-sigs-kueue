@@ -24,6 +24,7 @@ import (
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/constants"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 )
 
@@ -42,7 +43,8 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 	if err := acRec.SetupWithManager(mgr, cfg); err != nil {
 		return "AdmissionCheck", err
 	}
-	qRec := NewLocalQueueReconciler(mgr.GetClient(), qManager, cc)
+	qRec := NewLocalQueueReconciler(mgr.GetClient(), qManager, cc,
+		WithAdmissionFairSharingConfig(cfg.AdmissionFairSharing))
 	if err := qRec.SetupWithManager(mgr, cfg); err != nil {
 		return "LocalQueue", err
 	}
@@ -50,6 +52,15 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 	var fairSharingEnabled bool
 	if cfg.FairSharing != nil {
 		fairSharingEnabled = cfg.FairSharing.Enable
+	}
+
+	watchers := []ClusterQueueUpdateWatcher{rfRec, acRec}
+	if features.Enabled(features.HierarchicalCohorts) {
+		cohortRec := NewCohortReconciler(mgr.GetClient(), cc, qManager, CohortReconcilerWithFairSharing(fairSharingEnabled))
+		if err := cohortRec.SetupWithManager(mgr, cfg); err != nil {
+			return "Cohort", err
+		}
+		watchers = append(watchers, cohortRec)
 	}
 
 	cqRec := NewClusterQueueReconciler(
@@ -60,7 +71,7 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		WithReportResourceMetrics(cfg.Metrics.EnableClusterQueueResources),
 		WithQueueVisibilityClusterQueuesMaxCount(queueVisibilityClusterQueuesMaxCount(cfg)),
 		WithFairSharing(fairSharingEnabled),
-		WithWatchers(rfRec, acRec),
+		WithWatchers(watchers...),
 	)
 	if err := mgr.Add(cqRec); err != nil {
 		return "Unable to add ClusterQueue to manager", err
@@ -71,15 +82,11 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		return "ClusterQueue", err
 	}
 
-	cohortRec := NewCohortReconciler(mgr.GetClient(), cc, qManager)
-	if err := cohortRec.SetupWithManager(mgr, cfg); err != nil {
-		return "Cohort", err
-	}
-
 	if err := NewWorkloadReconciler(mgr.GetClient(), qManager, cc,
 		mgr.GetEventRecorderFor(constants.WorkloadControllerName),
 		WithWorkloadUpdateWatchers(qRec, cqRec),
 		WithWaitForPodsReady(waitForPodsReady(cfg.WaitForPodsReady)),
+		WithWorkloadRetention(workloadRetention(cfg.ObjectRetentionPolicies)),
 	).SetupWithManager(mgr, cfg); err != nil {
 		return "Workload", err
 	}
@@ -104,6 +111,16 @@ func waitForPodsReady(cfg *configapi.WaitForPodsReady) *waitForPodsReadyConfig {
 		result.requeuingBackoffJitter = 0.0001
 	}
 	return &result
+}
+
+func workloadRetention(cfg *configapi.ObjectRetentionPolicies) *workloadRetentionConfig {
+	if cfg == nil || cfg.Workloads == nil || cfg.Workloads.AfterFinished == nil {
+		return nil
+	}
+
+	return &workloadRetentionConfig{
+		afterFinished: &cfg.Workloads.AfterFinished.Duration,
+	}
 }
 
 func queueVisibilityUpdateInterval(cfg *configapi.Configuration) time.Duration {

@@ -93,7 +93,7 @@ func concurrent[T any](set T, count func(T) int, call func(int) error) error {
 	}()
 	total := count(set)
 	wg.Add(total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		go func() {
 			defer wg.Done()
 			err := call(i)
@@ -106,13 +106,13 @@ func concurrent[T any](set T, count func(T) int, call func(int) error) error {
 	close(errCh)
 	return errors.Join(errs...)
 }
-func generateWlSet(ctx context.Context, c client.Client, wlSet WorkloadsSet, namespace string, localQueue string, wlSetIdx int) error {
+func generateWlSet(ctx context.Context, c client.Client, wlSet WorkloadsSet, namespace string, localQueue kueue.LocalQueueName, wlSetIdx int) error {
 	delay := time.Duration(wlSet.CreationIntervalMs) * time.Millisecond
 	log := ctrl.LoggerFrom(ctx).WithName("generate workload group").WithValues("namespace", namespace, "localQueue", localQueue, "delay", delay)
 	log.Info("Start generation")
 	defer log.Info("End generation")
 
-	for si := 0; si < wlSet.Count; si++ {
+	for si := range wlSet.Count {
 		for i, wlt := range wlSet.Workloads {
 			<-time.After(delay)
 			wl := utiltesting.MakeWorkload(fmt.Sprintf("%s-%d-%d-%d", wlt.ClassName, wlSetIdx, si, i), namespace).
@@ -166,7 +166,7 @@ func generateQueue(ctx context.Context, c client.Client, qSet QueuesSet, cohortN
 	}
 
 	return concurrent(qSet.WorkloadsSets, func(wlSets []WorkloadsSet) int { return len(wlSets) }, func(wlSetIdx int) error {
-		return generateWlSet(ctx, c, qSet.WorkloadsSets[wlSetIdx], ns.Name, lq.Name, wlSetIdx)
+		return generateWlSet(ctx, c, qSet.WorkloadsSets[wlSetIdx], ns.Name, kueue.LocalQueueName(lq.Name), wlSetIdx)
 	})
 }
 

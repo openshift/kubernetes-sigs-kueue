@@ -22,7 +22,6 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	testingclock "k8s.io/utils/clock/testing"
@@ -42,8 +41,7 @@ var _ = ginkgo.Describe("Kueuectl Stop", ginkgo.Ordered, ginkgo.ContinueOnFailur
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "ns-"}}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "ns-")
 	})
 
 	ginkgo.AfterEach(func() {
@@ -54,7 +52,7 @@ var _ = ginkgo.Describe("Kueuectl Stop", ginkgo.Ordered, ginkgo.ContinueOnFailur
 		ginkgo.It("Should stop the Workload", func() {
 			wl := testing.MakeWorkload("wl", ns.Name).Active(true).Obj()
 			ginkgo.By("Create a Workload")
-			gomega.Expect(k8sClient.Create(ctx, wl)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, wl)
 
 			createdWorkload := &v1beta1.Workload{}
 
@@ -90,7 +88,7 @@ var _ = ginkgo.Describe("Kueuectl Stop", ginkgo.Ordered, ginkgo.ContinueOnFailur
 				lq := testing.MakeLocalQueue(name, ns.Name).Obj()
 
 				ginkgo.By("Create a LocalQueue", func() {
-					gomega.Expect(k8sClient.Create(ctx, lq)).To(gomega.Succeed())
+					util.MustCreate(ctx, k8sClient, lq)
 				})
 
 				createdLocalQueue := &v1beta1.LocalQueue{}
@@ -135,7 +133,7 @@ var _ = ginkgo.Describe("Kueuectl Stop", ginkgo.Ordered, ginkgo.ContinueOnFailur
 		ginkgo.DescribeTable("Should stop a ClusterQueue",
 			func(cq *v1beta1.ClusterQueue, stopCmdArgs []string, wantStopPolicy v1beta1.StopPolicy) {
 				ginkgo.By("Create a ClusterQueue", func() {
-					gomega.Expect(k8sClient.Create(ctx, cq)).To(gomega.Succeed())
+					util.MustCreate(ctx, k8sClient, cq)
 				})
 
 				ginkgo.DeferCleanup(func() {

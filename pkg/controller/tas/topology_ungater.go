@@ -20,8 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -30,16 +30,20 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/core"
 	"sigs.k8s.io/kueue/pkg/controller/tas/indexer"
 	utilclient "sigs.k8s.io/kueue/pkg/util/client"
@@ -49,10 +53,6 @@ import (
 	utilslices "sigs.k8s.io/kueue/pkg/util/slices"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
-)
-
-const (
-	ungateBatchPeriod = time.Second
 )
 
 var (
@@ -75,7 +75,7 @@ type podWithDomain struct {
 }
 
 var _ reconcile.Reconciler = (*topologyUngater)(nil)
-var _ predicate.Predicate = (*topologyUngater)(nil)
+var _ predicate.TypedPredicate[*kueue.Workload] = (*topologyUngater)(nil)
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
@@ -92,13 +92,20 @@ func (r *topologyUngater) setupWithManager(mgr ctrl.Manager, cfg *configapi.Conf
 	podHandler := podHandler{
 		expectationsStore: r.expectationsStore,
 	}
-	return TASTopologyUngater, ctrl.NewControllerManagedBy(mgr).
+	return TASTopologyUngater, builder.TypedControllerManagedBy[reconcile.Request](mgr).
 		Named("tas_topology_ungater").
-		For(&kueue.Workload{}).
+		WatchesRawSource(source.TypedKind(
+			mgr.GetCache(),
+			&kueue.Workload{},
+			&handler.TypedEnqueueRequestForObject[*kueue.Workload]{},
+			r,
+		)).
 		Watches(&corev1.Pod{}, &podHandler).
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
-		WithEventFilter(r).
-		Complete(core.WithLeadingManager(mgr, r, &kueue.ClusterQueue{}, cfg))
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(false),
+			MaxConcurrentReconciles: mgr.GetControllerOptions().GroupKindConcurrency[kueue.GroupVersion.WithKind("Workload").GroupKind().String()],
+		}).
+		Complete(core.WithLeadingManager(mgr, r, &kueue.Workload{}, cfg))
 }
 
 var _ handler.EventHandler = (*podHandler)(nil)
@@ -142,7 +149,7 @@ func (h *podHandler) queueReconcileForPod(ctx context.Context, object client.Obj
 			log := ctrl.LoggerFrom(ctx).WithValues("pod", klog.KObj(pod), "workload", key.String())
 			h.expectationsStore.ObservedUID(log, key, pod.UID)
 		}
-		q.AddAfter(reconcile.Request{NamespacedName: key}, ungateBatchPeriod)
+		q.AddAfter(reconcile.Request{NamespacedName: key}, constants.UpdatesBatchPeriod)
 	}
 }
 
@@ -187,76 +194,60 @@ func (r *topologyUngater) Reconcile(ctx context.Context, req reconcile.Request) 
 			}
 		}
 	}
-	var err error
-	if len(allToUngate) > 0 {
-		log.V(2).Info("identified pods to ungate", "count", len(allToUngate))
-		podsToUngateUIDs := utilslices.Map(allToUngate, func(p *podWithUngateInfo) types.UID { return p.pod.UID })
-		r.expectationsStore.ExpectUIDs(log, req.NamespacedName, podsToUngateUIDs)
 
-		err = parallelize.Until(ctx, len(allToUngate), func(i int) error {
-			podWithUngateInfo := &allToUngate[i]
-			var ungated bool
-			e := utilclient.Patch(ctx, r.client, podWithUngateInfo.pod, true, func() (bool, error) {
-				log.V(3).Info("ungating pod", "pod", klog.KObj(podWithUngateInfo.pod), "nodeLabels", podWithUngateInfo.nodeLabels)
-				ungated = utilpod.Ungate(podWithUngateInfo.pod, kueuealpha.TopologySchedulingGate)
-				if podWithUngateInfo.pod.Spec.NodeSelector == nil {
-					podWithUngateInfo.pod.Spec.NodeSelector = make(map[string]string)
-				}
-				for labelKey, labelValue := range podWithUngateInfo.nodeLabels {
-					podWithUngateInfo.pod.Spec.NodeSelector[labelKey] = labelValue
-				}
-				return true, nil
-			})
-			if e != nil {
-				// We won't observe this cleanup in the event handler.
-				r.expectationsStore.ObservedUID(log, req.NamespacedName, podWithUngateInfo.pod.UID)
-				log.Error(e, "failed ungating pod", "pod", klog.KObj(podWithUngateInfo.pod))
+	if len(allToUngate) == 0 {
+		return reconcile.Result{}, nil
+	}
+	log.V(2).Info("identified pods to ungate", "count", len(allToUngate))
+	podsToUngateUIDs := utilslices.Map(allToUngate, func(p *podWithUngateInfo) types.UID { return p.pod.UID })
+	r.expectationsStore.ExpectUIDs(log, req.NamespacedName, podsToUngateUIDs)
+
+	err := parallelize.Until(ctx, len(allToUngate), func(i int) error {
+		podWithUngateInfo := &allToUngate[i]
+		var ungated bool
+		e := utilclient.Patch(ctx, r.client, podWithUngateInfo.pod, true, func() (bool, error) {
+			log.V(3).Info("ungating pod", "pod", klog.KObj(podWithUngateInfo.pod), "nodeLabels", podWithUngateInfo.nodeLabels)
+			ungated = utilpod.Ungate(podWithUngateInfo.pod, kueuealpha.TopologySchedulingGate)
+			if podWithUngateInfo.pod.Spec.NodeSelector == nil {
+				podWithUngateInfo.pod.Spec.NodeSelector = make(map[string]string)
 			}
-			if !ungated {
-				// We don't expect an event in this case.
-				r.expectationsStore.ObservedUID(log, req.NamespacedName, podWithUngateInfo.pod.UID)
-			}
-			return e
+			maps.Copy(podWithUngateInfo.pod.Spec.NodeSelector, podWithUngateInfo.nodeLabels)
+			return true, nil
 		})
-		if err != nil {
-			return reconcile.Result{}, err
+		if e != nil {
+			// We won't observe this cleanup in the event handler.
+			r.expectationsStore.ObservedUID(log, req.NamespacedName, podWithUngateInfo.pod.UID)
+			log.Error(e, "failed ungating pod", "pod", klog.KObj(podWithUngateInfo.pod))
 		}
-	}
-	return reconcile.Result{}, nil
+		if !ungated {
+			// We don't expect an event in this case.
+			r.expectationsStore.ObservedUID(log, req.NamespacedName, podWithUngateInfo.pod.UID)
+		}
+		return e
+	})
+	return reconcile.Result{}, err
 }
 
-func (r *topologyUngater) Create(event event.CreateEvent) bool {
-	wl, isWl := event.Object.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Create(event event.TypedCreateEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.Object)
 }
 
-func (r *topologyUngater) Delete(event event.DeleteEvent) bool {
-	wl, isWl := event.Object.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Delete(event event.TypedDeleteEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.Object)
 }
 
-func (r *topologyUngater) Update(event event.UpdateEvent) bool {
-	wl, isWl := event.ObjectNew.(*kueue.Workload)
-	if isWl {
-		return isAdmittedByTAS(wl)
-	}
-	return true
+func (r *topologyUngater) Update(event event.TypedUpdateEvent[*kueue.Workload]) bool {
+	return isAdmittedByTAS(event.ObjectNew)
 }
 
-func (r *topologyUngater) Generic(event event.GenericEvent) bool {
+func (r *topologyUngater) Generic(event.TypedGenericEvent[*kueue.Workload]) bool {
 	return false
 }
 
 func (r *topologyUngater) podsForPodSet(ctx context.Context, ns, wlName string, psName kueue.PodSetReference) ([]*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.client.List(ctx, &pods, client.InNamespace(ns), client.MatchingLabels{
-		kueuealpha.PodSetLabel: string(psName),
+		controllerconsts.PodSetLabel: string(psName),
 	}, client.MatchingFields{
 		indexer.WorkloadNameKey: wlName,
 	}); err != nil {

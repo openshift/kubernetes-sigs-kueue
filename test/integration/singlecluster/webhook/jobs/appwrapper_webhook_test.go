@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	awv1beta2 "github.com/project-codeflare/appwrapper/api/v1beta2"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
@@ -37,12 +36,7 @@ var _ = ginkgo.Describe("AppWrapper Webhook", ginkgo.Ordered, func() {
 		fwk.StartManager(ctx, cfg, managerSetup(appwrapper.SetupAppWrapperWebhook, jobframework.WithManageJobsWithoutQueueName(false)))
 	})
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "aw-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "aw-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
@@ -53,7 +47,7 @@ var _ = ginkgo.Describe("AppWrapper Webhook", ginkgo.Ordered, func() {
 
 	ginkgo.It("should suspend an AppWrapper when created in unsuspend state", func() {
 		appwrapper := testingaw.MakeAppWrapper("aw-with-queue-name", ns.Name).Suspend(false).Queue("default").Obj()
-		gomega.Expect(k8sClient.Create(ctx, appwrapper)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, appwrapper)
 
 		lookupKey := types.NamespacedName{Name: appwrapper.Name, Namespace: appwrapper.Namespace}
 		createdAppWrapper := &awv1beta2.AppWrapper{}

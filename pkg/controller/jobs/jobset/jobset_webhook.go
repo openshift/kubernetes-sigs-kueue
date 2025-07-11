@@ -58,7 +58,7 @@ func SetupJobSetWebhook(mgr ctrl.Manager, opts ...jobframework.Option) error {
 	obj := &jobsetapi.JobSet{}
 	return webhook.WebhookManagedBy(mgr).
 		For(obj).
-		WithMutationHandler(webhook.WithLosslessDefaulter(mgr.GetScheme(), obj, wh)).
+		WithMutationHandler(admission.WithCustomDefaulter(mgr.GetScheme(), obj, wh)).
 		WithValidator(wh).
 		Complete()
 }
@@ -106,7 +106,7 @@ func (w *JobSetWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj runti
 
 func (w *JobSetWebhook) validateUpdate(oldJob, newJob *JobSet) field.ErrorList {
 	var allErrs field.ErrorList
-	allErrs = append(allErrs, jobframework.ValidateJobOnUpdate(oldJob, newJob)...)
+	allErrs = append(allErrs, jobframework.ValidateJobOnUpdate(oldJob, newJob, w.queues.DefaultLocalQueueExist)...)
 	allErrs = append(allErrs, w.validateCreate(newJob)...)
 	return allErrs
 }

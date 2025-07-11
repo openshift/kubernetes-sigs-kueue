@@ -9,6 +9,8 @@ description: >
 <!-- toc -->
 - [Before you begin](#before-you-begin)
 - [Install a released version](#install-a-released-version)
+  - [Install by kubectl](#install-by-kubectl)
+  - [Install by Helm](#install-by-helm)
   - [Add metrics scraping for prometheus-operator](#add-metrics-scraping-for-prometheus-operator)
   - [Add API Priority and Fairness configuration for the visibility API](#add-api-priority-and-fairness-configuration-for-the-visibility-api)
   - [Uninstall](#uninstall)
@@ -20,6 +22,8 @@ description: >
   - [Uninstall](#uninstall-2)
 - [Install via Helm](#install-via-helm)
 - [Change the feature gates configuration](#change-the-feature-gates-configuration)
+  - [Feature gates for alpha and beta features](#feature-gates-for-alpha-and-beta-features)
+  - [Feature gates for graduated or deprecated features](#feature-gates-for-graduated-or-deprecated-features)
 - [What's next](#whats-next)
 
 <!-- /toc -->
@@ -28,7 +32,7 @@ description: >
 
 Make sure the following conditions are met:
 
-- A Kubernetes cluster with version 1.25 or newer is running. Learn how to [install the Kubernetes tools](https://kubernetes.io/docs/tasks/tools/).
+- A Kubernetes cluster with version 1.29 or newer is running. Learn how to [install the Kubernetes tools](https://kubernetes.io/docs/tasks/tools/).
 - The `SuspendJob` [feature gate][feature_gate] is enabled. In Kubernetes 1.22 or newer, the feature gate is enabled by default.
 - (Optional) The `JobMutableNodeSchedulingDirectives` [feature gate][feature_gate] (available in Kubernetes 1.22 or newer) is enabled.
   In Kubernetes 1.23 or newer, the feature gate is enabled by default.
@@ -40,11 +44,7 @@ Use [kube-prometheus](https://github.com/prometheus-operator/kube-prometheus)
 if you don't have your own monitoring system.
 
 The webhook server in kueue uses an internal cert management for provisioning certificates. If you want to use
-  a third-party one, e.g. [cert-manager](https://github.com/cert-manager/cert-manager), follow these steps:
-
-  1. Set `internalCertManagement.enable` to `false` in [config file](#install-a-custom-configured-released-version).
-  2. Comment out the `internalcert` folder in `config/default/kustomization.yaml`.
-  3. Enable `cert-manager` in `config/default/kustomization.yaml` and uncomment all sections with 'CERTMANAGER'.
+  a third-party one, e.g. [cert-manager](https://github.com/cert-manager/cert-manager), follow the [cert manage guide](/docs/tasks/manage/installation).
 
 [feature_gate]: https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/
 
@@ -69,8 +69,8 @@ kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=avai
 To install a released version of Kueue in your cluster by [Helm](https://helm.sh/), run the following command:
 
 ```shell
-helm install kueue oci://registry.k8s.io/charts/kueue \
-  --version={{< param "version" >}} \
+helm install kueue oci://registry.k8s.io/kueue/charts/kueue \
+  --version={{< param "chart_version" >}} \
   --namespace  kueue-system \
   --create-namespace \
   --wait --timeout 300s
@@ -265,47 +265,53 @@ spec:
 
 ### Feature gates for alpha and beta features
 
-| Feature                               | Default | Stage      | Since | Until |
-|---------------------------------------|---------|------------|-------|-------|
-| `FlavorFungibility`                   | `true`  | Beta       | 0.5   |       |
-| `MultiKueue`                          | `false` | Alpha      | 0.6   | 0.8   |
-| `MultiKueue`                          | `true`  | Beta       | 0.9   |       |
-| `MultiKueueBatchJobWithManagedBy`     | `false` | Alpha      | 0.8   |       |
-| `PartialAdmission`                    | `false` | Alpha      | 0.4   | 0.4   |
-| `PartialAdmission`                    | `true`  | Beta       | 0.5   |       |
-| `ProvisioningACC`                     | `false` | Alpha      | 0.5   | 0.6   |
-| `ProvisioningACC`                     | `true`  | Beta       | 0.7   |       |
-| `QueueVisibility`                     | `false` | Alpha      | 0.5   | 0.9   |
-| `VisibilityOnDemand`                  | `false` | Alpha      | 0.6   |  0.8  |
-| `VisibilityOnDemand`                  | `true`  | Beta       | 0.9   |       |
-| `PrioritySortingWithinCohort`         | `true`  | Beta       | 0.6   |       |
-| `LendingLimit`                        | `false` | Alpha      | 0.6   | 0.8   |
-| `LendingLimit`                        | `true`  | Beta       | 0.9   |       |
-| `MultiplePreemptions`                 | `false` | Alpha      | 0.8   | 0.8   |
-| `MultiplePreemptions`                 | `true`  | Beta       | 0.9   | 0.9   |
-| `TopologyAwareScheduling`             | `false` | Alpha      | 0.9   |       |
-| `ConfigurableResourceTransformations` | `false` | Alpha      | 0.9   | 0.9   |
-| `ConfigurableResourceTransformations` | `true`  | Beta       | 0.10  |       |
-| `WorkloadResourceRequestsSummary`     | `false` | Alpha      | 0.9   | 0.9   |
-| `WorkloadResourceRequestsSummary`     | `true`  | Beta       | 0.10  | 0.10  |
-| `ManagedJobsNamespaceSelector`        | `true`  | Beta       | 0.10  |       |
-| `LocalQueueDefaulting`                | `false` | Alpha      | 0.10  |       |
-| `LocalQueueMetrics`                   | `false` | Alpha      | 0.10  |       |
+| Feature                               | Default | Stage | Since | Until |
+|---------------------------------------|---------|-------|-------|-------|
+| `FlavorFungibility`                   | `true`  | Beta  | 0.5   |       |
+| `MultiKueue`                          | `false` | Alpha | 0.6   | 0.8   |
+| `MultiKueue`                          | `true`  | Beta  | 0.9   |       |
+| `MultiKueueBatchJobWithManagedBy`     | `false` | Alpha | 0.8   |       |
+| `PartialAdmission`                    | `false` | Alpha | 0.4   | 0.4   |
+| `PartialAdmission`                    | `true`  | Beta  | 0.5   |       |
+| `ProvisioningACC`                     | `false` | Alpha | 0.5   | 0.6   |
+| `ProvisioningACC`                     | `true`  | Beta  | 0.7   |       |
+| `QueueVisibility`                     | `false` | Alpha | 0.5   | 0.9   |
+| `VisibilityOnDemand`                  | `false` | Alpha | 0.6   | 0.8   |
+| `VisibilityOnDemand`                  | `true`  | Beta  | 0.9   |       |
+| `PrioritySortingWithinCohort`         | `true`  | Beta  | 0.6   |       |
+| `LendingLimit`                        | `false` | Alpha | 0.6   | 0.8   |
+| `LendingLimit`                        | `true`  | Beta  | 0.9   |       |
+| `MultiplePreemptions`                 | `false` | Alpha | 0.8   | 0.8   |
+| `MultiplePreemptions`                 | `true`  | Beta  | 0.9   | 0.9   |
+| `TopologyAwareScheduling`             | `false` | Alpha | 0.9   |       |
+| `ConfigurableResourceTransformations` | `false` | Alpha | 0.9   | 0.9   |
+| `ConfigurableResourceTransformations` | `true`  | Beta  | 0.10  |       |
+| `WorkloadResourceRequestsSummary`     | `false` | Alpha | 0.9   | 0.9   |
+| `WorkloadResourceRequestsSummary`     | `true`  | Beta  | 0.10  | 0.10  |
+| `ManagedJobsNamespaceSelector`        | `true`  | Beta  | 0.10  |       |
+| `LocalQueueDefaulting`                | `false` | Alpha | 0.10  | 0.11  |
+| `LocalQueueDefaulting`                | `true`  | Beta  | 0.12  |       |
+| `LocalQueueMetrics`                   | `false` | Alpha | 0.10  |       |
+| `HierarchicalCohort`                  | `true`  | Beta  | 0.11  |       |
+| `ObjectRetentionPolicies`             | `false` | Alpha | 0.12  |       |
+| `TASFailedNodeReplacement`            | `false` | Alpha | 0.12  |       |
+| `AdmissionFairSharing`                | `false` | Alpha | 0.12  |       |
 
 ### Feature gates for graduated or deprecated features
 
-| Feature                               | Default | Stage      | Since | Until |
-|---------------------------------------|---------|------------|-------|-------|
-| `QueueVisibility`                     | `false` | Alpha      | 0.4   | 0.9   |
-| `QueueVisibility`                     | `false` | Deprecated | 0.9   |       |
-| `AdmissionCheckValidationRules`       | `false` | Deprecated | 0.9   |       |
-| `KeepQuotaForProvReqRetry`            | `false` | Deprecated | 0.9   |       |
-| `MultiplePreemptions`                 | `false` | Alpha      | 0.8   | 0.8   |
-| `MultiplePreemptions`                 | `true`  | Beta       | 0.9   | 0.9   |
-| `MultiplePreemptions`                 | `true`  | GA         | 0.10  |       |
-| `WorkloadResourceRequestsSummary`     | `false` | Alpha      | 0.9   | 0.10  |
-| `WorkloadResourceRequestsSummary`     | `true`  | Beta       | 0.10  | 0.11  |
-| `WorkloadResourceRequestsSummary`     | `true`  | GA         | 0.11  |       |
+| Feature                           | Default | Stage      | Since | Until |
+|-----------------------------------|---------|------------|-------|-------|
+| `QueueVisibility`                 | `false` | Alpha      | 0.4   | 0.9   |
+| `QueueVisibility`                 | `false` | Deprecated | 0.9   |       |
+| `MultiplePreemptions`             | `false` | Alpha      | 0.8   | 0.8   |
+| `MultiplePreemptions`             | `true`  | Beta       | 0.9   | 0.9   |
+| `MultiplePreemptions`             | `true`  | GA         | 0.10  |       |
+| `WorkloadResourceRequestsSummary` | `false` | Alpha      | 0.9   | 0.10  |
+| `WorkloadResourceRequestsSummary` | `true`  | Beta       | 0.10  | 0.11  |
+| `WorkloadResourceRequestsSummary` | `true`  | GA         | 0.11  |       |
+| `TASProfileMostFreeCapacity`      | `false` | Deprecated | 0.11  | 0.13  |
+| `TASProfileLeastFreeCapacity`     | `false` | Deprecated | 0.11  |       |
+| `TASProfileMixed`                 | `false` | Deprecated | 0.11  |       |
 
 ## What's next
 

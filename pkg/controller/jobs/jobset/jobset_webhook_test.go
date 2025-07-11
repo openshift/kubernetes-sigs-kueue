@@ -17,12 +17,10 @@ limitations under the License.
 package jobset
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
@@ -106,7 +104,7 @@ func TestValidateCreate(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			jsw := &JobSetWebhook{}
-			_, gotErr := jsw.ValidateCreate(context.Background(), tc.job)
+			_, gotErr := jsw.ValidateCreate(t.Context(), tc.job)
 
 			if diff := cmp.Diff(tc.wantErr, gotErr); diff != "" {
 				t.Errorf("validateCreate() mismatch (-want +got):\n%s", diff)
@@ -395,12 +393,9 @@ func TestDefault(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.MultiKueue, tc.multiKueueEnabled)
 			features.SetFeatureGateDuringTest(t, features.LocalQueueDefaulting, tc.localQueueDefaulting)
 
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
-			clientBuilder := utiltesting.NewClientBuilder().
-				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
-				)
+			clientBuilder := utiltesting.NewClientBuilder().WithObjects(utiltesting.MakeNamespace("default"))
 			cl := clientBuilder.Build()
 			cqCache := cache.New(cl)
 			queueManager := queue.NewManager(cl, cqCache)
@@ -422,7 +417,7 @@ func TestDefault(t *testing.T) {
 					t.Fatalf("Inserting clusterQueue %s in cache: %v", cq.Name, err)
 				}
 				if tc.admissionCheck != nil {
-					cqCache.AddOrUpdateAdmissionCheck(tc.admissionCheck)
+					cqCache.AddOrUpdateAdmissionCheck(log, tc.admissionCheck)
 					if err := queueManager.AddClusterQueue(ctx, &cq); err != nil {
 						t.Fatalf("Inserting clusterQueue %s in manager: %v", cq.Name, err)
 					}

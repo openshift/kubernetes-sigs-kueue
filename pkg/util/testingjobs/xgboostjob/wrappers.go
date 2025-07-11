@@ -56,7 +56,7 @@ type XGBReplicaSpecRequirement struct {
 }
 
 func (j *XGBoostJobWrapper) XGBReplicaSpecs(replicaSpecs ...XGBReplicaSpecRequirement) *XGBoostJobWrapper {
-	j = j.XGBReplicaSpecsDefault()
+	j.XGBReplicaSpecsDefault()
 	for _, rs := range replicaSpecs {
 		j.Spec.XGBReplicaSpecs[rs.ReplicaType].Replicas = ptr.To[int32](rs.ReplicaCount)
 		j.Spec.XGBReplicaSpecs[rs.ReplicaType].Template.Name = rs.Name
@@ -64,7 +64,7 @@ func (j *XGBoostJobWrapper) XGBReplicaSpecs(replicaSpecs ...XGBReplicaSpecRequir
 		j.Spec.XGBReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Name = "xgboost"
 
 		if rs.Annotations != nil {
-			j.Spec.XGBReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.XGBReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 

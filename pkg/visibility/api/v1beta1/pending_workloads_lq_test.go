@@ -52,11 +52,7 @@ func TestPendingWorkloadsInLQ(t *testing.T) {
 		Limit:  constants.DefaultPendingWorkloadsLimit,
 	}
 
-	scheme := runtime.NewScheme()
-	if err := kueue.AddToScheme(scheme); err != nil {
-		t.Fatalf("Failed adding kueue scheme: %s", err)
-	}
-	if err := visibility.AddToScheme(scheme); err != nil {
+	if err := visibility.AddToScheme(runtime.NewScheme()); err != nil {
 		t.Fatalf("Failed adding kueue scheme: %s", err)
 	}
 
@@ -439,7 +435,7 @@ func TestPendingWorkloadsInLQ(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			manager := queue.NewManager(utiltesting.NewFakeClient(), nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			go manager.CleanUpOnContext(ctx)
 			pendingWorkloadsInLqRest := NewPendingWorkloadsInLqREST(manager)

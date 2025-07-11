@@ -23,8 +23,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/util/testing"
 	"sigs.k8s.io/kueue/test/util"
@@ -32,7 +32,7 @@ import (
 
 var _ = ginkgo.Describe("Cohort Webhook", func() {
 	ginkgo.When("Creating a Cohort", func() {
-		ginkgo.DescribeTable("Validate Cohort on creation", func(cohort *kueuealpha.Cohort, matcher types.GomegaMatcher) {
+		ginkgo.DescribeTable("Validate Cohort on creation", func(cohort *kueue.Cohort, matcher types.GomegaMatcher) {
 			err := k8sClient.Create(ctx, cohort)
 			if err == nil {
 				defer func() {
@@ -234,11 +234,11 @@ var _ = ginkgo.Describe("Cohort Webhook", func() {
 					Obj(),
 				gomega.Succeed()),
 			ginkgo.Entry("Should reject resources in a flavor in different order",
-				&kueuealpha.Cohort{
+				&kueue.Cohort{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "cohort",
 					},
-					Spec: kueuealpha.CohortSpec{
+					Spec: kueue.CohortSpec{
 						ResourceGroups: []kueue.ResourceGroup{
 							{
 								CoveredResources: []corev1.ResourceName{"cpu", "memory"},
@@ -258,11 +258,11 @@ var _ = ginkgo.Describe("Cohort Webhook", func() {
 				},
 				testing.BeForbiddenError()),
 			ginkgo.Entry("Should reject missing resources in a flavor",
-				&kueuealpha.Cohort{
+				&kueue.Cohort{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "cohort",
 					},
-					Spec: kueuealpha.CohortSpec{
+					Spec: kueue.CohortSpec{
 						ResourceGroups: []kueue.ResourceGroup{
 							{
 								CoveredResources: []corev1.ResourceName{"cpu", "memory"},
@@ -277,11 +277,11 @@ var _ = ginkgo.Describe("Cohort Webhook", func() {
 				},
 				testing.BeInvalidError()),
 			ginkgo.Entry("Should reject resource not defined in resource group",
-				&kueuealpha.Cohort{
+				&kueue.Cohort{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "cohort",
 					},
-					Spec: kueuealpha.CohortSpec{
+					Spec: kueue.CohortSpec{
 						ResourceGroups: []kueue.ResourceGroup{
 							{
 								CoveredResources: []corev1.ResourceName{"cpu"},
@@ -338,32 +338,41 @@ var _ = ginkgo.Describe("Cohort Webhook", func() {
 	})
 
 	ginkgo.When("Updating a Cohort", func() {
-		ginkgo.It("Should update parent", func() {
-			cohort := testing.MakeCohort("cohort").Obj()
-			gomega.Expect(k8sClient.Create(ctx, cohort)).Should(gomega.Succeed())
+		var (
+			cohort *kueue.Cohort
+		)
 
-			updated := cohort.DeepCopy()
-			updated.Spec.Parent = "cohort2"
-
-			gomega.Expect(k8sClient.Update(ctx, updated)).Should(gomega.Succeed())
+		ginkgo.AfterEach(func() {
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, cohort, true)
+		})
+
+		ginkgo.It("Should update parent", func() {
+			cohort = testing.MakeCohort("cohort").Obj()
+			util.MustCreate(ctx, k8sClient, cohort)
+
+			gomega.Eventually(func(g gomega.Gomega) {
+				createCohort := &kueue.Cohort{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cohort), createCohort)).Should(gomega.Succeed())
+				createCohort.Spec.ParentName = "cohort2"
+				g.Expect(k8sClient.Update(ctx, createCohort)).Should(gomega.Succeed())
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 		})
 		ginkgo.It("Should reject invalid parent", func() {
-			cohort := testing.MakeCohort("cohort").Obj()
-			gomega.Expect(k8sClient.Create(ctx, cohort)).Should(gomega.Succeed())
+			cohort = testing.MakeCohort("cohort").Obj()
+			util.MustCreate(ctx, k8sClient, cohort)
 
-			updated := cohort.DeepCopy()
-			updated.Spec.Parent = "@cohort2"
-
-			gomega.Expect(k8sClient.Update(ctx, updated)).ShouldNot(gomega.Succeed())
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, cohort, true)
+			gomega.Eventually(func(g gomega.Gomega) {
+				createCohort := &kueue.Cohort{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cohort), createCohort)).Should(gomega.Succeed())
+				createCohort.Spec.ParentName = "@cohort2"
+				gomega.Expect(k8sClient.Update(ctx, createCohort)).ShouldNot(gomega.Succeed())
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 		})
 		ginkgo.It("Should reject negative borrowing limit", func() {
-			cohort := testing.MakeCohort("cohort").
-				ResourceGroup(testing.MakeFlavorQuotas("x86").Resource("cpu", "-1").FlavorQuotas).Cohort
-
-			gomega.Expect(k8sClient.Create(ctx, &cohort)).ShouldNot(gomega.Succeed())
-			util.ExpectObjectToBeDeleted(ctx, k8sClient, &cohort, true)
+			cohort = testing.MakeCohort("cohort").
+				ResourceGroup(*testing.MakeFlavorQuotas("x86").Resource("cpu", "-1").Obj()).
+				Obj()
+			gomega.Expect(k8sClient.Create(ctx, cohort)).ShouldNot(gomega.Succeed())
 		})
 	})
 })

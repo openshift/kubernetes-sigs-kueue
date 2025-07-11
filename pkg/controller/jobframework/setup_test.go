@@ -32,7 +32,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -239,7 +238,7 @@ func TestSetupIndexes(t *testing.T) {
 			opts: []Option{
 				WithEnabledFrameworks([]string{"batch/job"}),
 			},
-			filter:        client.MatchingFields{GetOwnerKey(batchv1.SchemeGroupVersion.WithKind("Job")): "alpha"},
+			filter:        OwnerReferenceIndexFieldMatcher(batchv1.SchemeGroupVersion.WithKind("Job"), "alpha"),
 			wantWorkloads: []string{"alpha-wl"},
 		},
 		"kubeflow.org/mpijob is disabled in the configAPI": {
@@ -254,16 +253,16 @@ func TestSetupIndexes(t *testing.T) {
 			opts: []Option{
 				WithEnabledFrameworks([]string{"batch/job"}),
 			},
-			filter:                client.MatchingFields{GetOwnerKey(kfmpi.SchemeGroupVersionKind): "alpha"},
+			filter:                OwnerReferenceIndexFieldMatcher(kfmpi.SchemeGroupVersionKind, "alpha"),
 			wantFieldMatcherError: true,
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			builder := utiltesting.NewClientBuilder().WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}})
+			builder := utiltesting.NewClientBuilder().WithObjects(utiltesting.MakeNamespace(testNamespace))
 			gotIndexerErr := SetupIndexes(ctx, utiltesting.AsIndexer(builder), tc.opts...)
 			if diff := cmp.Diff(tc.wantError, gotIndexerErr, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Fatalf("Unexpected setupIndexer error (-want,+got):\n%s", diff)

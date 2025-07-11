@@ -20,7 +20,6 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -34,15 +33,11 @@ import (
 var _ = ginkgo.Describe("TopologyAwareScheduling for Pod group", func() {
 	var ns *corev1.Namespace
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "e2e-tas-pod-group-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-tas-pod-group-")
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 	})
 
 	ginkgo.When("Creating a Pod group", func() {
@@ -54,11 +49,11 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Pod group", func() {
 		)
 		ginkgo.BeforeEach(func() {
 			topology = testing.MakeDefaultThreeLevelTopology("datacenter")
-			gomega.Expect(k8sClient.Create(ctx, topology)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, topology)
 
 			tasFlavor = testing.MakeResourceFlavor("tas-flavor").
 				NodeLabel(tasNodeGroupLabel, instanceType).TopologyName(topology.Name).Obj()
-			gomega.Expect(k8sClient.Create(ctx, tasFlavor)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, tasFlavor)
 			clusterQueue = testing.MakeClusterQueue("cluster-queue").
 				ResourceGroup(
 					*testing.MakeFlavorQuotas("tas-flavor").
@@ -66,11 +61,11 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Pod group", func() {
 						Obj(),
 				).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, clusterQueue)
 			util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
 
 			localQueue = testing.MakeLocalQueue("test-queue", ns.Name).ClusterQueue("cluster-queue").Obj()
-			gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, localQueue)
 		})
 		ginkgo.AfterEach(func() {
 			gomega.Expect(util.DeleteAllPodsInNamespace(ctx, k8sClient, ns)).Should(gomega.Succeed())
@@ -88,13 +83,14 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Pod group", func() {
 			numPods := 4
 			basePod := testingpod.MakePod("test-pod", ns.Name).
 				Queue("test-queue").
-				Request(extraResource, "1").
+				RequestAndLimit(extraResource, "1").
 				Limit(extraResource, "1").
+				Image(util.GetAgnHostImage(), util.BehaviorExitFast).
 				Annotation(kueuealpha.PodSetRequiredTopologyAnnotation, testing.DefaultBlockTopologyLevel)
 			podGroup := basePod.MakeIndexedGroup(numPods)
 
 			for _, pod := range podGroup {
-				gomega.Expect(k8sClient.Create(ctx, pod)).Should(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, pod)
 			}
 
 			pods := &corev1.PodList{}
@@ -130,6 +126,120 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Pod group", func() {
 					"3": "kind-worker4",
 				}
 				gomega.Expect(wantAssignment).Should(gomega.BeComparableTo(gotAssignment))
+			})
+		})
+
+		ginkgo.It("Should schedule Pods without explicit TAS annotation", func() {
+			ginkgo.By("Creating pod group with 4 pods")
+			numPods := 4
+			basePod := testingpod.MakePod("test-pod", ns.Name).
+				Queue("test-queue").
+				Request(extraResource, "1").
+				Limit(extraResource, "1")
+			podGroup := basePod.MakeIndexedGroup(numPods)
+
+			for _, pod := range podGroup {
+				util.MustCreate(ctx, k8sClient, pod)
+			}
+
+			pods := &corev1.PodList{}
+			ginkgo.By("ensure all pods are created", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name))).To(gomega.Succeed())
+					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("ensure all pods are scheduled", func() {
+				listOpts := &client.ListOptions{
+					FieldSelector: fields.OneTermNotEqualSelector("spec.nodeName", ""),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
+					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("verify the assignment for the Pods was using TAS", func() {
+				gomega.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name),
+					client.MatchingLabels(basePod.Labels))).To(gomega.Succeed())
+				var gotAssignment []string
+				for _, pod := range pods.Items {
+					gotAssignment = append(gotAssignment, pod.Spec.NodeName)
+				}
+				wantAssignment := []string{
+					"kind-worker",
+					"kind-worker2",
+					"kind-worker3",
+					"kind-worker4",
+				}
+				gomega.Expect(wantAssignment).Should(gomega.ConsistOf(gotAssignment))
+			})
+		})
+	})
+
+	ginkgo.When("Creating a Pod group which is not using TAS", func() {
+		var (
+			flavor       *kueue.ResourceFlavor
+			localQueue   *kueue.LocalQueue
+			clusterQueue *kueue.ClusterQueue
+		)
+		ginkgo.BeforeEach(func() {
+			flavor = testing.MakeResourceFlavor("flavor").
+				NodeLabel(tasNodeGroupLabel, instanceType).Obj()
+			util.MustCreate(ctx, k8sClient, flavor)
+			clusterQueue = testing.MakeClusterQueue("cluster-queue").
+				ResourceGroup(
+					*testing.MakeFlavorQuotas("flavor").
+						Resource(extraResource, "8").
+						Obj(),
+				).
+				Obj()
+			util.MustCreate(ctx, k8sClient, clusterQueue)
+			util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
+
+			localQueue = testing.MakeLocalQueue("test-queue", ns.Name).ClusterQueue("cluster-queue").Obj()
+			util.MustCreate(ctx, k8sClient, localQueue)
+		})
+		ginkgo.AfterEach(func() {
+			gomega.Expect(util.DeleteAllPodsInNamespace(ctx, k8sClient, ns)).Should(gomega.Succeed())
+			// Force remove workloads to be sure that cluster queue can be removed.
+			gomega.Expect(util.DeleteWorkloadsInNamespace(ctx, k8sClient, ns)).Should(gomega.Succeed())
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, localQueue, true)
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, flavor, true)
+			util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
+		})
+
+		ginkgo.It("Should let the Job scheduled", func() {
+			ginkgo.By("Creating pod group with 4 pods")
+			numPods := 4
+			basePod := testingpod.MakePod("test-pod", ns.Name).
+				Queue("test-queue").
+				Request(extraResource, "1").
+				Limit(extraResource, "1")
+			podGroup := basePod.MakeIndexedGroup(numPods)
+
+			for _, pod := range podGroup {
+				util.MustCreate(ctx, k8sClient, pod)
+			}
+
+			pods := &corev1.PodList{}
+			ginkgo.By("ensure all pods are created", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name))).To(gomega.Succeed())
+					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("ensure all pods are scheduled", func() {
+				listOpts := &client.ListOptions{
+					FieldSelector: fields.OneTermNotEqualSelector("spec.nodeName", ""),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
+					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
 			})
 		})
 	})

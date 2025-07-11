@@ -21,7 +21,6 @@ import (
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -42,26 +41,25 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for StatefulSet", func() {
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "e2e-tas-sts-"}}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-tas-sts-")
 
 		topology = testing.MakeDefaultThreeLevelTopology("datacenter")
-		gomega.Expect(k8sClient.Create(ctx, topology)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, topology)
 
 		tasFlavor = testing.MakeResourceFlavor("tas-flavor").
 			NodeLabel(tasNodeGroupLabel, instanceType).
 			TopologyName(topology.Name).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, tasFlavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, tasFlavor)
 
 		clusterQueue = testing.MakeClusterQueue("cluster-queue").
 			ResourceGroup(*testing.MakeFlavorQuotas("tas-flavor").Resource(extraResource, "8").Obj()).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, clusterQueue)
 		util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
 
 		localQueue = testing.MakeLocalQueue("test-queue", ns.Name).ClusterQueue("cluster-queue").Obj()
-		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, localQueue)
 		util.ExpectLocalQueuesToBeActive(ctx, k8sClient, localQueue)
 	})
 
@@ -79,16 +77,16 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for StatefulSet", func() {
 
 			const replicas = 3
 			sts := statefulset.MakeStatefulSet("sts", ns.Name).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
-				Request(extraResource, "1").
-				Limit(extraResource, "1").
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
+				RequestAndLimit(extraResource, "1").
 				Replicas(replicas).
 				Queue(localQueue.Name).
 				PodTemplateSpecAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, testing.DefaultBlockTopologyLevel).
+				TerminationGracePeriod(1).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, sts)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, sts)
 
-			ginkgo.By("Waiting for replicas is ready", func() {
+			ginkgo.By("Waiting for replicas to be ready", func() {
 				createdStatefulSet := &appsv1.StatefulSet{}
 				gomega.Eventually(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sts), createdStatefulSet)).To(gomega.Succeed())

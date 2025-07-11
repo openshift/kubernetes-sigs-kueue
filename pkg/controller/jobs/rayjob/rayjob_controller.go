@@ -19,13 +19,11 @@ package rayjob
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	rayv1 "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	rayutils "github.com/ray-project/kuberay/ray-operator/controllers/ray/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,6 +32,7 @@ import (
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 )
 
@@ -49,19 +48,18 @@ const (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:           SetupIndexes,
-		NewJob:                 NewJob,
-		NewReconciler:          NewReconciler,
-		SetupWebhook:           SetupRayJobWebhook,
-		JobType:                &rayv1.RayJob{},
-		AddToScheme:            rayv1.AddToScheme,
-		IsManagingObjectsOwner: isRayJob,
-		MultiKueueAdapter:      &multiKueueAdapter{},
+		SetupIndexes:      SetupIndexes,
+		NewJob:            NewJob,
+		NewReconciler:     NewReconciler,
+		SetupWebhook:      SetupRayJobWebhook,
+		JobType:           &rayv1.RayJob{},
+		AddToScheme:       rayv1.AddToScheme,
+		MultiKueueAdapter: &multiKueueAdapter{},
 	}))
 }
 
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update
-// +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=ray.io,resources=rayjobs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ray.io,resources=rayjobs/finalizers,verbs=get;update
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch;create;update;patch;delete
@@ -79,6 +77,7 @@ var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
 type RayJob rayv1.RayJob
 
 var _ jobframework.GenericJob = (*RayJob)(nil)
+var _ jobframework.JobWithManagedBy = (*RayJob)(nil)
 
 func (j *RayJob) Object() client.Object {
 	return (*rayv1.RayJob)(j)
@@ -94,7 +93,7 @@ func (j *RayJob) IsSuspended() bool {
 
 func (j *RayJob) IsActive() bool {
 	// When the status is Suspended or New there should be no running Pods, and so the Job is not active.
-	return !(j.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusSuspended || j.Status.JobDeploymentStatus == rayv1.JobDeploymentStatusNew)
+	return j.Status.JobDeploymentStatus != rayv1.JobDeploymentStatusSuspended && j.Status.JobDeploymentStatus != rayv1.JobDeploymentStatusNew
 }
 
 func (j *RayJob) Suspend() {
@@ -116,12 +115,20 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 	podSets := make([]kueue.PodSet, 0)
 
 	// head
-	podSets = append(podSets, kueue.PodSet{
-		Name:            headGroupPodSetName,
-		Template:        *j.Spec.RayClusterSpec.HeadGroupSpec.Template.DeepCopy(),
-		Count:           1,
-		TopologyRequest: jobframework.PodSetTopologyRequest(&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta, nil, nil, nil),
-	})
+	headPodSet := kueue.PodSet{
+		Name:     headGroupPodSetName,
+		Template: *j.Spec.RayClusterSpec.HeadGroupSpec.Template.DeepCopy(),
+		Count:    1,
+	}
+	if features.Enabled(features.TopologyAwareScheduling) {
+		topologyRequest, err := jobframework.NewPodSetTopologyRequest(
+			&j.Spec.RayClusterSpec.HeadGroupSpec.Template.ObjectMeta).Build()
+		if err != nil {
+			return nil, err
+		}
+		headPodSet.TopologyRequest = topologyRequest
+	}
+	podSets = append(podSets, headPodSet)
 
 	// workers
 	for index := range j.Spec.RayClusterSpec.WorkerGroupSpecs {
@@ -133,12 +140,19 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 		if wgs.NumOfHosts > 1 {
 			count *= wgs.NumOfHosts
 		}
-		podSets = append(podSets, kueue.PodSet{
-			Name:            kueue.NewPodSetReference(wgs.GroupName),
-			Template:        *wgs.Template.DeepCopy(),
-			Count:           count,
-			TopologyRequest: jobframework.PodSetTopologyRequest(&wgs.Template.ObjectMeta, nil, nil, nil),
-		})
+		workerPodSet := kueue.PodSet{
+			Name:     kueue.NewPodSetReference(wgs.GroupName),
+			Template: *wgs.Template.DeepCopy(),
+			Count:    count,
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(&wgs.Template.ObjectMeta).Build()
+			if err != nil {
+				return nil, err
+			}
+			workerPodSet.TopologyRequest = topologyRequest
+		}
+		podSets = append(podSets, workerPodSet)
 	}
 
 	// submitter Job
@@ -151,7 +165,13 @@ func (j *RayJob) PodSets() ([]kueue.PodSet, error) {
 
 		// Create the TopologyRequest for the Submitter Job PodSet, based on the annotations
 		// in rayJob.Spec.SubmitterPodTemplate, which can be specified by the user.
-		submitterJobPodSet.TopologyRequest = jobframework.PodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta, nil, nil, nil)
+		if features.Enabled(features.TopologyAwareScheduling) {
+			topologyRequest, err := jobframework.NewPodSetTopologyRequest(&submitterJobPodSet.Template.ObjectMeta).Build()
+			if err != nil {
+				return nil, err
+			}
+			submitterJobPodSet.TopologyRequest = topologyRequest
+		}
 		podSets = append(podSets, submitterJobPodSet)
 	}
 
@@ -248,10 +268,6 @@ func GetWorkloadNameForRayJob(jobName string, jobUID types.UID) string {
 	return jobframework.GetWorkloadNameForOwnerWithGVK(jobName, jobUID, gvk)
 }
 
-func isRayJob(owner *metav1.OwnerReference) bool {
-	return owner.Kind == "RayJob" && strings.HasPrefix(owner.APIVersion, "ray.io/v1")
-}
-
 // getSubmitterTemplate returns the PodTemplteSpec of the submitter Job used for RayJob when submissionMode=K8sJobMode
 func getSubmitterTemplate(rayJob *RayJob) *corev1.PodTemplateSpec {
 	if rayJob.Spec.SubmitterPodTemplate != nil {
@@ -282,4 +298,18 @@ func getSubmitterTemplate(rayJob *RayJob) *corev1.PodTemplateSpec {
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
+}
+
+func (j *RayJob) CanDefaultManagedBy() bool {
+	jobSpecManagedBy := j.Spec.ManagedBy
+	return features.Enabled(features.MultiKueue) &&
+		(jobSpecManagedBy == nil || *jobSpecManagedBy == rayutils.KubeRayController)
+}
+
+func (j *RayJob) ManagedBy() *string {
+	return j.Spec.ManagedBy
+}
+
+func (j *RayJob) SetManagedBy(managedBy *string) {
+	j.Spec.ManagedBy = managedBy
 }

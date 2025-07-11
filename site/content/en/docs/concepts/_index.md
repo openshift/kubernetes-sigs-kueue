@@ -22,7 +22,7 @@ resources such as availability, pricing, architecture, models, etc.
 ### [Cluster Queue](/docs/concepts/cluster_queue)
 
 A cluster-scoped resource that governs a pool of resources, defining usage
-limits and fair sharing rules.
+limits and Fair Sharing rules.
 
 ### [Local Queue](/docs/concepts/local_queue)
 
@@ -49,7 +49,8 @@ A mechanism allowing internal or external components to influence the timing of 
 ### [Topology Aware Scheduling](/docs/concepts/topology_aware_scheduling)
 
 A mechanism allowing to schedule Workloads optimizing Pod placement for
-network throuput between the Pods.
+network throughput between the Pods.
+
 
 ## Glossary
 
@@ -75,10 +76,14 @@ A _cohort_ is a group of ClusterQueues that can borrow unused quota from each ot
 
 _Queueing_ is the state of a Workload since the time it is created until Kueue admits it on a ClusterQueue.
 Typically, the Workload will compete with other Workloads for available
-quota based on the fair sharing rules of the ClusterQueue.
+quota based on the Fair Sharing rules of the ClusterQueue.
 
 ### [Preemption](/docs/concepts/preemption)
 
 _Preemption_ is the process of evicting one or more admitted Workloads to accommodate another Workload.
 The Workload being evicted might be of a lower priority or might be borrowing
 resources that are now required by the owning ClusterQueue.
+
+### [Fair Sharing](/docs/concepts/fair_sharing)
+
+Mechanisms in Kueue to share quota between tenants fairly.
