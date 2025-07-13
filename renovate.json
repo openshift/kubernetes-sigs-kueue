@@ -12,7 +12,7 @@
   "rebaseWhen": "behind-base-branch",
   "recreateWhen": "always",
   "commitMessageSuffix": "{{baseBranch}}",
-  "ignorePaths": ["**/dep-crds/**", "**/cmd/experimental/**", "**/hack/internal/**"],
+  "ignorePaths": ["**/dep-crds/**", "**/cmd/**", "**/hack/internal/**", "**/vendor/**"],
   "tekton": {
     "enabled": true,
     "packageRules": [
