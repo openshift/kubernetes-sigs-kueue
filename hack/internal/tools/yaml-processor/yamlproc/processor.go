@@ -37,7 +37,6 @@ type FileOperations struct {
 	PostOperations  []Operation `yaml:"postOperations,omitempty"`
 	OutputDir       string      `yaml:"outputDir,omitempty"`
 	ContinueOnError bool        `yaml:"continueOnError,omitempty"`
-	RemoveComments  bool        `yaml:"removeComments,omitempty"`
 }
 
 type Operation struct {
@@ -144,26 +143,24 @@ func (fp *FileProcessor) ProcessFile(fileOps FileOperations) error {
 		return err
 	}
 
-	docs, err := SplitYAMLDocuments(data)
-	if err != nil {
-		logger.Error("Skipping file due to YAML splitting error", zap.String("file", fileOps.Path), zap.Error(err))
-		return err
-	}
-
-	var modifiedDocs [][]byte
-	for _, doc := range docs {
-		if fileOps.RemoveComments {
-			doc, err = RemoveComments(doc)
-			if err != nil {
-				logger.Error("Failed to remove comments", zap.String("file", fileOps.Path), zap.Error(err))
-			}
+	if isMultiDocumentYAML(data) {
+		docs, err := SplitYAMLDocuments(data)
+		if err != nil {
+			logger.Error("Skipping file due to YAML splitting error", zap.String("file", fileOps.Path), zap.Error(err))
+			return err
 		}
-		modifiedDoc, errs := fp.ProcessFileOperations(doc, fileOps)
-		modifiedDocs = append(modifiedDocs, modifiedDoc)
-		opErrors = append(opErrors, errs...)
-	}
 
-	data = JoinYAMLDocuments(modifiedDocs)
+		var modifiedDocs [][]byte
+		for _, doc := range docs {
+			modifiedDoc, errs := fp.ProcessFileOperations(doc, fileOps)
+			modifiedDocs = append(modifiedDocs, modifiedDoc)
+			opErrors = append(opErrors, errs...)
+		}
+
+		data = JoinYAMLDocuments(modifiedDocs)
+	} else {
+		data, opErrors = fp.ProcessFileOperations(data, fileOps)
+	}
 
 	if len(opErrors) > 0 && !fileOps.ContinueOnError {
 		return errors.Join(opErrors...)
