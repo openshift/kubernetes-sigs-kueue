@@ -1,5 +1,10 @@
+// This file contains changes that are only compatible with go 1.10 and onwards.
+
+//go:build go1.10
+// +build go1.10
+
 /*
-Copyright 2017 The Kubernetes Authors.
+Copyright 2021 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,11 +19,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:deepcopy-gen=package
-// +k8s:protobuf-gen=package
-// +k8s:conversion-gen=k8s.io/metrics/pkg/apis/metrics
-// +k8s:openapi-gen=true
-// +groupName=metrics.k8s.io
+package yaml
 
-// Package v1beta1 is the v1beta1 version of the metrics API.
-package v1beta1 // import "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+import "encoding/json"
+
+// DisallowUnknownFields configures the JSON decoder to error out if unknown
+// fields come along, instead of dropping them by default.
+func DisallowUnknownFields(d *json.Decoder) *json.Decoder {
+	d.DisallowUnknownFields()
+	return d
+}
