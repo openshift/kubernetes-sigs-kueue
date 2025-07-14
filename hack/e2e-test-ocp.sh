@@ -8,12 +8,16 @@ set -o pipefail
 export OC=$(which oc) # OpenShift CLI
 SOURCE_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$SOURCE_DIR/.."
-
+DEFAULT_NAMESPACE="kueue-system"
 # This is required to reuse the exisiting code.
 # Set this to empty value for OCP tests.
 export E2E_KIND_VERSION=""
 # shellcheck source=hack/e2e-common-ocp.sh
 source "${SOURCE_DIR}/e2e-common.sh"
+
+# To toggle deployment of cert-manager and kueue,
+# set SKIP_DEPLOY to "true" to skip these steps.
+SKIP_DEPLOY=${SKIP_DEPLOY:-false}
 
 # To label worker nodes for e2e tests.
 function label_worker_nodes() {
@@ -91,45 +95,77 @@ function collect_logs {
     if [ ! -d "$ARTIFACTS" ]; then
         mkdir -p "$ARTIFACTS"
     fi
+    $OC get deployments -n kueue-system -o yaml > "$ARTIFACTS/kueue-deployment.yaml" || true
     $OC describe pods -n kueue-system > "$ARTIFACTS/kueue-system-pods.log" || true
     $OC logs -n kueue-system -l app=kueue --tail=-1 > "$ARTIFACTS/kueue-system-logs.log" || true
     restore_ocp_manager_image
+    restore_kueue_namespace
 }
 
 function deploy_kueue {
-    # Update kueue image
-    (cd config/components/manager-ocp && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
+    local namespace=${KUEUE_NAMESPACE:-kueue-system}
+    (cd config/components/manager-ocp && $KUSTOMIZE edit set image controller="$IMAGE_TAG" && \
+     $KUSTOMIZE edit set namespace "$namespace")
     
     # Deploy kueue
-    $OC apply --server-side -k config/default-ocp
+    local kustomize_path namespace
+    kustomize_path="config/default-ocp"
+
+    # Set namespace in the default-ocp Kustomization
+    (cd "${kustomize_path}" && \
+        $KUSTOMIZE edit set namespace "$namespace")
+
+    namespace="${KUEUE_NAMESPACE:-}"
+    
+    if [[ -n "$namespace" ]]; then
+        # Create a namespace if it doesn't exist
+        $OC create namespace "$namespace" --dry-run=client -o yaml | $OC apply -f -
+        
+        # Apply resources with namespace override
+        $KUSTOMIZE build "${kustomize_path}" | $OC apply --server-side -f -
+    else
+        # Apply directly without modifications
+        $OC apply --server-side -k "${kustomize_path}"
+    fi
 }
 
 function restore_ocp_manager_image {
     (cd config/components/manager-ocp && $KUSTOMIZE edit set image controller="$INITIAL_IMAGE")
 }
 
+function restore_kueue_namespace {
+    (cd config/default-ocp  && $KUSTOMIZE edit set namespace "$DEFAULT_NAMESPACE")
+}
+
 function deploy_cert_manager {
     echo "Deploying cert-manager..."
-    $OC apply -f config/default-ocp/cert_manager_rh.yaml
+    ${SOURCE_DIR}/deploy-cert-manager-ocp.sh
     wait_for_cert_manager_crds
     wait_for_cert_manager_csv
     wait_for_cert_manager_ready
 }
 
 trap collect_logs EXIT
-
-deploy_cert_manager
-deploy_kueue
+GINKGO_SKIP_PATTERN=""
+if [ "$SKIP_DEPLOY" != "true" ]; then
+    deploy_cert_manager
+    sleep 2m
+    deploy_kueue
+    # Skip e2e tests that depend on pod integration features,
+    # such as Deployment and StatefulSet, or other integrations not
+    # supported in OCP. Also, skip Alpha features like TAS.
+    # TODO: Remove Fair Sharing from the skip list once the issue is fixed.
+    GINKGO_SKIP_PATTERN="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
+else
+    echo "Skipping cert-manager and kueue deployment because SKIP_DEPLOY is set to true."
+    GINKGO_SKIP_PATTERN="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
+fi
 
 # Label two worker nodes for e2e tests (similar to the Kind setup).
 label_worker_nodes
 
-# Skip e2e tests that depend on pod integration features,
-# such as Deployment and StatefulSet, or other integrations not
-# supported in OCP. Also, skip Alpha features like TAS.
-# TODO: Remove Fair Sharing from the skip list once the issue is fixed.
 $GINKGO $GINKGO_ARGS \
-  --skip="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods)" \
+  --skip="${GINKGO_SKIP_PATTERN}" \
   --junit-report=junit.xml \
   --json-report=e2e.json \
   --output-dir="$ARTIFACTS" \

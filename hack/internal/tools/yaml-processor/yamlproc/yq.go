@@ -96,7 +96,7 @@ func (yq *YQClient) buildSelectExpression(key, condition string) string {
 	return fmt.Sprintf("%s | select(%s) | %s", baseArrayKey, condition, remainingKey)
 }
 
-func (yq *YQClient) HasKey(data []byte, key string) (bool, error) {
+func (yq *YQClient) HasKey(data []byte, key string) bool {
 	if !strings.HasPrefix(key, ".") {
 		key = "." + key
 	}
@@ -104,13 +104,13 @@ func (yq *YQClient) HasKey(data []byte, key string) (bool, error) {
 	expression := yq.buildHasExpression(key)
 	out, err := yq.Evaluate(data, expression)
 	if err != nil {
-		logger.Debug("Cannot run yq expression", zap.String("expression", expression), zap.Error(err))
-		return false, err
+		logger.Warn("Cannot run yq expression", zap.String("expression", expression), zap.Error(err))
+		return false
 	}
 
 	val := strings.TrimSpace(string(out))
 
-	return slices.Contains(strings.Split(val, "\n"), "true"), nil
+	return slices.Contains(strings.Split(val, "\n"), "true")
 }
 
 func (yq *YQClient) buildHasExpression(key string) string {
@@ -127,14 +127,14 @@ func (yq *YQClient) buildHasExpression(key string) string {
 	return fmt.Sprintf(".%s | has(\"%s\")", prefix, lastElement)
 }
 
-func (yq *YQClient) EvaluateCondition(data []byte, condition string) (bool, error) {
+func (yq *YQClient) EvaluateCondition(data []byte, condition string) bool {
 	result, err := yq.Evaluate(data, condition)
 	if err != nil {
-		logger.Debug("Cannot evaluate condition", zap.String("condition", condition), zap.Error(err))
-		return false, err
+		logger.Warn("Cannot evaluate condition", zap.String("condition", condition), zap.Error(err))
+		return false
 	}
 
-	return strings.TrimSpace(string(result)) == "true", nil
+	return strings.TrimSpace(string(result)) == "true"
 }
 
 // FindKeyLines returns the zero-based line numbers where the specified key is located in the YAML.
