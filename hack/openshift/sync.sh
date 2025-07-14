@@ -18,4 +18,8 @@ git checkout openshift/release-0.11 dep-crds
 
 # step get ocp kustomize configs
 git checkout openshift/release-0.11 config/default-ocp
+git checkout openshift/release-0.11 config/components/manager-ocp
+
+# step get ocp dependency magnet
+git checkout openshift/release-0.11 pkg/openshift
 
