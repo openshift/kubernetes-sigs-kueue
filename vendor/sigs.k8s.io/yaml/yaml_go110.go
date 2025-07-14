@@ -23,13 +23,9 @@ package yaml
 
 import "encoding/json"
 
-<<<<<<< HEAD:vendor/sigs.k8s.io/yaml/yaml_go110.go
 // DisallowUnknownFields configures the JSON decoder to error out if unknown
 // fields come along, instead of dropping them by default.
 func DisallowUnknownFields(d *json.Decoder) *json.Decoder {
 	d.DisallowUnknownFields()
 	return d
 }
-=======
-package v1 // import "k8s.io/client-go/pkg/apis/clientauthentication/v1"
->>>>>>> 5dbc73b26 (<CARRY> create a script and onboard release 0.12):hack/internal/tools/vendor/k8s.io/client-go/pkg/apis/clientauthentication/v1/doc.go

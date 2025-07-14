@@ -54,13 +54,34 @@ import (
 )
 
 const (
-	// E2eTestAgnHostImageOld is the image used for testing rolling update.
-	E2eTestAgnHostImageOld = "registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6"
-	// E2eTestAgnHostImage is the image used for testing.
-	E2eTestAgnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
+	defaultE2eTestAgnHostImageOld = "registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6"
+	defaultE2eTestAgnHostImage    = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
 
 	defaultMetricsServiceName = "kueue-controller-manager-metrics-service"
 )
+
+func GetKueueNamespace() string {
+	if ns := os.Getenv("KUEUE_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return configapi.DefaultNamespace
+}
+
+func GetAgnHostImageOld() string {
+	if image := os.Getenv("E2E_TEST_AGNHOST_IMAGE_OLD"); image != "" {
+		return image
+	}
+
+	return defaultE2eTestAgnHostImageOld
+}
+
+func GetAgnHostImage() string {
+	if image := os.Getenv("E2E_TEST_AGNHOST_IMAGE"); image != "" {
+		return image
+	}
+
+	return defaultE2eTestAgnHostImage
+}
 
 func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) {
 	cfg, err := config.GetConfigWithContext(kContext)
@@ -215,7 +236,7 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 }
 
 func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
 	waitForOperatorAvailability(ctx, k8sClient, kcmKey)
 }
 
@@ -254,7 +275,7 @@ func WaitForKubeRayOperatorAvailability(ctx context.Context, k8sClient client.Cl
 
 func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *configapi.Configuration {
 	var kueueCfg configapi.Configuration
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
 	configMap := &corev1.ConfigMap{}
 
 	gomega.Expect(k8sClient.Get(ctx, kcmKey, configMap)).To(gomega.Succeed())
@@ -264,7 +285,7 @@ func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *config
 
 func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueueCfg *configapi.Configuration) {
 	configMap := &corev1.ConfigMap{}
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
 	config, err := yaml.Marshal(kueueCfg)
 
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
@@ -276,7 +297,7 @@ func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueue
 }
 
 func RestartKueueController(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
 	rolloutOperatorDeployment(ctx, k8sClient, kcmKey)
 }
 
