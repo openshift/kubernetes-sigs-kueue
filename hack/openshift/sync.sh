@@ -11,6 +11,7 @@ git checkout openshift/main README_OPENSHIFT.md
 git checkout openshift/release-0.11 Makefile-test-ocp.mk
 git checkout openshift/release-0.11 Makefile.ocp
 git checkout openshift/release-0.11 hack/e2e-test-ocp.sh
+git checkout openshift/release-0.11 hack/deploy-cert-manager-ocp.sh
 
 # step get dep-crds folder
 git checkout openshift/release-0.11 dep-crds
