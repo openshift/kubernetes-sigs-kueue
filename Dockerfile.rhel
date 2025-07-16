@@ -1,5 +1,5 @@
-ARG BUILDER_IMAGE=brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_9_1.24_test
-ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-micro@sha256:2d6db1e3434b10f338a5545de6b09c565a75e4d3f744e1b0604ba57ab2c53c2d
+ARG BUILDER_IMAGE=brew.registry.redhat.io/rh-osbs/openshift-golang-builder:v1.24
+ARG BASE_IMAGE=registry.redhat.io/ubi9/ubi-minimal@sha256:11db23b63f9476e721f8d0b8a2de5c858571f76d5a0dae2ec28adf08cbaf3652
 
 # Build the manager binary
 FROM ${BUILDER_IMAGE} AS builder
@@ -18,8 +18,6 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -tags st
 FROM --platform=${TARGETPLATFORM} ${BASE_IMAGE}
 WORKDIR /
 COPY --from=builder /workspace/manager .
-RUN mkdir /licenses
-COPY --from=builder /workspace/LICENSE /licenses/.
 USER 65532:65532
 
 LABEL com.redhat.component="Kueue"
@@ -40,5 +38,9 @@ LABEL summary="Kueue is a set of APIs and controller for job queueing. \
                     and when it should stop (as in active pods should be deleted)."
 LABEL io.k8s.display-name="Kueue"
 LABEL io.openshift.tags="openshift,operand,kueue"
+
+# Licenses
+
+COPY LICENSE /licenses/LICENSE
 
 ENTRYPOINT ["/manager"]
