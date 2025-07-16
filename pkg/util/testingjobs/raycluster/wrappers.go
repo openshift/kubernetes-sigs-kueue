@@ -24,6 +24,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 // ClusterWrapper wraps a RayCluster.
@@ -38,6 +39,7 @@ func MakeCluster(name, ns string) *ClusterWrapper {
 			Annotations: make(map[string]string, 1),
 		},
 		Spec: rayv1.RayClusterSpec{
+			RayVersion: testing.TestRayVersion(),
 			HeadGroupSpec: rayv1.HeadGroupSpec{
 				RayStartParams: map[string]string{},
 				Template: corev1.PodTemplateSpec{
@@ -188,6 +190,23 @@ func (j *ClusterWrapper) Label(key, value string) *ClusterWrapper {
 	return j
 }
 
+// NodeLabel sets the label key and value for specific RayNodeType
+func (j *ClusterWrapper) NodeLabel(rayType rayv1.RayNodeType, key, value string) *ClusterWrapper {
+	switch rayType {
+	case rayv1.HeadNode:
+		if j.Spec.HeadGroupSpec.Template.Labels == nil {
+			j.Spec.HeadGroupSpec.Template.Labels = make(map[string]string)
+		}
+		j.Spec.HeadGroupSpec.Template.Labels[key] = value
+	case rayv1.WorkerNode:
+		if j.Spec.WorkerGroupSpecs[0].Template.Labels == nil {
+			j.Spec.WorkerGroupSpecs[0].Template.Labels = make(map[string]string)
+		}
+		j.Spec.WorkerGroupSpecs[0].Template.Labels[key] = value
+	}
+	return j
+}
+
 // StatusConditions adds a condition
 func (j *ClusterWrapper) StatusConditions(c metav1.Condition) *ClusterWrapper {
 	j.Status.Conditions = append(j.Status.Conditions, c)
@@ -195,26 +214,44 @@ func (j *ClusterWrapper) StatusConditions(c metav1.Condition) *ClusterWrapper {
 }
 
 // ManagedBy adds a managedby.
-func (j *ClusterWrapper) ManagedBy(_ string) *ClusterWrapper {
-	// j.Spec.ManagedBy = &c
+func (j *ClusterWrapper) ManagedBy(c string) *ClusterWrapper {
+	j.Spec.ManagedBy = &c
 	return j
 }
 
 // Request adds a resource request to the default container.
 func (j *ClusterWrapper) Request(rayType rayv1.RayNodeType, r corev1.ResourceName, v string) *ClusterWrapper {
-	if rayType == rayv1.HeadNode {
+	switch rayType {
+	case rayv1.HeadNode:
 		j.Spec.HeadGroupSpec.Template.Spec.Containers[0].Resources.Requests[r] = resource.MustParse(v)
-	} else if rayType == rayv1.WorkerNode {
+	case rayv1.WorkerNode:
 		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Resources.Requests[r] = resource.MustParse(v)
 	}
 	return j
 }
 
+// Limit adds a resource limit to the default container.
+func (j *ClusterWrapper) Limit(rayType rayv1.RayNodeType, r corev1.ResourceName, v string) *ClusterWrapper {
+	switch rayType {
+	case rayv1.HeadNode:
+		j.Spec.HeadGroupSpec.Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	case rayv1.WorkerNode:
+		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	}
+	return j
+}
+
+// RequestAndLimit adds a resource request and limit to the default container.
+func (j *ClusterWrapper) RequestAndLimit(rayType rayv1.RayNodeType, r corev1.ResourceName, v string) *ClusterWrapper {
+	return j.Request(rayType, r, v).Limit(rayType, r, v)
+}
+
 func (j *ClusterWrapper) Image(rayType rayv1.RayNodeType, image string, args []string) *ClusterWrapper {
-	if rayType == rayv1.HeadNode {
+	switch rayType {
+	case rayv1.HeadNode:
 		j.Spec.HeadGroupSpec.Template.Spec.Containers[0].Image = image
 		j.Spec.HeadGroupSpec.Template.Spec.Containers[0].Args = args
-	} else if rayType == rayv1.WorkerNode {
+	case rayv1.WorkerNode:
 		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Image = image
 		j.Spec.WorkerGroupSpecs[0].Template.Spec.Containers[0].Args = args
 	}

@@ -40,11 +40,17 @@ ifneq ($(INTEGRATION_RUN_ALL),true)
 	INTEGRATION_FILTERS= --label-filter="!slow && !redundant"
 endif
 
+PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
+BIN_DIR ?= $(PROJECT_DIR)/bin
+ARTIFACTS ?= $(BIN_DIR)
+TOOLS_DIR := $(PROJECT_DIR)/hack/internal/tools
+
 # Use go.mod go version as source.
-KUSTOMIZE_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/kustomize/kustomize/v5)
-GINKGO_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/onsi/ginkgo/v2)
-YQ_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/mikefarah/yq/v4)
-ENVTEST_OCP_VERSION ?= $(shell $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/controller-runtime/tools/setup-envtest)
+KUSTOMIZE_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/kustomize/kustomize/v5)
+GINKGO_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/onsi/ginkgo/v2)
+YQ_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' github.com/mikefarah/yq/v4)
+ENVTEST_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' sigs.k8s.io/controller-runtime/tools/setup-envtest)
+GOTESTSUM_OCP_VERSION ?= $(shell cd $(TOOLS_DIR); $(GO_CMD) list -m -mod=mod -f '{{.Version}}' gotest.tools/gotestsum)
 
 KUSTOMIZE = $(PROJECT_DIR)/bin/kustomize
 .PHONY: kustomize-ocp
@@ -66,15 +72,20 @@ YQ = $(PROJECT_DIR)/bin/yq
 yq-ocp: ## Download yq locally if necessary.
 	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod github.com/mikefarah/yq/v4@$(YQ_OCP_VERSION)
 
+GOTESTSUM = $(PROJECT_DIR)/bin/gotestsum
+.PHONY: gotestsum-ocp
+gotestsum-ocp: ## Download gotestsum locally if necessary.
+	@GOBIN=$(PROJECT_DIR)/bin GO111MODULE=on $(GO_CMD) install -mod=mod gotest.tools/gotestsum@$(GOTESTSUM_OCP_VERSION)
+
 .PHONY: test-ocp
-test-ocp: ## Run tests.
+test-ocp: gotestsum-ocp ## Run tests.
 # Configs were filtered out due to a failure
 # Running this in openshift CI we are hitting failures in the unit tests
 # due to how kueue grabs the namespace for default configs
 # Kueue will read the serviceaccount for the pod
 # and this seems to break in OCP Prow
 # We added "grep -v 'config'" to filter out those unit tests
-	${GO_CMD} run ./vendor/gotest.tools/gotestsum --junitfile $(ARTIFACTS)/junit.xml -- $(GOFLAGS) $(GO_TEST_FLAGS) $(shell $(GO_CMD) list ./... | grep -v '/test/' | grep -v 'config')
+	$(PROJECT_DIR)/bin/gotestsum --junitfile $(ARTIFACTS)/junit.xml -- $(GOFLAGS) $(GO_TEST_FLAGS) $(shell $(GO_CMD) list ./... | grep -v '/test/' | grep -v 'config')
 
 .PHONY: test-integration-ocp
 .PHONY: test-integration-ocp
@@ -98,7 +109,7 @@ run-test-e2e-ocp-singlecluster:
 
 .PHONY: ginkgo-top-ocp
 ginkgo-top-ocp:
-	$(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/ginkgo-top ./pkg/openshift/ginkgo-top
+	$(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o $(PROJECT_DIR)/bin/ginkgo-top ./hack/internal/tools/ginkgo-top/ginkgo-top.go
 
 .PHONY: kueuectl-ocp
 kueuectl-ocp:

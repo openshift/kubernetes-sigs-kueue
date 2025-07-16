@@ -47,12 +47,7 @@ var _ = ginkgo.Describe("ClusterQueue Webhook", func() {
 	}
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 	})
 
 	ginkgo.AfterEach(func() {
@@ -61,7 +56,7 @@ var _ = ginkgo.Describe("ClusterQueue Webhook", func() {
 
 	ginkgo.When("Creating a ClusterQueue", func() {
 		ginkgo.DescribeTable("Defaulting on creation", func(cq, wantCQ kueue.ClusterQueue) {
-			gomega.Expect(k8sClient.Create(ctx, &cq)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, &cq)
 			defer func() {
 				util.ExpectObjectToBeDeleted(ctx, k8sClient, &cq, true)
 			}()
@@ -169,7 +164,7 @@ var _ = ginkgo.Describe("ClusterQueue Webhook", func() {
 			cq := testing.MakeClusterQueue("cluster-queue").
 				ResourceGroup(*testing.MakeFlavorQuotas("x86").Resource(corev1.ResourceMemory).Obj()).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, cq)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, cq)
 
 			defer func() {
 				util.ExpectObjectToBeDeleted(ctx, k8sClient, cq, true)
@@ -189,7 +184,7 @@ var _ = ginkgo.Describe("ClusterQueue Webhook", func() {
 				QueueingStrategy(kueue.StrictFIFO).
 				ResourceGroup(*testing.MakeFlavorQuotas("x86").Resource(corev1.ResourceMemory).Obj()).
 				Obj()
-			gomega.Expect(k8sClient.Create(ctx, cq)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, cq)
 
 			defer func() {
 				util.ExpectObjectToBeDeleted(ctx, k8sClient, cq, true)
@@ -253,7 +248,7 @@ var _ = ginkgo.Describe("ClusterQueue Webhook", func() {
 			ginkgo.Entry("Should have valid resources quantity",
 				func() *kueue.ClusterQueue {
 					flvQuotas := testing.MakeFlavorQuotas("flavor")
-					for i := 0; i < resourcesMaxItems+1; i++ {
+					for i := range resourcesMaxItems + 1 {
 						flvQuotas = flvQuotas.Resource(corev1.ResourceName(fmt.Sprintf("r%d", i)))
 					}
 					return testing.MakeClusterQueue("cluster-queue").ResourceGroup(*flvQuotas.Obj()).Obj()

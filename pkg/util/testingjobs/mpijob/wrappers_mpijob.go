@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 // MPIJobWrapper wraps a Job.
@@ -59,7 +60,7 @@ type MPIJobReplicaSpecRequirement struct {
 }
 
 func (j *MPIJobWrapper) MPIJobReplicaSpecs(replicaSpecs ...MPIJobReplicaSpecRequirement) *MPIJobWrapper {
-	j = j.GenericLauncherAndWorker()
+	j.GenericLauncherAndWorker()
 	for _, rs := range replicaSpecs {
 		j.Spec.MPIReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Image = rs.Image
 		j.Spec.MPIReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Args = rs.Args
@@ -67,7 +68,7 @@ func (j *MPIJobWrapper) MPIJobReplicaSpecs(replicaSpecs ...MPIJobReplicaSpecRequ
 		j.Spec.MPIReplicaSpecs[rs.ReplicaType].Template.Spec.RestartPolicy = rs.RestartPolicy
 
 		if rs.Annotations != nil {
-			j.Spec.MPIReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.MPIReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 
@@ -178,6 +179,11 @@ func (j *MPIJobWrapper) Limit(replicaType kfmpi.MPIReplicaType, r corev1.Resourc
 	return j
 }
 
+// RequestAndLimit adds a resource request and limit to the default container.
+func (j *MPIJobWrapper) RequestAndLimit(replicaType kfmpi.MPIReplicaType, r corev1.ResourceName, v string) *MPIJobWrapper {
+	return j.Request(replicaType, r, v).Limit(replicaType, r, v)
+}
+
 // Parallelism updates job parallelism.
 func (j *MPIJobWrapper) Parallelism(p int32) *MPIJobWrapper {
 	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeWorker].Replicas = ptr.To(p)
@@ -198,13 +204,7 @@ func (j *MPIJobWrapper) UID(uid string) *MPIJobWrapper {
 
 // OwnerReference adds a ownerReference to the default container.
 func (j *MPIJobWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersionKind) *MPIJobWrapper {
-	j.ObjectMeta.OwnerReferences = append(j.ObjectMeta.OwnerReferences, metav1.OwnerReference{
-		APIVersion: ownerGVK.GroupVersion().String(),
-		Kind:       ownerGVK.Kind,
-		Name:       ownerName,
-		UID:        types.UID(ownerName),
-		Controller: ptr.To(true),
-	})
+	testing.AppendOwnerReference(&j.MPIJob, ownerGVK, ownerName, ownerName, ptr.To(true), ptr.To(true))
 	return j
 }
 
@@ -247,5 +247,11 @@ func (j *MPIJobWrapper) Image(replicaType kfmpi.MPIReplicaType, image string, ar
 // ManagedBy adds a managedby.
 func (j *MPIJobWrapper) ManagedBy(c string) *MPIJobWrapper {
 	j.Spec.RunPolicy.ManagedBy = &c
+	return j
+}
+
+func (j *MPIJobWrapper) TerminationGracePeriodSeconds(seconds int64) *MPIJobWrapper {
+	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeLauncher].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
+	j.Spec.MPIReplicaSpecs[kfmpi.MPIReplicaTypeWorker].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
 	return j
 }

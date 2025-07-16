@@ -17,6 +17,7 @@ limitations under the License.
 package cache
 
 import (
+	"iter"
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,8 +37,8 @@ import (
 type ClusterQueueSnapshot struct {
 	Name              kueue.ClusterQueueReference
 	ResourceGroups    []ResourceGroup
-	Workloads         map[string]*workload.Info
-	WorkloadsNotReady sets.Set[string]
+	Workloads         map[workload.Reference]*workload.Info
+	WorkloadsNotReady sets.Set[workload.Reference]
 	NamespaceSelector labels.Selector
 	Preemption        kueue.ClusterQueuePreemption
 	FairWeight        resource.Quantity
@@ -45,17 +46,19 @@ type ClusterQueueSnapshot struct {
 	// Aggregates AdmissionChecks from both .spec.AdmissionChecks and .spec.AdmissionCheckStrategy
 	// Sets hold ResourceFlavors to which an AdmissionCheck should apply.
 	// In case its empty, it means an AdmissionCheck should apply to all ResourceFlavor
-	AdmissionChecks map[string]sets.Set[kueue.ResourceFlavorReference]
+	AdmissionChecks map[kueue.AdmissionCheckReference]sets.Set[kueue.ResourceFlavorReference]
 	Status          metrics.ClusterQueueStatus
 	// AllocatableResourceGeneration will be increased when some admitted workloads are
 	// deleted, or the resource groups are changed.
 	AllocatableResourceGeneration int64
 
-	ResourceNode ResourceNode
+	ResourceNode resourceNode
 	hierarchy.ClusterQueue[*CohortSnapshot]
 
 	TASFlavors map[kueue.ResourceFlavorReference]*TASFlavorSnapshot
 	tasOnly    bool
+
+	flavorsForProvReqACs sets.Set[kueue.ResourceFlavorReference]
 }
 
 // RGByResource returns the ResourceGroup which contains capacity
@@ -69,11 +72,11 @@ func (c *ClusterQueueSnapshot) RGByResource(resource corev1.ResourceName) *Resou
 	return nil
 }
 
-// SimulateUsageRemoval the snapshot by removing the usage corresponding to the
-// list of workloads. It returns the function which can be used to restore
-// the usage.
-func (c *ClusterQueueSnapshot) SimulateUsageRemoval(workloads []*workload.Info) func() {
-	var usage []workload.Usage
+// SimulateWorkloadRemoval modifies the snapshot by removing the usage
+// corresponding to the list of workloads. It returns a function which
+// can be used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateWorkloadRemoval(workloads []*workload.Info) func() {
+	usage := make([]workload.Usage, 0, len(workloads))
 	for _, w := range workloads {
 		usage = append(usage, w.Usage())
 	}
@@ -84,6 +87,24 @@ func (c *ClusterQueueSnapshot) SimulateUsageRemoval(workloads []*workload.Info) 
 		for _, u := range usage {
 			c.AddUsage(u)
 		}
+	}
+}
+
+// SimulateUsageAddition modifies the snapshot by adding usage, and
+// returns a function used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateUsageAddition(usage workload.Usage) func() {
+	c.AddUsage(usage)
+	return func() {
+		c.RemoveUsage(usage)
+	}
+}
+
+// SimulateUsageRemoval modifies the snapshot by removing usage, and
+// returns a function used to restore the usage.
+func (c *ClusterQueueSnapshot) SimulateUsageRemoval(usage workload.Usage) func() {
+	c.RemoveUsage(usage)
+	return func() {
+		c.AddUsage(usage)
 	}
 }
 
@@ -168,9 +189,9 @@ func (c *ClusterQueueSnapshot) fairWeight() *resource.Quantity {
 	return &c.FairWeight
 }
 
-// The methods below implement hierarchicalResourceNode interface.
+// implement flatResourceNode/hierarchicalResourceNode interfaces
 
-func (c *ClusterQueueSnapshot) getResourceNode() ResourceNode {
+func (c *ClusterQueueSnapshot) getResourceNode() resourceNode {
 	return c.ResourceNode
 }
 
@@ -183,39 +204,46 @@ func (c *ClusterQueueSnapshot) DominantResourceShare() int {
 	return share
 }
 
-func (c *ClusterQueueSnapshot) DominantResourceShareWith(wlReq resources.FlavorResourceQuantities) int {
-	share, _ := dominantResourceShare(c, wlReq)
-	return share
-}
-
-func (c *ClusterQueueSnapshot) DominantResourceShareWithout(wlReq resources.FlavorResourceQuantities) int {
-	without := maps.Clone(wlReq)
-	for fr, q := range without {
-		without[fr] = -q
-	}
-	share, _ := dominantResourceShare(c, without)
-	return share
-}
-
 type WorkloadTASRequests map[kueue.ResourceFlavorReference]FlavorTASRequests
 
 func (c *ClusterQueueSnapshot) FindTopologyAssignmentsForWorkload(
 	tasRequestsByFlavor WorkloadTASRequests,
-	simulateEmpty bool) TASAssignmentsResult {
+	options ...FindTopologyAssignmentsOption,
+) TASAssignmentsResult {
+	opts := &findTopologyAssignmentsOption{}
+	for _, option := range options {
+		option(opts)
+	}
+
 	result := make(TASAssignmentsResult)
 	for tasFlavor, flavorTASRequests := range tasRequestsByFlavor {
 		// We assume the `tasFlavor` is already in the snapshot as this was
 		// already checked earlier during flavor assignment, and the set of
 		// flavors is immutable in snapshot.
 		tasFlavorCache := c.TASFlavors[tasFlavor]
-		flvResult := tasFlavorCache.FindTopologyAssignmentsForFlavor(flavorTASRequests, simulateEmpty)
-		for psName, psAssignment := range flvResult {
-			result[psName] = psAssignment
-		}
+		flvResult := tasFlavorCache.FindTopologyAssignmentsForFlavor(flavorTASRequests, options...)
+		maps.Copy(result, flvResult)
 	}
 	return result
 }
 
 func (c *ClusterQueueSnapshot) IsTASOnly() bool {
 	return c.tasOnly
+}
+
+func (c *ClusterQueueSnapshot) HasProvRequestAdmissionCheck(rf kueue.ResourceFlavorReference) bool {
+	return c.flavorsForProvReqACs.Has(rf)
+}
+
+// Returns all ancestors starting with parent and ending with root
+func (c *ClusterQueueSnapshot) PathParentToRoot() iter.Seq[*CohortSnapshot] {
+	return func(yield func(*CohortSnapshot) bool) {
+		a := c.Parent()
+		for a != nil {
+			if !yield(a) {
+				return
+			}
+			a = a.Parent()
+		}
+	}
 }

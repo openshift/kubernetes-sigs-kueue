@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
@@ -68,12 +67,8 @@ type Framework struct {
 	managerDone   <-chan struct{}
 }
 
-var setupLogger = sync.OnceFunc(func() {
-	ctrl.SetLogger(util.NewTestingLogger(ginkgo.GinkgoWriter, -3))
-})
-
 func (f *Framework) Init() *rest.Config {
-	setupLogger()
+	util.SetupLogger()
 
 	var cfg *rest.Config
 	ginkgo.By("bootstrapping test environment", func() {
@@ -138,7 +133,7 @@ func (f *Framework) SetupClient(cfg *rest.Config) (context.Context, client.Clien
 	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
 	gomega.ExpectWithOffset(1, k8sClient).NotTo(gomega.BeNil())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ginkgo.GinkgoT().Context())
 	f.cancel = cancel
 
 	return ctx, k8sClient

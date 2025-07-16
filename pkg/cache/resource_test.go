@@ -17,12 +17,10 @@ limitations under the License.
 package cache
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
-	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/resources"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
@@ -31,7 +29,7 @@ import (
 
 func TestAvailable(t *testing.T) {
 	cases := map[string]struct {
-		cohorts                  []kueuealpha.Cohort
+		cohorts                  []kueue.Cohort
 		clusterQueues            []kueue.ClusterQueue
 		usage                    map[kueue.ClusterQueueReference]resources.FlavorResourceQuantities
 		wantAvailable            map[kueue.ClusterQueueReference]resources.FlavorResourceQuantities
@@ -78,7 +76,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10", "", "9").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("cohort").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
@@ -105,7 +103,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("cohort").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
@@ -128,7 +126,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10", "0", "0").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("cohort").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
@@ -174,7 +172,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10", "", "5").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("cohort").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
@@ -222,7 +220,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10", "", "0").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("root").Cohort,
 				utiltesting.MakeCohort("left").
 					Parent("root").
@@ -274,7 +272,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "10").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("root").Cohort,
 				utiltesting.MakeCohort("left").
 					Parent("root").
@@ -329,7 +327,7 @@ func TestAvailable(t *testing.T) {
 						*utiltesting.MakeFlavorQuotas("red").Resource("cpu", "0").Obj(),
 					).ClusterQueue,
 			},
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("root").Cohort,
 				utiltesting.MakeCohort("left").
 					Parent("root").
@@ -362,10 +360,10 @@ func TestAvailable(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, log := utiltesting.ContextWithLog(t)
 			cache := New(utiltesting.NewFakeClient())
-			cache.AddOrUpdateResourceFlavor(utiltesting.MakeResourceFlavor("red").Obj())
-			cache.AddOrUpdateResourceFlavor(utiltesting.MakeResourceFlavor("blue").Obj())
+			cache.AddOrUpdateResourceFlavor(log, utiltesting.MakeResourceFlavor("red").Obj())
+			cache.AddOrUpdateResourceFlavor(log, utiltesting.MakeResourceFlavor("blue").Obj())
 			for _, cq := range tc.clusterQueues {
 				_ = cache.AddClusterQueue(ctx, &cq)
 			}

@@ -22,7 +22,6 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/kueue/apis/kueue/v1beta1"
@@ -44,11 +43,10 @@ var _ = ginkgo.Describe("Fair Sharing", ginkgo.Ordered, ginkgo.ContinueOnFailure
 	)
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "ns-"}}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "ns-")
 
 		rf = utiltesting.MakeResourceFlavor("rf").Obj()
-		gomega.Expect(k8sClient.Create(ctx, rf)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, rf)
 
 		cq1 = utiltesting.MakeClusterQueue("cq1").
 			Cohort("cohort").
@@ -57,7 +55,7 @@ var _ = ginkgo.Describe("Fair Sharing", ginkgo.Ordered, ginkgo.ContinueOnFailure
 				Resource(corev1.ResourceMemory, "36G").
 				Obj()).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, cq1)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, cq1)
 		cq2 = utiltesting.MakeClusterQueue("cq2").
 			Cohort("cohort").
 			ResourceGroup(*utiltesting.MakeFlavorQuotas(rf.Name).
@@ -65,7 +63,7 @@ var _ = ginkgo.Describe("Fair Sharing", ginkgo.Ordered, ginkgo.ContinueOnFailure
 				Resource(corev1.ResourceMemory, "36G").
 				Obj()).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, cq2)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, cq2)
 		cq3 = utiltesting.MakeClusterQueue("cq3").
 			Cohort("cohort").
 			ResourceGroup(*utiltesting.MakeFlavorQuotas(rf.Name).
@@ -73,14 +71,14 @@ var _ = ginkgo.Describe("Fair Sharing", ginkgo.Ordered, ginkgo.ContinueOnFailure
 				Resource(corev1.ResourceMemory, "36G").
 				Obj()).
 			Obj()
-		gomega.Expect(k8sClient.Create(ctx, cq3)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, cq3)
 
 		lq1 = utiltesting.MakeLocalQueue("lq1", ns.Name).ClusterQueue(cq1.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, lq1)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lq1)
 		lq2 = utiltesting.MakeLocalQueue("lq2", ns.Name).ClusterQueue(cq2.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, lq2)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lq2)
 		lq3 = utiltesting.MakeLocalQueue("lq3", ns.Name).ClusterQueue(cq3.Name).Obj()
-		gomega.Expect(k8sClient.Create(ctx, lq3)).To(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, lq3)
 	})
 
 	ginkgo.AfterEach(func() {
@@ -89,21 +87,22 @@ var _ = ginkgo.Describe("Fair Sharing", ginkgo.Ordered, ginkgo.ContinueOnFailure
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, cq2, true)
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, cq3, true)
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, rf, true)
+		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 	})
 
 	ginkgo.When("the cluster queue starts borrowing", func() {
 		ginkgo.It("should update the ClusterQueue.status.fairSharing.weightedShare", func() {
 			ginkgo.By("create jobs")
-			for i := 0; i < 4; i++ {
+			for i := range 4 {
 				job := jobtesting.MakeJob(fmt.Sprintf("j%d", i+1), ns.Name).
-					Queue(lq1.Name).
-					Image(util.E2eTestAgnHostImage, util.BehaviorExitFast).
+					Queue(v1beta1.LocalQueueName(lq1.Name)).
+					Image(util.GetAgnHostImage(), util.BehaviorExitFast).
 					Parallelism(3).
 					Completions(3).
-					Request("cpu", "1").
-					Request("memory", "200Mi").
+					RequestAndLimit("cpu", "1").
+					RequestAndLimit("memory", "200Mi").
 					Obj()
-				gomega.Expect(k8sClient.Create(ctx, job)).To(gomega.Succeed())
+				util.MustCreate(ctx, k8sClient, job)
 			}
 
 			ginkgo.By("checking cluster queues")

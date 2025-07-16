@@ -66,14 +66,14 @@ const (
 	queueingTimeout = time.Second
 )
 
-var cmpDump = []cmp.Option{
+var cmpDump = cmp.Options{
 	cmpopts.SortSlices(func(a, b string) bool { return a < b }),
 }
 
 func TestSchedule(t *testing.T) {
 	now := time.Now()
 	fakeClock := testingclock.NewFakeClock(now)
-	ignoreEventMessageCmpOpts := []cmp.Option{cmpopts.IgnoreFields(utiltesting.EventRecord{}, "Message")}
+	ignoreEventMessageCmpOpts := cmp.Options{cmpopts.IgnoreFields(utiltesting.EventRecord{}, "Message")}
 
 	resourceFlavors := []*kueue.ResourceFlavor{
 		utiltesting.MakeResourceFlavor("default").Obj(),
@@ -254,29 +254,95 @@ func TestSchedule(t *testing.T) {
 		additionalClusterQueues []kueue.ClusterQueue
 		additionalLocalQueues   []kueue.LocalQueue
 
-		cohorts []kueuealpha.Cohort
+		cohorts []kueue.Cohort
 
 		// wantAssignments is a summary of all the admissions in the cache after this cycle.
-		wantAssignments map[string]kueue.Admission
+		wantAssignments map[workload.Reference]kueue.Admission
 		// wantScheduled is the subset of workloads that got scheduled/admitted in this cycle.
-		wantScheduled []string
+		wantScheduled []workload.Reference
 		// workloadCmpOpts are the cmp options to compare workloads.
-		workloadCmpOpts []cmp.Option
+		workloadCmpOpts cmp.Options
 		// wantWorkloads is the subset of workloads that got admitted in this cycle.
 		wantWorkloads []kueue.Workload
 		// wantLeft is the workload keys that are left in the queues after this cycle.
-		wantLeft map[kueue.ClusterQueueReference][]string
+		wantLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantInadmissibleLeft is the workload keys that are left in the inadmissible state after this cycle.
-		wantInadmissibleLeft map[kueue.ClusterQueueReference][]string
+		wantInadmissibleLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantPreempted is the keys of the workloads that get preempted in the scheduling cycle.
-		wantPreempted sets.Set[string]
+		wantPreempted sets.Set[workload.Reference]
 		// wantEvents ignored if empty, the Message is ignored (it contains the duration)
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the cmp options to compare recorded events.
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 
 		wantSkippedPreemptions map[string]int
 	}{
+		"use second flavor when the first has no preemption candidates; WhenCanPreempt: Preempt": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("other-alpha").
+					Preemption(kueue.ClusterQueuePreemption{
+						WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
+					}).
+					FlavorFungibility(kueue.FlavorFungibility{
+						WhenCanPreempt: kueue.Preempt,
+					}).
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("on-demand").
+							Resource(corev1.ResourceCPU, "50", "50").Obj(),
+						*utiltesting.MakeFlavorQuotas("spot").
+							Resource(corev1.ResourceCPU, "100", "0").Obj(),
+					).Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("other", "eng-alpha").ClusterQueue("other-alpha").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("admitted", "eng-alpha").
+					Queue("other").
+					Request(corev1.ResourceCPU, "50").
+					ReserveQuota(utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj()).
+					Admitted(true).
+					Obj(),
+				*utiltesting.MakeWorkload("new", "eng-alpha").
+					Queue("other").
+					Request(corev1.ResourceCPU, "20").
+					Obj(),
+			},
+			wantPreempted: sets.Set[workload.Reference]{},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/admitted": {
+					ClusterQueue: "other-alpha",
+					PodSetAssignments: []kueue.PodSetAssignment{
+						{
+							Name: "main",
+							Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+								corev1.ResourceCPU: "on-demand",
+							},
+							ResourceUsage: corev1.ResourceList{
+								corev1.ResourceCPU: resource.MustParse("50"),
+							},
+							Count: ptr.To[int32](1),
+						},
+					},
+				},
+				"eng-alpha/new": {
+					ClusterQueue: "other-alpha",
+					PodSetAssignments: []kueue.PodSetAssignment{
+						{
+							Name: "main",
+							Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+								corev1.ResourceCPU: "spot",
+							},
+							ResourceUsage: corev1.ResourceList{
+								corev1.ResourceCPU: resource.MustParse("20"),
+							},
+							Count: ptr.To[int32](1),
+						},
+					},
+				},
+			},
+			wantScheduled: []workload.Reference{"eng-alpha/new"},
+		},
 		"workload fits in single clusterQueue, with check state ready": {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("foo", "sales").
@@ -291,7 +357,7 @@ func TestSchedule(t *testing.T) {
 					Generation(1).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/foo": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -308,8 +374,8 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"sales/foo"},
-			workloadCmpOpts: []cmp.Option{
+			wantScheduled: []workload.Reference{"sales/foo"},
+			workloadCmpOpts: cmp.Options{
 				cmpopts.EquateEmpty(),
 				cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 				cmpopts.IgnoreFields(
@@ -363,6 +429,21 @@ func TestSchedule(t *testing.T) {
 				},
 			},
 		},
+		"skip workload with missing or deleted ClusterQueue (NoFit)": {
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("missing-cq-workload", "sales").
+					Queue("non-existent-queue").
+					PodSets(*utiltesting.MakePodSet("set", 1).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Generation(1).
+					Obj(),
+			},
+			// Expect no panics and workload skipped.
+			wantLeft:     nil,
+			wantEvents:   nil,
+			eventCmpOpts: ignoreEventMessageCmpOpts,
+		},
 		"workload fits in single clusterQueue, with check state pending": {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("foo", "sales").
@@ -376,7 +457,7 @@ func TestSchedule(t *testing.T) {
 					}).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/foo": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -393,7 +474,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"sales/foo"},
+			wantScheduled: []workload.Reference{"sales/foo"},
 			eventCmpOpts:  ignoreEventMessageCmpOpts,
 			wantEvents: []utiltesting.EventRecord{
 				{
@@ -413,7 +494,7 @@ func TestSchedule(t *testing.T) {
 					Obj(),
 			},
 			admissionError: errors.New("admission"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/foo"},
 			},
 		},
@@ -432,7 +513,7 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("sales", "one").Assignment(corev1.ResourceCPU, "default", "40000m").AssignmentPodCount(40).Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/assigned": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -449,7 +530,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 		},
@@ -462,7 +543,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-alpha": {"sales/new"},
 			},
 		},
@@ -481,7 +562,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/new": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -513,7 +594,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"sales/new", "eng-alpha/new"},
+			wantScheduled: []workload.Reference{"sales/new", "eng-alpha/new"},
 		},
 		"admit in same cohort with no borrowing": {
 			workloads: []kueue.Workload{
@@ -530,7 +611,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/new": {
 					ClusterQueue: "eng-alpha",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -562,7 +643,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"eng-alpha/new", "eng-beta/new"},
+			wantScheduled: []workload.Reference{"eng-alpha/new", "eng-beta/new"},
 		},
 		"assign multiple resources and flavors": {
 			workloads: []kueue.Workload{
@@ -579,7 +660,7 @@ func TestSchedule(t *testing.T) {
 					).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-beta/new": {
 					ClusterQueue: "eng-beta",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -608,7 +689,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"eng-beta/new"},
+			wantScheduled: []workload.Reference{"eng-beta/new"},
 		},
 		"cannot borrow if cohort was assigned and would result in overadmission": {
 			workloads: []kueue.Workload{
@@ -625,7 +706,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/new": {
 					ClusterQueue: "eng-alpha",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -642,8 +723,8 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"eng-alpha/new"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/new"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-beta": {"eng-beta/new"},
 			},
 		},
@@ -662,7 +743,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/new": {
 					ClusterQueue: "eng-alpha",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -694,7 +775,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"eng-alpha/new", "eng-beta/new"},
+			wantScheduled: []workload.Reference{"eng-alpha/new", "eng-beta/new"},
 		},
 		"can borrow if needs reclaim from cohort in different flavor": {
 			workloads: []kueue.Workload{
@@ -715,15 +796,15 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("eng-beta").Assignment(corev1.ResourceCPU, "spot", "1000m").Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-alpha": {"eng-alpha/can-reclaim"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-beta/user-spot":       *utiltesting.MakeAdmission("eng-beta").Assignment(corev1.ResourceCPU, "spot", "1000m").Obj(),
 				"eng-beta/user-on-demand":  *utiltesting.MakeAdmission("eng-beta").Assignment(corev1.ResourceCPU, "on-demand", "50000m").Obj(),
 				"eng-beta/needs-to-borrow": *utiltesting.MakeAdmission("eng-beta").Assignment(corev1.ResourceCPU, "on-demand", "1000m").Obj(),
 			},
-			wantScheduled: []string{
+			wantScheduled: []workload.Reference{
 				"eng-beta/needs-to-borrow",
 			},
 		},
@@ -738,10 +819,10 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "3").
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"lend/a": *utiltesting.MakeAdmission("lend-b").Assignment(corev1.ResourceCPU, "default", "2000m").Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"lend-b": {"lend/b"},
 			},
 		},
@@ -757,11 +838,11 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "3").
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"lend/a": *utiltesting.MakeAdmission("lend-b").Assignment(corev1.ResourceCPU, "default", "2000m").Obj(),
 				"lend/b": *utiltesting.MakeAdmission("lend-b").Assignment(corev1.ResourceCPU, "default", "3000m").Obj(),
 			},
-			wantScheduled: []string{
+			wantScheduled: []workload.Reference{
 				"lend/b",
 			},
 		},
@@ -790,12 +871,12 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "60000m").Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				// Preemptor is not admitted in this cycle.
 				"eng-beta": {"eng-beta/preemptor"},
 			},
-			wantPreempted: sets.New("eng-alpha/borrower", "eng-beta/low-2"),
-			wantAssignments: map[string]kueue.Admission{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/borrower", "eng-beta/low-2"),
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/use-all-spot": *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "spot", "100").Obj(),
 				"eng-beta/low-1":         *utiltesting.MakeAdmission("eng-beta").Assignment(corev1.ResourceCPU, "on-demand", "30").Obj(),
 				// Removal from cache for the preempted workloads is deferred until we receive Workload updates
@@ -844,15 +925,15 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "100").Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				// Preemptor is not admitted in this cycle.
 				"other-beta": {"eng-beta/preemptor"},
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/pending"},
 			},
-			wantPreempted: sets.New("eng-alpha/use-all"),
-			wantAssignments: map[string]kueue.Admission{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/use-all"),
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				// Removal from cache for the preempted workloads is deferred until we receive Workload updates
 				"eng-alpha/use-all": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "100").Obj(),
 			},
@@ -864,11 +945,11 @@ func TestSchedule(t *testing.T) {
 					Request("example.com/gpu", "1").
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-alpha": {"eng-alpha/new"},
 			},
 		},
-		"not enough resources to borrow, fallback to next flavor": {
+		"not enough resources to borrow, fallback to next flavor; WhenCanPreempt: TryNextFlavor": {
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("new", "eng-alpha").
 					Queue("main").
@@ -883,7 +964,7 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("eng-beta", "one").Assignment(corev1.ResourceCPU, "on-demand", "45000m").AssignmentPodCount(45).Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/new": {
 					ClusterQueue: "eng-alpha",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -915,7 +996,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"eng-alpha/new"},
+			wantScheduled: []workload.Reference{"eng-alpha/new"},
 		},
 		"workload should not fit in nonexistent clusterQueue": {
 			workloads: []kueue.Workload{
@@ -932,7 +1013,7 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "1").
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"flavor-nonexistent-cq": {"sales/foo"},
 			},
 		},
@@ -1020,7 +1101,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-gamma/existing": *utiltesting.MakeAdmission("eng-gamma").
 					PodSets(
 						kueue.PodSetAssignment{
@@ -1047,8 +1128,8 @@ func TestSchedule(t *testing.T) {
 				"eng-beta/new":        *utiltesting.MakeAdmission("eng-beta", "one").Assignment(corev1.ResourceCPU, "on-demand", "50").AssignmentPodCount(50).Obj(),
 				"eng-alpha/new-alpha": *utiltesting.MakeAdmission("eng-alpha", "one").Assignment(corev1.ResourceCPU, "on-demand", "1").AssignmentPodCount(1).Obj(),
 			},
-			wantScheduled: []string{"eng-beta/new", "eng-alpha/new-alpha"},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-beta/new", "eng-alpha/new-alpha"},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-gamma": {"eng-gamma/new-gamma"},
 			},
 			wantSkippedPreemptions: map[string]int{
@@ -1067,7 +1148,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/new": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -1084,7 +1165,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"sales/new"},
+			wantScheduled: []workload.Reference{"sales/new"},
 		},
 		"partial admission single variable pod set, preempt first": {
 			workloads: []kueue.Workload{
@@ -1104,7 +1185,7 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("eng-beta", "one").Assignment("example.com/gpu", "model-a", "10").AssignmentPodCount(10).Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-beta/old": {
 					ClusterQueue: "eng-beta",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -1121,8 +1202,8 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantPreempted: sets.New("eng-beta/old"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-beta/old"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-beta": {"eng-beta/new"},
 			},
 		},
@@ -1144,7 +1225,7 @@ func TestSchedule(t *testing.T) {
 					ReserveQuota(utiltesting.MakeAdmission("eng-beta", "one").Assignment("example.com/gpu", "model-a", "10").AssignmentPodCount(10).Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-beta/old": {
 					ClusterQueue: "eng-beta",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -1161,8 +1242,8 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantPreempted: sets.New("eng-beta/old"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-beta/old"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-beta": {"eng-beta/new"},
 			},
 		},
@@ -1185,7 +1266,7 @@ func TestSchedule(t *testing.T) {
 					).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/new": {
 					ClusterQueue: "sales",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -1222,7 +1303,7 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{"sales/new"},
+			wantScheduled: []workload.Reference{"sales/new"},
 		},
 		"partial admission disabled, multiple variable pod sets": {
 			workloads: []kueue.Workload{
@@ -1243,7 +1324,7 @@ func TestSchedule(t *testing.T) {
 					).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 			disablePartialAdmission: true,
@@ -1273,8 +1354,8 @@ func TestSchedule(t *testing.T) {
 					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 1).Request("r2", "16").Obj(),
 				).Obj(),
 			},
-			wantScheduled: []string{"sales/wl1", "sales/wl2"},
-			wantAssignments: map[string]kueue.Admission{
+			wantScheduled: []workload.Reference{"sales/wl1", "sales/wl2"},
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/wl1": *utiltesting.MakeAdmission("cq1", kueue.DefaultPodSetName).
 					Assignment("r1", "default", "16").AssignmentPodCount(1).
 					Obj(),
@@ -1308,8 +1389,8 @@ func TestSchedule(t *testing.T) {
 					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 1).Request("r1", "14").Obj(),
 				).Obj(),
 			},
-			wantScheduled: []string{"sales/wl1", "sales/wl2"},
-			wantAssignments: map[string]kueue.Admission{
+			wantScheduled: []workload.Reference{"sales/wl1", "sales/wl2"},
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/wl1": *utiltesting.MakeAdmission("cq1", kueue.DefaultPodSetName).
 					Assignment("r1", "default", "16").AssignmentPodCount(1).
 					Obj(),
@@ -1343,13 +1424,13 @@ func TestSchedule(t *testing.T) {
 					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 1).Request("r1", "16").Obj(),
 				).Obj(),
 			},
-			wantScheduled: []string{"sales/wl1"},
-			wantAssignments: map[string]kueue.Admission{
+			wantScheduled: []workload.Reference{"sales/wl1"},
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"sales/wl1": *utiltesting.MakeAdmission("cq1", kueue.DefaultPodSetName).
 					Assignment("r1", "default", "16").AssignmentPodCount(1).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq2": {"sales/wl2"},
 			},
 		},
@@ -1445,7 +1526,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/admitted_a": {
 					ClusterQueue: "cq_a",
 					PodSetAssignments: []kueue.PodSetAssignment{
@@ -1477,10 +1558,10 @@ func TestSchedule(t *testing.T) {
 					},
 				},
 			},
-			wantScheduled: []string{
+			wantScheduled: []workload.Reference{
 				"eng-beta/b",
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq_a": {"eng-alpha/a"},
 			},
 		},
@@ -1526,13 +1607,13 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/all_nominal": *utiltesting.MakeAdmission("eng-alpha", "one").Assignment(corev1.ResourceCPU, "on-demand", "50").AssignmentPodCount(50).Obj(),
 				"eng-beta/borrowing":    *utiltesting.MakeAdmission("eng-beta", "one").Assignment(corev1.ResourceCPU, "on-demand", "55").AssignmentPodCount(55).Obj(),
 				"eng-alpha/new":         *utiltesting.MakeAdmission("eng-alpha", "one").Assignment(corev1.ResourceCPU, "on-demand", "5").AssignmentPodCount(5).Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/new"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/new"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"eng-beta": {"eng-beta/older_new"},
 			},
 		},
@@ -1568,7 +1649,7 @@ func TestSchedule(t *testing.T) {
 		// d1 and e1 respectively.
 		"hierarchical fair sharing schedule workload which wins tournament": {
 			enableFairSharing: true,
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("A").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("on-demand").
@@ -1660,14 +1741,14 @@ func TestSchedule(t *testing.T) {
 						PodSet).
 					Workload,
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/d0": *utiltesting.MakeAdmission("d", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 				"eng-alpha/e0": *utiltesting.MakeAdmission("e", "one").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 				"eng-alpha/g0": *utiltesting.MakeAdmission("g", "one").Assignment(corev1.ResourceCPU, "on-demand", "100").Obj(),
 				"eng-alpha/d1": *utiltesting.MakeAdmission("d", "one").Assignment(corev1.ResourceCPU, "on-demand", "70").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/d1"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/d1"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"e": {"eng-alpha/e1"},
 				"g": {"eng-alpha/g1"},
 				"f": {"eng-alpha/f1"},
@@ -1680,7 +1761,7 @@ func TestSchedule(t *testing.T) {
 		// c1 = 75.
 		"fair sharing schedule workload with lowest drf after admission": {
 			enableFairSharing: true,
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("A").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("on-demand").
@@ -1728,12 +1809,12 @@ func TestSchedule(t *testing.T) {
 						PodSet).
 					Workload,
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/b0": *utiltesting.MakeAdmission("b", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 				"eng-alpha/b1": *utiltesting.MakeAdmission("b", "one").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/b1"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/b1"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"c": {"eng-alpha/c1"},
 			},
 		},
@@ -1750,7 +1831,7 @@ func TestSchedule(t *testing.T) {
 		// cq, schedules.
 		"fair sharing schedule singleton cqs and cq without cohort": {
 			enableFairSharing: true,
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("A").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("on-demand").
@@ -1805,17 +1886,17 @@ func TestSchedule(t *testing.T) {
 						PodSet).
 					Workload,
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("a", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 				"eng-alpha/b1": *utiltesting.MakeAdmission("b", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 				"eng-alpha/c1": *utiltesting.MakeAdmission("c", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/a1", "eng-alpha/b1", "eng-alpha/c1"},
+			wantScheduled: []workload.Reference{"eng-alpha/a1", "eng-alpha/b1", "eng-alpha/c1"},
 			wantLeft:      nil,
 		},
 		"fair sharing schedule highest priority first": {
 			enableFairSharing: true,
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("A").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("on-demand").
@@ -1859,17 +1940,17 @@ func TestSchedule(t *testing.T) {
 						PodSet).
 					Workload,
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/c1": *utiltesting.MakeAdmission("c", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/c1"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/c1"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"b": {"eng-alpha/b1"},
 			},
 		},
 		"fair sharing schedule earliest timestamp first": {
 			enableFairSharing: true,
-			cohorts: []kueuealpha.Cohort{
+			cohorts: []kueue.Cohort{
 				utiltesting.MakeCohort("A").
 					ResourceGroup(
 						*utiltesting.MakeFlavorQuotas("on-demand").
@@ -1915,11 +1996,11 @@ func TestSchedule(t *testing.T) {
 						PodSet).
 					Workload,
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/c1": *utiltesting.MakeAdmission("c", "one").Assignment(corev1.ResourceCPU, "on-demand", "10").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/c1"},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantScheduled: []workload.Reference{"eng-alpha/c1"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"b": {"eng-alpha/b1"},
 			},
 		},
@@ -1999,11 +2080,11 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "2").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1", "eng-alpha/a2"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1", "eng-alpha/a2"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/incoming"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
 				"eng-alpha/a2": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
 				"eng-alpha/a3": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
@@ -2056,10 +2137,10 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "3").
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/incoming"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
 			},
@@ -2107,12 +2188,12 @@ func TestSchedule(t *testing.T) {
 					Queue("main").
 					Request(corev1.ResourceCPU, "30").Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/alpha1", "eng-gamma/gamma1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/alpha1", "eng-gamma/gamma1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				// Preemptor is not admitted in this cycle.
 				"eng-beta": {"eng-beta/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/all_spot": *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "spot", "100").Obj(),
 				"eng-alpha/alpha1":   *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 				"eng-alpha/alpha2":   *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
@@ -2178,12 +2259,12 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "2").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1", "eng-beta/b1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1", "eng-beta/b1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 				"other-beta":  {"eng-beta/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "default", "2").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment(corev1.ResourceCPU, "default", "2").Obj(),
 			},
@@ -2240,15 +2321,15 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "2").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-beta/b1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-beta/b1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-beta": {"eng-beta/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/fit": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "default", "1").Obj(),
 				"eng-beta/b1":   *utiltesting.MakeAdmission("other-beta").Assignment(corev1.ResourceCPU, "default", "2").Obj(),
 			},
-			wantScheduled: []string{"eng-alpha/fit"},
+			wantScheduled: []workload.Reference{"eng-alpha/fit"},
 			wantSkippedPreemptions: map[string]int{
 				"other-alpha": 0,
 				"other-beta":  0,
@@ -2326,12 +2407,12 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "3").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 				"other-beta":  {"eng-beta/pretending-preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment(corev1.ResourceCPU, "default", "2").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment(corev1.ResourceCPU, "default", "2").Obj(),
 			},
@@ -2430,13 +2511,13 @@ func TestSchedule(t *testing.T) {
 					Request(corev1.ResourceCPU, "3").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1", "eng-beta/b1", "eng-gamma/c1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1", "eng-beta/b1", "eng-gamma/c1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 				"other-beta":  {"eng-beta/preemptor"},
 				"other-gamma": {"eng-gamma/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").
 					Assignment(corev1.ResourceCPU, "default", "3").Obj(),
 				"eng-beta/b1": *utiltesting.MakeAdmission("other-beta").
@@ -2544,12 +2625,12 @@ func TestSchedule(t *testing.T) {
 					Request("beta-resource", "1").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1", "eng-gamma/c1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1", "eng-gamma/c1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 				"other-beta":  {"eng-beta/pretending-preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").
 					Assignment("alpha-resource", "default", "1").Obj(),
 				"eng-beta/b1": *utiltesting.MakeAdmission("other-beta").
@@ -2572,7 +2653,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 		},
@@ -2591,7 +2672,7 @@ func TestSchedule(t *testing.T) {
 					WithValue("Max", corev1.ResourceCPU, "300m").
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -2620,7 +2701,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -2648,7 +2729,7 @@ func TestSchedule(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"sales": {"sales/new"},
 			},
 		},
@@ -2704,11 +2785,70 @@ func TestSchedule(t *testing.T) {
 					Request("gpu", "6").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-beta/b1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-beta/b1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "on-demand", "5").Obj(),
+				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment("gpu", "spot", "5").Obj(),
+			},
+		},
+		"with fair sharing: prefer reclamation over cq priority based preemption; with preemption while borrowing": {
+			// We enable fair sharing so that preemption while borrowing is enabled.
+			// Flavor 1, on-demand, requires priority-based preemption in CQ.
+			// Flavor 2, spot, requires reclaim in Cohort.
+			// Flavor 2 is a better assignment, because reclaim is preferred over
+			// priority-based preemption.
+			enableFairSharing: true,
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("other-alpha").
+					Cohort("other").
+					Preemption(kueue.ClusterQueuePreemption{
+						WithinClusterQueue:  kueue.PreemptionPolicyLowerPriority,
+						ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+					}).
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "7").FlavorQuotas,
+						utiltesting.MakeFlavorQuotas("spot").Resource("gpu", "7").FlavorQuotas,
+					).
+					Obj(),
+				*utiltesting.MakeClusterQueue("other-beta").
+					Cohort("other").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "3").FlavorQuotas,
+						utiltesting.MakeFlavorQuotas("spot").Resource("gpu", "3").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("other", "eng-alpha").ClusterQueue("other-alpha").Obj(),
+				*utiltesting.MakeLocalQueue("other", "eng-beta").ClusterQueue("other-beta").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1", "eng-alpha").
+					Priority(50).
+					Queue("other").
+					Request("gpu", "5").
+					SimpleReserveQuota("other-alpha", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("b1", "eng-beta").
+					Priority(50).
+					Queue("other").
+					Request("gpu", "5").
+					SimpleReserveQuota("other-beta", "spot", now).
+					Obj(),
+				*utiltesting.MakeWorkload("preemptor", "eng-alpha").
+					Priority(100).
+					Queue("other").
+					Request("gpu", "8").
+					Obj(),
+			},
+			wantPreempted: sets.New[workload.Reference]("eng-beta/b1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"other-alpha": {"eng-alpha/preemptor"},
+			},
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "on-demand", "5").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment("gpu", "spot", "5").Obj(),
 			},
@@ -2766,11 +2906,11 @@ func TestSchedule(t *testing.T) {
 					Request("gpu", "6").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "on-demand", "5").Obj(),
 				"eng-alpha/a2": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "spot", "5").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment("gpu", "spot", "5").Obj(),
@@ -2831,11 +2971,11 @@ func TestSchedule(t *testing.T) {
 					Request("gpu", "5").
 					Obj(),
 			},
-			wantPreempted: sets.New("eng-alpha/a1"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-alpha/a1"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"other-alpha": {"eng-alpha/preemptor"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/a1": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "on-demand", "6").Obj(),
 				"eng-alpha/a2": *utiltesting.MakeAdmission("other-alpha").Assignment("gpu", "spot", "5").Obj(),
 				"eng-beta/b1":  *utiltesting.MakeAdmission("other-beta").Assignment("gpu", "spot", "5").Obj(),
@@ -2930,23 +3070,300 @@ func TestSchedule(t *testing.T) {
 					SimpleReserveQuota("CQ3", "on-demand", now).
 					Obj(),
 			},
-			wantPreempted: sets.Set[string](
-				sets.NewString("eng-gamma/Admitted-Workload-2"),
-			),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("eng-gamma/Admitted-Workload-2"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"CQ2": {"eng-beta/WL2"},
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"CQ1": {"eng-alpha/WL1"},
 			},
-			wantAssignments: map[string]kueue.Admission{
+			wantAssignments: map[workload.Reference]kueue.Admission{
 				"eng-alpha/Admitted-Workload-1": *utiltesting.MakeAdmission("CQ1").Assignment("gpu", "on-demand", "5").Obj(),
 				"eng-gamma/Admitted-Workload-2": *utiltesting.MakeAdmission("CQ3").Assignment("gpu", "on-demand", "5").Obj(),
 				"eng-gamma/Admitted-Workload-3": *utiltesting.MakeAdmission("CQ3").Assignment("gpu", "on-demand", "5").Obj(),
 			},
 		},
+		// ClusterQueueA has 2 capacity, 1 admitted workload (req=1), and 1 pending workload (req=2)
+		// ClusterQueueB has 0 capacity, and 1 pending workload (req=1)
+		// Since ClusterQueueA knows it can reclaim capacity, it lets ClusterQueueB borrow.
+		"capacity not blocked when lending clusterqueue can reclaim (ReclaimWithinCohort=Any)": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("ClusterQueueA").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "2").FlavorQuotas,
+					).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyAny,
+					}).
+					Obj(),
+				*utiltesting.MakeClusterQueue("ClusterQueueB").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "0").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq", "eng-alpha").ClusterQueue("ClusterQueueA").Obj(),
+				*utiltesting.MakeLocalQueue("lq", "eng-beta").ClusterQueue("ClusterQueueB").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "1").
+					SimpleReserveQuota("ClusterQueueA", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("a2-pending", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "2").
+					Obj(),
+				*utiltesting.MakeWorkload("b1-pending", "eng-beta").
+					Creation(now).
+					Queue("lq").
+					Request("gpu", "1").
+					Obj(),
+			},
+			wantLeft: nil,
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"ClusterQueueA": {"eng-alpha/a2-pending"},
+			},
+			wantScheduled: []workload.Reference{
+				"eng-beta/b1-pending",
+			},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/a1-admitted": *utiltesting.MakeAdmission("ClusterQueueA").Assignment("gpu", "on-demand", "1").Obj(),
+				"eng-beta/b1-pending":   *utiltesting.MakeAdmission("ClusterQueueB").Assignment("gpu", "on-demand", "1").Obj(),
+			},
+		},
+		// ClusterQueueA has 2 capacity, 1 admitted workload (req=1), and 1 pending workload (req=2)
+		// ClusterQueueB has 0 capacity, and 1 pending workload (req=1)
+		// Since ClusterQueueA is not sure that it can reclaim this capacity, it doesn't let ClusterQueueB borrow.
+		"capacity blocked when lending clusterqueue not guaranteed to reclaim (ReclaimWithinCohort=LowerPriority)": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("ClusterQueueA").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "2").FlavorQuotas,
+					).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+					}).
+					Obj(),
+				*utiltesting.MakeClusterQueue("ClusterQueueB").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "0").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq", "eng-alpha").ClusterQueue("ClusterQueueA").Obj(),
+				*utiltesting.MakeLocalQueue("lq", "eng-beta").ClusterQueue("ClusterQueueB").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "1").
+					SimpleReserveQuota("ClusterQueueA", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("a2-pending", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "2").
+					Obj(),
+				*utiltesting.MakeWorkload("b1-pending", "eng-beta").
+					Creation(now).
+					Queue("lq").
+					Request("gpu", "1").
+					Obj(),
+			},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"ClusterQueueB": {"eng-beta/b1-pending"},
+			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"ClusterQueueA": {"eng-alpha/a2-pending"},
+			},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/a1-admitted": *utiltesting.MakeAdmission("ClusterQueueA").Assignment("gpu", "on-demand", "1").Obj(),
+			},
+		},
+		// ClusterQueueA has 2 capacity, 1 admitted workload (req=1), and 1 pending workload (req=2)
+		// ClusterQueueB has 0 capacity, and 1 pending workload (req=1)
+		// Since ClusterQueueA is not sure that it can reclaim this capacity, it doesn't let ClusterQueueB borrow.
+		"capacity blocked when lending clusterqueue not guaranteed to reclaim (ReclaimWithinCohort=Never)": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("ClusterQueueA").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "2").FlavorQuotas,
+					).
+					Preemption(kueue.ClusterQueuePreemption{
+						ReclaimWithinCohort: kueue.PreemptionPolicyNever,
+					}).
+					Obj(),
+				*utiltesting.MakeClusterQueue("ClusterQueueB").
+					Cohort("root").
+					ResourceGroup(
+						utiltesting.MakeFlavorQuotas("on-demand").Resource("gpu", "0").FlavorQuotas,
+					).
+					Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq", "eng-alpha").ClusterQueue("ClusterQueueA").Obj(),
+				*utiltesting.MakeLocalQueue("lq", "eng-beta").ClusterQueue("ClusterQueueB").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "1").
+					SimpleReserveQuota("ClusterQueueA", "on-demand", now).
+					Obj(),
+				*utiltesting.MakeWorkload("a2-pending", "eng-alpha").
+					Queue("lq").
+					Request("gpu", "2").
+					Obj(),
+				*utiltesting.MakeWorkload("b1-pending", "eng-beta").
+					Creation(now).
+					Queue("lq").
+					Request("gpu", "1").
+					Obj(),
+			},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"ClusterQueueB": {"eng-beta/b1-pending"},
+			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"ClusterQueueA": {"eng-alpha/a2-pending"},
+			},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/a1-admitted": *utiltesting.MakeAdmission("ClusterQueueA").Assignment("gpu", "on-demand", "1").Obj(),
+			},
+		},
+		//
+		// Denote Cohorts in UPPERCASE, and ClusterQueues in lowercase.
+		// quota is at GUARANTEED cohort
+		//
+		//             ROOT
+		//          /        \
+		//    GUARANTEED      best-effort
+		//   /
+		// guaranteed
+		//
+		"in a hierarchical cohort, workload borrowing less is scheduled first": {
+			cohorts: []kueue.Cohort{
+				utiltesting.MakeCohort("root").Cohort,
+				utiltesting.MakeCohort("guaranteed").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("default").
+							Resource(corev1.ResourceCPU, "4").Obj(),
+					).Parent("root").Cohort,
+			},
+			additionalClusterQueues: []kueue.ClusterQueue{
+				utiltesting.MakeClusterQueue("guaranteed").
+					Cohort("guaranteed").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("default").
+							Resource(corev1.ResourceCPU, "0").Obj(),
+					).
+					ClusterQueue,
+				utiltesting.MakeClusterQueue("best-effort").
+					Cohort("root").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("default").
+							Resource(corev1.ResourceCPU, "0").Obj(),
+					).
+					ClusterQueue,
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq-guaranteed", "eng-alpha").ClusterQueue("guaranteed").Obj(),
+				*utiltesting.MakeLocalQueue("lq-best-effort", "eng-alpha").ClusterQueue("best-effort").Obj(),
+			},
+			workloads: []kueue.Workload{
+				utiltesting.MakeWorkload("guaranteed", "eng-alpha").
+					Queue("lq-guaranteed").
+					Priority(0).
+					PodSets(utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "4").
+						PodSet).
+					Workload,
+				utiltesting.MakeWorkload("best-effort", "eng-alpha").
+					Queue("lq-best-effort").
+					Priority(3).
+					PodSets(utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "4").
+						PodSet).
+					Workload,
+			},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/guaranteed": *utiltesting.MakeAdmission("guaranteed", "one").Assignment(corev1.ResourceCPU, "default", "4").Obj(),
+			},
+			wantScheduled: []workload.Reference{"eng-alpha/guaranteed"},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"best-effort": {"eng-alpha/best-effort"},
+			},
+		},
+		// In this test, the workload `new` cannot be assigned the first flavor
+		// `on-demand` because the other workload `admitted` is using only the
+		// nominal quota hence cannot be preempted. The flavorassigner detects
+		// this and assigns the other flavor `spot` to the workload `new`.
+		"don't assign flavor if there are no candidates for preemption": {
+			additionalClusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("cq1").
+					Cohort("cohort").
+					Preemption(kueue.ClusterQueuePreemption{
+						WithinClusterQueue:  kueue.PreemptionPolicyLowerPriority,
+						ReclaimWithinCohort: kueue.PreemptionPolicyAny,
+						BorrowWithinCohort: &kueue.BorrowWithinCohort{
+							Policy: kueue.BorrowWithinCohortPolicyLowerPriority,
+						},
+					}).
+					FlavorFungibility(kueue.FlavorFungibility{
+						WhenCanPreempt: kueue.Preempt,
+						WhenCanBorrow:  kueue.Borrow,
+					}).
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("on-demand").
+							ResourceQuotaWrapper(corev1.ResourceCPU).NominalQuota("0").BorrowingLimit("1").Append().
+							Obj(),
+						*utiltesting.MakeFlavorQuotas("spot").
+							ResourceQuotaWrapper(corev1.ResourceCPU).NominalQuota("0").BorrowingLimit("1").Append().
+							Obj(),
+					).Obj(),
+				*utiltesting.MakeClusterQueue("cq2").
+					Cohort("cohort").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("on-demand").
+							ResourceQuotaWrapper(corev1.ResourceCPU).NominalQuota("1").Append().
+							Obj(),
+						*utiltesting.MakeFlavorQuotas("spot").
+							ResourceQuotaWrapper(corev1.ResourceCPU).NominalQuota("1").Append().
+							Obj(),
+					).Obj(),
+			},
+			additionalLocalQueues: []kueue.LocalQueue{
+				*utiltesting.MakeLocalQueue("lq1", "eng-alpha").ClusterQueue("cq1").Obj(),
+				*utiltesting.MakeLocalQueue("lq2", "eng-alpha").ClusterQueue("cq2").Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("admitted", "eng-alpha").
+					Queue("lq2").
+					Request(corev1.ResourceCPU, "1").
+					SimpleReserveQuota("cq2", "on-demand", now.Add(-time.Second)).
+					Admitted(true).
+					Priority(0).
+					Obj(),
+				*utiltesting.MakeWorkload("new", "eng-alpha").
+					Queue("lq1").
+					Request(corev1.ResourceCPU, "1").
+					Priority(100).
+					Obj(),
+			},
+			wantScheduled: []workload.Reference{"eng-alpha/new"},
+			wantAssignments: map[workload.Reference]kueue.Admission{
+				"eng-alpha/new":      *utiltesting.MakeAdmission("cq1").Assignment(corev1.ResourceCPU, "spot", "1").Obj(),
+				"eng-alpha/admitted": *utiltesting.MakeAdmission("cq2").Assignment(corev1.ResourceCPU, "on-demand", "1").Obj(),
+			},
+		},
 	}
-
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			metrics.AdmissionCyclePreemptionSkips.Reset()
@@ -2956,7 +3373,7 @@ func TestSchedule(t *testing.T) {
 			if tc.disablePartialAdmission {
 				features.SetFeatureGateDuringTest(t, features.PartialAdmission, false)
 			}
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			allQueues := append(queues, tc.additionalLocalQueues...)
 			allClusterQueues := append(clusterQueues, tc.additionalClusterQueues...)
@@ -2965,11 +3382,11 @@ func TestSchedule(t *testing.T) {
 				WithLists(&kueue.WorkloadList{Items: tc.workloads}, &kueue.LocalQueueList{Items: allQueues}).
 				WithObjects(append(
 					[]client.Object{
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-alpha", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-beta", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "eng-gamma", Labels: map[string]string{"dep": "eng"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sales", Labels: map[string]string{"dep": "sales"}}},
-						&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "lend", Labels: map[string]string{"dep": "lend"}}},
+						utiltesting.MakeNamespaceWrapper("eng-alpha").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("eng-beta").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("eng-gamma").Label("dep", "eng").Obj(),
+						utiltesting.MakeNamespaceWrapper("sales").Label("dep", "sales").Obj(),
+						utiltesting.MakeNamespaceWrapper("lend").Label("dep", "lend").Obj(),
 					}, tc.objects...,
 				)...)
 			cl := clientBuilder.Build()
@@ -2983,7 +3400,7 @@ func TestSchedule(t *testing.T) {
 				}
 			}
 			for i := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(resourceFlavors[i])
+				cqCache.AddOrUpdateResourceFlavor(log, resourceFlavors[i])
 			}
 			for _, cq := range allClusterQueues {
 				if err := cqCache.AddClusterQueue(ctx, &cq); err != nil {
@@ -3004,7 +3421,7 @@ func TestSchedule(t *testing.T) {
 			}
 
 			scheduler := New(qManager, cqCache, cl, recorder, WithFairSharing(&config.FairSharing{Enable: tc.enableFairSharing}), WithClock(t, fakeClock))
-			gotScheduled := make(map[string]kueue.Admission)
+			gotScheduled := make(map[workload.Reference]kueue.Admission)
 			var mu sync.Mutex
 			scheduler.applyAdmission = func(ctx context.Context, w *kueue.Workload) error {
 				if tc.admissionError != nil {
@@ -3020,7 +3437,7 @@ func TestSchedule(t *testing.T) {
 				func() { wg.Add(1) },
 				func() { wg.Done() },
 			))
-			gotPreempted := sets.New[string]()
+			gotPreempted := sets.New[workload.Reference]()
 			scheduler.preemptor.OverrideApply(func(_ context.Context, w *kueue.Workload, _, _ string) error {
 				mu.Lock()
 				gotPreempted.Insert(workload.Key(w))
@@ -3035,7 +3452,7 @@ func TestSchedule(t *testing.T) {
 			scheduler.schedule(ctx)
 			wg.Wait()
 
-			wantScheduled := make(map[string]kueue.Admission)
+			wantScheduled := make(map[workload.Reference]kueue.Admission)
 			for _, key := range tc.wantScheduled {
 				wantScheduled[key] = tc.wantAssignments[key]
 			}
@@ -3048,7 +3465,7 @@ func TestSchedule(t *testing.T) {
 			}
 
 			// Verify assignments in cache.
-			gotAssignments := make(map[string]kueue.Admission)
+			gotAssignments := make(map[workload.Reference]kueue.Admission)
 			var gotWorkloads []kueue.Workload
 			snapshot, err := cqCache.Snapshot(ctx)
 			if err != nil {
@@ -3121,7 +3538,7 @@ func TestEntryOrdering(t *testing.T) {
 				}},
 			},
 			assignment: flavorassigner.Assignment{
-				Borrowing: true,
+				Borrowing: 1,
 			},
 		},
 		{
@@ -3150,7 +3567,7 @@ func TestEntryOrdering(t *testing.T) {
 				}},
 			},
 			assignment: flavorassigner.Assignment{
-				Borrowing: true,
+				Borrowing: 1,
 			},
 		},
 		{
@@ -3171,7 +3588,7 @@ func TestEntryOrdering(t *testing.T) {
 				}},
 			},
 			assignment: flavorassigner.Assignment{
-				Borrowing: true,
+				Borrowing: 1,
 			},
 		},
 		{
@@ -3194,7 +3611,7 @@ func TestEntryOrdering(t *testing.T) {
 				},
 			},
 			assignment: flavorassigner.Assignment{
-				Borrowing: true,
+				Borrowing: 1,
 			},
 		},
 		{
@@ -3215,6 +3632,19 @@ func TestEntryOrdering(t *testing.T) {
 						},
 					},
 				},
+			},
+		},
+		{
+			Info: workload.Info{
+				Obj: &kueue.Workload{ObjectMeta: metav1.ObjectMeta{
+					Name:              "high_pri_borrowing_more",
+					CreationTimestamp: metav1.NewTime(now.Add(3 * time.Second)),
+				}, Spec: kueue.WorkloadSpec{
+					Priority: ptr.To[int32](1),
+				}},
+			},
+			assignment: flavorassigner.Assignment{
+				Borrowing: 2,
 			},
 		},
 	}
@@ -3309,28 +3739,28 @@ func TestEntryOrdering(t *testing.T) {
 			input:            input,
 			prioritySorting:  true,
 			workloadOrdering: workload.Ordering{PodsReadyRequeuingTimestamp: config.EvictionTimestamp},
-			wantOrder:        []string{"new_high_pri", "old", "recently_evicted", "new", "high_pri_borrowing", "old_borrowing", "evicted_borrowing", "new_borrowing"},
+			wantOrder:        []string{"new_high_pri", "old", "recently_evicted", "new", "high_pri_borrowing", "old_borrowing", "evicted_borrowing", "new_borrowing", "high_pri_borrowing_more"},
 		},
 		{
 			name:             "Priority sorting is enabled (default) using pods-ready Creation timestamp",
 			input:            input,
 			prioritySorting:  true,
 			workloadOrdering: workload.Ordering{PodsReadyRequeuingTimestamp: config.CreationTimestamp},
-			wantOrder:        []string{"new_high_pri", "recently_evicted", "old", "new", "high_pri_borrowing", "old_borrowing", "evicted_borrowing", "new_borrowing"},
+			wantOrder:        []string{"new_high_pri", "recently_evicted", "old", "new", "high_pri_borrowing", "old_borrowing", "evicted_borrowing", "new_borrowing", "high_pri_borrowing_more"},
 		},
 		{
 			name:             "Priority sorting is disabled using pods-ready Eviction timestamp",
 			input:            input,
 			prioritySorting:  false,
 			workloadOrdering: workload.Ordering{PodsReadyRequeuingTimestamp: config.EvictionTimestamp},
-			wantOrder:        []string{"old", "recently_evicted", "new", "new_high_pri", "old_borrowing", "evicted_borrowing", "high_pri_borrowing", "new_borrowing"},
+			wantOrder:        []string{"old", "recently_evicted", "new", "new_high_pri", "old_borrowing", "evicted_borrowing", "high_pri_borrowing", "new_borrowing", "high_pri_borrowing_more"},
 		},
 		{
 			name:             "Priority sorting is disabled using pods-ready Creation timestamp",
 			input:            input,
 			prioritySorting:  false,
 			workloadOrdering: workload.Ordering{PodsReadyRequeuingTimestamp: config.CreationTimestamp},
-			wantOrder:        []string{"recently_evicted", "old", "new", "new_high_pri", "old_borrowing", "evicted_borrowing", "high_pri_borrowing", "new_borrowing"},
+			wantOrder:        []string{"recently_evicted", "old", "new", "new_high_pri", "old_borrowing", "evicted_borrowing", "high_pri_borrowing", "new_borrowing", "high_pri_borrowing_more"},
 		},
 		{
 			name:            "Some workloads are preempted; Priority sorting is disabled",
@@ -3359,7 +3789,7 @@ func TestEntryOrdering(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.PrioritySortingWithinCohort, tc.prioritySorting)
-			iter := makeIterator(context.Background(), tc.input, tc.workloadOrdering, false)
+			iter := makeIterator(t.Context(), tc.input, tc.workloadOrdering, false)
 			order := make([]string, len(tc.input))
 			for i := range tc.input {
 				order[i] = iter.pop().Obj.Name
@@ -3381,22 +3811,6 @@ func TestLastSchedulingContext(t *testing.T) {
 	resourceFlavors := []*kueue.ResourceFlavor{
 		utiltesting.MakeResourceFlavor("on-demand").Obj(),
 		utiltesting.MakeResourceFlavor("spot").Obj(),
-	}
-	clusterQueue := []kueue.ClusterQueue{
-		*utiltesting.MakeClusterQueue("eng-alpha").
-			QueueingStrategy(kueue.BestEffortFIFO).
-			Preemption(kueue.ClusterQueuePreemption{
-				WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
-			}).
-			FlavorFungibility(kueue.FlavorFungibility{
-				WhenCanPreempt: kueue.Preempt,
-			}).
-			ResourceGroup(
-				*utiltesting.MakeFlavorQuotas("on-demand").
-					Resource(corev1.ResourceCPU, "50", "50").Obj(),
-				*utiltesting.MakeFlavorQuotas("spot").
-					Resource(corev1.ResourceCPU, "100", "0").Obj(),
-			).Obj(),
 	}
 	clusterQueueCohort := []kueue.ClusterQueue{
 		*utiltesting.MakeClusterQueue("eng-cohort-alpha").
@@ -3490,47 +3904,44 @@ func TestLastSchedulingContext(t *testing.T) {
 			},
 		},
 	}
-	wl := utiltesting.MakeWorkload("low-1", "default").
-		Queue("main").
-		Request(corev1.ResourceCPU, "50").
-		ReserveQuota(utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj()).
-		Admitted(true).
-		Obj()
 	cases := []struct {
 		name                           string
 		cqs                            []kueue.ClusterQueue
 		admittedWorkloads              []kueue.Workload
 		workloads                      []kueue.Workload
 		deleteWorkloads                []kueue.Workload
-		wantPreempted                  sets.Set[string]
-		wantAdmissionsOnFirstSchedule  map[string]kueue.Admission
-		wantAdmissionsOnSecondSchedule map[string]kueue.Admission
+		wantPreempted                  sets.Set[workload.Reference]
+		wantAdmissionsOnFirstSchedule  map[workload.Reference]kueue.Admission
+		wantAdmissionsOnSecondSchedule map[workload.Reference]kueue.Admission
 	}{
 		{
-			name: "scheduling context not changed: use next flavor if can't preempt",
-			cqs:  clusterQueue,
-			admittedWorkloads: []kueue.Workload{
-				*wl,
+			name: "scheduling on the first flavor is unblocked after some workloads were deleted",
+			// In this scenario we wait for the first flavor to be unblocked by
+			// removal of workloads. The second flavor cannot be used because
+			// it is noFit.
+			cqs: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("eng-alpha").
+					QueueingStrategy(kueue.BestEffortFIFO).
+					Preemption(kueue.ClusterQueuePreemption{
+						WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
+					}).
+					FlavorFungibility(kueue.FlavorFungibility{
+						WhenCanPreempt: kueue.Preempt,
+					}).
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("on-demand").
+							Resource(corev1.ResourceCPU, "50", "50").Obj(),
+						*utiltesting.MakeFlavorQuotas("spot").
+							Resource(corev1.ResourceCPU, "10", "0").Obj(),
+					).Obj(),
 			},
-			workloads: []kueue.Workload{
-				*utiltesting.MakeWorkload("new", "default").
+			admittedWorkloads: []kueue.Workload{
+				utiltesting.MakeWorkload("low-1", "default").
 					Queue("main").
-					Request(corev1.ResourceCPU, "20").
-					Obj(),
-			},
-			deleteWorkloads:               []kueue.Workload{},
-			wantPreempted:                 sets.Set[string]{},
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
-				"default/new":   *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "spot", "20").Obj(),
-				"default/low-1": *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj(),
-			},
-		},
-		{
-			name: "some workloads were deleted",
-			cqs:  clusterQueue,
-			admittedWorkloads: []kueue.Workload{
-				*wl,
+					Request(corev1.ResourceCPU, "50").
+					ReserveQuota(utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj()).
+					Admitted(true).
+					Workload,
 			},
 			workloads: []kueue.Workload{
 				*utiltesting.MakeWorkload("preemptor", "default").
@@ -3539,11 +3950,16 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads: []kueue.Workload{
-				*wl,
+				utiltesting.MakeWorkload("low-1", "default").
+					Queue("main").
+					Request(corev1.ResourceCPU, "50").
+					ReserveQuota(utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj()).
+					Admitted(true).
+					Workload,
 			},
-			wantPreempted:                 sets.Set[string]{},
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantPreempted:                 sets.Set[workload.Reference]{},
+			wantAdmissionsOnFirstSchedule: map[workload.Reference]kueue.Admission{},
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/preemptor": *utiltesting.MakeAdmission("eng-alpha").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 			},
 		},
@@ -3568,12 +3984,12 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads: []kueue.Workload{},
-			wantPreempted:   sets.Set[string]{},
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{
+			wantPreempted:   sets.Set[workload.Reference]{},
+			wantAdmissionsOnFirstSchedule: map[workload.Reference]kueue.Admission{
 				"default/workload1": *utiltesting.MakeAdmission("eng-cohort-beta").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 				"default/borrower":  *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 			},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/placeholder": *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj(),
 				"default/workload1":   *utiltesting.MakeAdmission("eng-cohort-beta").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 				"default/borrower":    *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
@@ -3601,11 +4017,11 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads: []kueue.Workload{},
-			wantPreempted:   sets.Set[string]{},
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{
+			wantPreempted:   sets.Set[workload.Reference]{},
+			wantAdmissionsOnFirstSchedule: map[workload.Reference]kueue.Admission{
 				"default/workload": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "spot", "20").Obj(),
 			},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/placeholder":  *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj(),
 				"default/placeholder1": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "on-demand", "50").Obj(),
 				"default/workload":     *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "spot", "20").Obj(),
@@ -3638,11 +4054,11 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads: []kueue.Workload{},
-			wantPreempted:   sets.Set[string]{},
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{
+			wantPreempted:   sets.Set[workload.Reference]{},
+			wantAdmissionsOnFirstSchedule: map[workload.Reference]kueue.Admission{
 				"default/workload": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 			},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/placeholder":  *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "40").Obj(),
 				"default/placeholder1": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "on-demand", "40").Obj(),
 				"default/placeholder2": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "spot", "100").Obj(),
@@ -3672,9 +4088,9 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads:               []kueue.Workload{*utiltesting.MakeWorkload("placeholder-alpha", "default").Obj()},
-			wantPreempted:                 sets.New("default/placeholder-alpha"),
-			wantAdmissionsOnFirstSchedule: map[string]kueue.Admission{},
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantPreempted:                 sets.New[workload.Reference]("default/placeholder-alpha"),
+			wantAdmissionsOnFirstSchedule: map[workload.Reference]kueue.Admission{},
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/placeholder-theta-spot": *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "spot", "100").Obj(),
 				"default/new":                    *utiltesting.MakeAdmission("eng-cohort-theta").Assignment(corev1.ResourceCPU, "on-demand", "20").Obj(),
 			},
@@ -3755,8 +4171,8 @@ func TestLastSchedulingContext(t *testing.T) {
 					Obj(),
 			},
 			deleteWorkloads: []kueue.Workload{*utiltesting.MakeWorkload("alpha2", "default").Obj()},
-			wantPreempted:   sets.New("default/alpha2"),
-			wantAdmissionsOnSecondSchedule: map[string]kueue.Admission{
+			wantPreempted:   sets.New[workload.Reference]("default/alpha2"),
+			wantAdmissionsOnSecondSchedule: map[workload.Reference]kueue.Admission{
 				"default/alpha1": *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "on-demand", "22").Obj(),
 				"default/alpha3": *utiltesting.MakeAdmission("eng-cohort-alpha").Assignment(corev1.ResourceCPU, "spot", "22").Obj(),
 				"default/beta1":  *utiltesting.MakeAdmission("eng-cohort-beta").Assignment(corev1.ResourceCPU, "spot", "22").Obj(),
@@ -3767,7 +4183,7 @@ func TestLastSchedulingContext(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 			scheme := runtime.NewScheme()
 
 			clientBuilder := utiltesting.NewClientBuilder().
@@ -3776,7 +4192,7 @@ func TestLastSchedulingContext(t *testing.T) {
 					&kueue.ClusterQueueList{Items: tc.cqs},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			cl := clientBuilder.Build()
 			broadcaster := record.NewBroadcaster()
@@ -3791,7 +4207,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				}
 			}
 			for i := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(resourceFlavors[i])
+				cqCache.AddOrUpdateResourceFlavor(log, resourceFlavors[i])
 			}
 			for _, cq := range tc.cqs {
 				if err := cqCache.AddClusterQueue(ctx, &cq); err != nil {
@@ -3802,7 +4218,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				}
 			}
 			scheduler := New(qManager, cqCache, cl, recorder, WithClock(t, fakeClock))
-			gotScheduled := make(map[string]kueue.Admission)
+			gotScheduled := make(map[workload.Reference]kueue.Admission)
 			var mu sync.Mutex
 			scheduler.applyAdmission = func(ctx context.Context, w *kueue.Workload) error {
 				mu.Lock()
@@ -3815,7 +4231,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				func() { wg.Add(1) },
 				func() { wg.Done() },
 			))
-			gotPreempted := sets.New[string]()
+			gotPreempted := sets.New[workload.Reference]()
 			scheduler.preemptor.OverrideApply(func(_ context.Context, w *kueue.Workload, _, _ string) error {
 				mu.Lock()
 				gotPreempted.Insert(workload.Key(w))
@@ -3842,7 +4258,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				if err != nil {
 					t.Errorf("Delete workload failed: %v", err)
 				}
-				err = cqCache.DeleteWorkload(&wl)
+				err = cqCache.DeleteWorkload(log, &wl)
 				if err != nil {
 					t.Errorf("Delete workload failed: %v", err)
 				}
@@ -3856,7 +4272,7 @@ func TestLastSchedulingContext(t *testing.T) {
 				t.Errorf("Unexpected preemptions (-want,+got):\n%s", diff)
 			}
 			// Verify assignments in cache.
-			gotAssignments := make(map[string]kueue.Admission)
+			gotAssignments := make(map[workload.Reference]kueue.Admission)
 			snapshot, err := cqCache.Snapshot(ctx)
 			if err != nil {
 				t.Fatalf("unexpected error while building snapshot: %v", err)
@@ -3885,13 +4301,13 @@ var ignoreConditionTimestamps = cmpopts.IgnoreFields(metav1.Condition{}, "LastTr
 func TestRequeueAndUpdate(t *testing.T) {
 	cq := utiltesting.MakeClusterQueue("cq").Obj()
 	q1 := utiltesting.MakeLocalQueue("q1", "ns1").ClusterQueue(cq.Name).Obj()
-	w1 := utiltesting.MakeWorkload("w1", "ns1").Queue(q1.Name).Obj()
+	w1 := utiltesting.MakeWorkload("w1", "ns1").Queue(kueue.LocalQueueName(q1.Name)).Obj()
 
 	cases := []struct {
 		name              string
 		e                 entry
-		wantWorkloads     map[kueue.ClusterQueueReference][]string
-		wantInadmissible  map[kueue.ClusterQueueReference][]string
+		wantWorkloads     map[kueue.ClusterQueueReference][]workload.Reference
+		wantInadmissible  map[kueue.ClusterQueueReference][]workload.Reference
 		wantStatus        kueue.WorkloadStatus
 		wantStatusUpdates int
 	}{
@@ -3911,7 +4327,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 				},
 				ResourceRequests: []kueue.PodSetRequest{{Name: kueue.DefaultPodSetName}},
 			},
-			wantInadmissible: map[kueue.ClusterQueueReference][]string{
+			wantInadmissible: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq": {workload.Key(w1)},
 			},
 			wantStatusUpdates: 1,
@@ -3922,7 +4338,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 				status:          assumed,
 				inadmissibleMsg: "",
 			},
-			wantWorkloads: map[kueue.ClusterQueueReference][]string{
+			wantWorkloads: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq": {workload.Key(w1)},
 			},
 		},
@@ -3932,7 +4348,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 				status:          nominated,
 				inadmissibleMsg: "failed to admit workload",
 			},
-			wantWorkloads: map[kueue.ClusterQueueReference][]string{
+			wantWorkloads: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq": {workload.Key(w1)},
 			},
 		},
@@ -3953,7 +4369,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 				},
 				ResourceRequests: []kueue.PodSetRequest{{Name: kueue.DefaultPodSetName}},
 			},
-			wantWorkloads: map[kueue.ClusterQueueReference][]string{
+			wantWorkloads: map[kueue.ClusterQueueReference][]workload.Reference{
 				"cq": {workload.Key(w1)},
 			},
 			wantStatusUpdates: 1,
@@ -3966,7 +4382,7 @@ func TestRequeueAndUpdate(t *testing.T) {
 			scheme := runtime.NewScheme()
 
 			updates := 0
-			objs := []client.Object{w1, q1, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns1"}}}
+			objs := []client.Object{w1, q1, utiltesting.MakeNamespace("ns1")}
 			cl := utiltesting.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
 				SubResourcePatch: func(ctx context.Context, client client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 					updates++
@@ -4051,7 +4467,7 @@ func TestResourcesToReserve(t *testing.T) {
 	cases := []struct {
 		name            string
 		assignmentMode  flavorassigner.FlavorAssignmentMode
-		borrowing       bool
+		borrowing       int
 		assignmentUsage resources.FlavorResourceQuantities
 		cqUsage         resources.FlavorResourceQuantities
 		wantReserved    resources.FlavorResourceQuantities
@@ -4131,7 +4547,7 @@ func TestResourcesToReserve(t *testing.T) {
 		{
 			name:           "Reserved memory cut by nominal+borrowing quota, assignment preempts and borrows",
 			assignmentMode: flavorassigner.Preempt,
-			borrowing:      true,
+			borrowing:      1,
 			assignmentUsage: resources.FlavorResourceQuantities{
 				{Flavor: kueue.ResourceFlavorReference("spot"), Resource: corev1.ResourceMemory}: 50,
 				{Flavor: kueue.ResourceFlavorReference("model-b"), Resource: "gpu"}:              2,
@@ -4150,7 +4566,7 @@ func TestResourcesToReserve(t *testing.T) {
 		{
 			name:           "Reserved memory equal assignment usage, CQ borrowing limit is nil",
 			assignmentMode: flavorassigner.Preempt,
-			borrowing:      true,
+			borrowing:      1,
 			assignmentUsage: resources.FlavorResourceQuantities{
 				{Flavor: kueue.ResourceFlavorReference("on-demand"), Resource: corev1.ResourceMemory}: 50,
 				{Flavor: kueue.ResourceFlavorReference("model-b"), Resource: "gpu"}:                   2,
@@ -4169,7 +4585,7 @@ func TestResourcesToReserve(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 			assignment := flavorassigner.Assignment{
 				PodSets: []flavorassigner.PodSetAssignment{{
 					Name:    "memory",
@@ -4185,13 +4601,15 @@ func TestResourcesToReserve(t *testing.T) {
 				Borrowing: tc.borrowing,
 				Usage:     workload.Usage{Quota: tc.assignmentUsage},
 			}
-			e := &entry{assignment: assignment}
+			e := &entry{assignment: assignment, Info: *workload.NewInfo(
+				&kueue.Workload{},
+			)}
 			cl := utiltesting.NewClientBuilder().
 				WithLists(&kueue.ClusterQueueList{Items: []kueue.ClusterQueue{*cq}}).
 				Build()
 			cqCache := cache.New(cl)
 			for _, flavor := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, flavor)
 			}
 			err := cqCache.AddClusterQueue(ctx, cq)
 			if err != nil {
@@ -4203,7 +4621,7 @@ func TestResourcesToReserve(t *testing.T) {
 				quantity := resources.ResourceQuantity(fr.Resource, v)
 				admission := utiltesting.MakeAdmission("cq").Assignment(fr.Resource, fr.Flavor, quantity.String())
 				wl := utiltesting.MakeWorkload(fmt.Sprintf("workload-%d", i), "default-namespace").ReserveQuota(admission.Obj()).Obj()
-				cqCache.AddOrUpdateWorkload(wl)
+				cqCache.AddOrUpdateWorkload(log, wl)
 				i++
 			}
 			snapshot, err := cqCache.Snapshot(ctx)
@@ -4222,7 +4640,8 @@ func TestResourcesToReserve(t *testing.T) {
 
 func TestScheduleForTAS(t *testing.T) {
 	const (
-		tasRackLabel = "cloud.provider.com/rack"
+		tasBlockLabel = "cloud.com/topology-block"
+		tasRackLabel  = "cloud.provider.com/rack"
 	)
 	defaultSingleNode := []corev1.Node{
 		*testingnode.MakeNode("x1").
@@ -4236,9 +4655,93 @@ func TestScheduleForTAS(t *testing.T) {
 			Ready().
 			Obj(),
 	}
+
+	//        b1                   b2
+	//     /      \             /      \
+	//    r1       r2          r1       r2
+	//  /  |  \     |           |        |
+	// x2  x3  x4  x1          x5       x6
+	defaultNodes := []corev1.Node{
+		*testingnode.MakeNode("b1-r1-x1").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b1").
+			Label(tasRackLabel, "r1").
+			Label(corev1.LabelHostname, "x1").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+		*testingnode.MakeNode("b1-r2-x2").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b1").
+			Label(tasRackLabel, "r2").
+			Label(corev1.LabelHostname, "x2").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+		*testingnode.MakeNode("b1-r2-x3").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b1").
+			Label(tasRackLabel, "r2").
+			Label(corev1.LabelHostname, "x3").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+		*testingnode.MakeNode("b1-r2-x4").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b1").
+			Label(tasRackLabel, "r2").
+			Label(corev1.LabelHostname, "x4").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+		*testingnode.MakeNode("b2-r2-x5").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b2").
+			Label(tasRackLabel, "r1").
+			Label(corev1.LabelHostname, "x5").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+		*testingnode.MakeNode("b2-r2-x6").
+			Label("tas-node", "true").
+			Label(tasBlockLabel, "b2").
+			Label(tasRackLabel, "r2").
+			Label(corev1.LabelHostname, "x6").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("4Gi"),
+				corev1.ResourcePods:   resource.MustParse("40"),
+			}).
+			Ready().
+			Obj(),
+	}
+
 	defaultSingleLevelTopology := *utiltesting.MakeDefaultOneLevelTopology("tas-single-level")
 	defaultTwoLevelTopology := *utiltesting.MakeTopology("tas-two-level").
 		Levels(tasRackLabel, corev1.LabelHostname).
+		Obj()
+	defaultThreeLevelTopology := *utiltesting.MakeTopology("tas-three-level").
+		Levels(tasBlockLabel, tasRackLabel, corev1.LabelHostname).
 		Obj()
 	defaultFlavor := *utiltesting.MakeResourceFlavor("default").Obj()
 	defaultTASFlavor := *utiltesting.MakeResourceFlavor("tas-default").
@@ -4249,10 +4752,40 @@ func TestScheduleForTAS(t *testing.T) {
 		NodeLabel("tas-node", "true").
 		TopologyName("tas-two-level").
 		Obj()
+	defaultTASThreeLevelFlavor := *utiltesting.MakeResourceFlavor("tas-default").
+		NodeLabel("tas-node", "true").
+		TopologyName("tas-three-level").
+		Obj()
 	defaultClusterQueue := *utiltesting.MakeClusterQueue("tas-main").
 		ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
 			Resource(corev1.ResourceCPU, "50").
 			Resource(corev1.ResourceMemory, "50Gi").Obj()).
+		Obj()
+	defaultProvCheck := *utiltesting.MakeAdmissionCheck("prov-check").
+		ControllerName(kueue.ProvisioningRequestControllerName).
+		Condition(metav1.Condition{
+			Type:   kueue.AdmissionCheckActive,
+			Status: metav1.ConditionTrue,
+		}).
+		Obj()
+	defaultCustomCheck := *utiltesting.MakeAdmissionCheck("custom-check").
+		ControllerName("custom-admission-check-controller").
+		Condition(metav1.Condition{
+			Type:   kueue.AdmissionCheckActive,
+			Status: metav1.ConditionTrue,
+		}).
+		Obj()
+	clusterQueueWithProvReq := *utiltesting.MakeClusterQueue("tas-main").
+		ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
+			Resource(corev1.ResourceCPU, "50").
+			Resource(corev1.ResourceMemory, "50Gi").Obj()).
+		AdmissionChecks(kueue.AdmissionCheckReference(defaultProvCheck.Name)).
+		Obj()
+	clusterQueueWithCustomCheck := *utiltesting.MakeClusterQueue("tas-main").
+		ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
+			Resource(corev1.ResourceCPU, "50").
+			Resource(corev1.ResourceMemory, "50Gi").Obj()).
+		AdmissionChecks(kueue.AdmissionCheckReference(defaultCustomCheck.Name)).
 		Obj()
 	queues := []kueue.LocalQueue{
 		{
@@ -4270,21 +4803,1087 @@ func TestScheduleForTAS(t *testing.T) {
 		nodes           []corev1.Node
 		pods            []corev1.Pod
 		topologies      []kueuealpha.Topology
+		admissionChecks []kueue.AdmissionCheck
 		resourceFlavors []kueue.ResourceFlavor
 		clusterQueues   []kueue.ClusterQueue
 		workloads       []kueue.Workload
 
 		// wantNewAssignments is a summary of all new admissions in the cache after this cycle.
-		wantNewAssignments map[string]kueue.Admission
+		wantNewAssignments map[workload.Reference]kueue.Admission
 		// wantLeft is the workload keys that are left in the queues after this cycle.
-		wantLeft map[kueue.ClusterQueueReference][]string
+		wantLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantInadmissibleLeft is the workload keys that are left in the inadmissible state after this cycle.
-		wantInadmissibleLeft map[kueue.ClusterQueueReference][]string
+		wantInadmissibleLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
+		"workload in CQ with ProvisioningRequest; second pass; baseline scenario": {
+			nodes:           defaultSingleNode,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{clusterQueueWithProvReq},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+							AssignmentPodCount(1).Obj(),
+					).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStateReady,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStateReady).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with two TAS flavors, only the second is using Provisioning Admission Check": {
+			nodes: []corev1.Node{
+				*testingnode.MakeNode("x1").
+					Label("tas-group", "reservation").
+					Label(corev1.LabelHostname, "x1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+			},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{
+				*utiltesting.MakeResourceFlavor("tas-reservation").
+					NodeLabel("tas-group", "reservation").
+					TopologyName("tas-single-level").
+					Obj(),
+				*utiltesting.MakeResourceFlavor("tas-provisioning").
+					NodeLabel("tas-group", "provisioning").
+					TopologyName("tas-single-level").
+					Obj()},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("tas-main").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("tas-reservation").
+							Resource(corev1.ResourceCPU, "1").Obj(),
+						*utiltesting.MakeFlavorQuotas("tas-provisioning").
+							Resource(corev1.ResourceCPU, "1").Obj()).
+					AdmissionCheckStrategy(kueue.AdmissionCheckStrategyRule{
+						Name: "prov-check",
+						OnFlavors: []kueue.ResourceFlavorReference{
+							kueue.ResourceFlavorReference("tas-provisioning"),
+						},
+					}).
+					Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-reservation", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; baseline scenario": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; preferred; fit in different rack": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 2).
+						PreferredTopologyRequest(tasRackLabel).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+									{
+										Count: 1,
+										Values: []string{
+											"x1",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+							{
+								Count: 1,
+								Values: []string{
+									"x5",
+								},
+							},
+						},
+					}).Obj(),
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; preferred; no fit": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						PreferredTopologyRequest(tasRackLabel).
+						Request(corev1.ResourceCPU, "3").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "3000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "3000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x0",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					EventType: corev1.EventTypeWarning,
+					Reason:    "SecondPassFailed",
+					Message:   "couldn't assign flavors to pod set one: topology \"tas-three-level\" doesn't allow to fit any of 1 pod(s)",
+				},
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; required rack; fit": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 2).
+						RequiredTopologyRequest(tasRackLabel).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+									{
+										Count: 1,
+										Values: []string{
+											"x2",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x2",
+								},
+							},
+							{
+								Count: 1,
+								Values: []string{
+									"x3",
+								},
+							},
+						},
+					}).Obj(),
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; required rack for a single node; fit": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(tasRackLabel).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; required rack; no fit": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 2).
+						RequiredTopologyRequest(tasRackLabel).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+									{
+										Count: 1,
+										Values: []string{
+											"x1",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x0",
+								},
+							},
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					EventType: corev1.EventTypeWarning,
+					Reason:    "SecondPassFailed",
+					Message:   "couldn't assign flavors to pod set one: topology \"tas-three-level\" doesn't allow to fit any of 1 pod(s)",
+				},
+			},
+		},
+		"workload with nodeToReplace annotation; second pass; two podsets": {
+			nodes:           defaultNodes,
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultThreeLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASThreeLevelFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Annotations(map[string]string{kueuealpha.NodeToReplaceAnnotation: "x0"}).
+					Queue("tas-main").
+					PodSets(
+						*utiltesting.MakePodSet("one", 1).
+							PreferredTopologyRequest(corev1.LabelHostname).
+							Request(corev1.ResourceCPU, "1").
+							Obj(),
+						*utiltesting.MakePodSet("two", 1).
+							PreferredTopologyRequest(corev1.LabelHostname).
+							Request(corev1.ResourceCPU, "1").
+							Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one", "two").
+							Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x0",
+										},
+									},
+								},
+							}).
+							AssignmentWithIndex(1, corev1.ResourceCPU, "tas-default", "1000m").
+							AssignmentPodCountWithIndex(1, 1).
+							TopologyAssignmentWithIndex(1, &kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x1",
+										},
+									},
+								},
+							}).
+							Obj(),
+					).
+					Admitted(true).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one", "two").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x2",
+								},
+							},
+						},
+					}).
+					AssignmentWithIndex(1, corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCountWithIndex(1, 1).
+					TopologyAssignmentWithIndex(1, &kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).
+					Obj(),
+			},
+		},
+		"large workload in CQ with ProvisioningRequest; second pass": {
+			// In this scenario we test a workload which is using 26 out of 50
+			// available units of quota, to make sure we are not double counting
+			// the quota in the second pass.
+			nodes: []corev1.Node{
+				*testingnode.MakeNode("x1").
+					Label("tas-node", "true").
+					Label(corev1.LabelHostname, "x1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("50"),
+						corev1.ResourceMemory: resource.MustParse("50Gi"),
+						corev1.ResourcePods:   resource.MustParse("50"),
+					}).
+					Ready().
+					Obj(),
+			},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{clusterQueueWithProvReq},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 26).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "26").
+							DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+							AssignmentPodCount(26).Obj(),
+					).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStateReady,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "26").
+					AssignmentPodCount(26).
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStateReady).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 26,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with ProvisioningRequest when two TAS flavors; second pass": {
+			nodes: []corev1.Node{
+				*testingnode.MakeNode("x1").
+					Label("tas-node", "true").
+					Label(corev1.LabelHostname, "x1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+				*testingnode.MakeNode("y1").
+					Label("tas-node-second", "true").
+					Label(corev1.LabelHostname, "y1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+			},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor,
+				*utiltesting.MakeResourceFlavor("tas-second").
+					NodeLabel("tas-node-second", "true").
+					TopologyName("tas-single-level").
+					Obj()},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("tas-main").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("tas-default").
+							Resource(corev1.ResourceCPU, "50").Obj(),
+						*utiltesting.MakeFlavorQuotas("tas-second").
+							Resource(corev1.ResourceCPU, "50").Obj()).
+					AdmissionChecks(kueue.AdmissionCheckReference(defaultProvCheck.Name)).
+					Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-second", "1000m").
+							DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+							AssignmentPodCount(1).Obj(),
+					).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStateReady,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-second", "1000m").
+					AssignmentPodCount(1).
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStateReady).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"y1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with two TAS flavors - one with ProvisioningRequest, one regular; second pass": {
+			nodes: []corev1.Node{
+				*testingnode.MakeNode("x1").
+					Label("tas-node", "true").
+					Label(corev1.LabelHostname, "x1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+				*testingnode.MakeNode("y1").
+					Label("tas-node-second", "true").
+					Label(corev1.LabelHostname, "y1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+			},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor,
+				*utiltesting.MakeResourceFlavor("tas-second").
+					NodeLabel("tas-node-second", "true").
+					TopologyName("tas-single-level").
+					Obj()},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("tas-main").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("tas-default").
+							Resource(corev1.ResourceCPU, "50").Obj(),
+						*utiltesting.MakeFlavorQuotas("tas-second").
+							Resource(corev1.ResourceCPU, "50").Obj()).
+					AdmissionCheckStrategy(kueue.AdmissionCheckStrategyRule{
+						Name: kueue.AdmissionCheckReference(defaultProvCheck.Name),
+						OnFlavors: []kueue.ResourceFlavorReference{
+							"tas-second",
+						},
+					}).
+					Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(
+						*utiltesting.MakePodSet("one", 1).
+							RequiredTopologyRequest(corev1.LabelHostname).
+							Request(corev1.ResourceCPU, "1").
+							Obj(),
+						*utiltesting.MakePodSet("two", 1).
+							RequiredTopologyRequest(corev1.LabelHostname).
+							Request(corev1.ResourceCPU, "1").
+							Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one", "two").
+							PodSets(
+								kueue.PodSetAssignment{
+									Name: "one",
+									Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+										corev1.ResourceCPU: "tas-default",
+									},
+									ResourceUsage: corev1.ResourceList{
+										corev1.ResourceCPU: resource.MustParse("1"),
+									},
+									Count: ptr.To[int32](1),
+									TopologyAssignment: &kueue.TopologyAssignment{
+										Levels: utiltas.Levels(&defaultSingleLevelTopology),
+										Domains: []kueue.TopologyDomainAssignment{
+											{
+												Count: 1,
+												Values: []string{
+													"x1",
+												},
+											},
+										},
+									},
+								},
+								kueue.PodSetAssignment{
+									Name: "two",
+									Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+										corev1.ResourceCPU: "tas-second",
+									},
+									ResourceUsage: corev1.ResourceList{
+										corev1.ResourceCPU: resource.MustParse("1"),
+									},
+									Count:                  ptr.To[int32](1),
+									DelayedTopologyRequest: ptr.To(kueue.DelayedTopologyRequestStatePending),
+								},
+							).Obj(),
+					).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStateReady,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one", "two").
+					PodSets(
+						kueue.PodSetAssignment{
+							Name: "one",
+							Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+								corev1.ResourceCPU: "tas-default",
+							},
+							ResourceUsage: corev1.ResourceList{
+								corev1.ResourceCPU: resource.MustParse("1"),
+							},
+							Count: ptr.To[int32](1),
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"x1",
+										},
+									},
+								},
+							},
+						},
+						kueue.PodSetAssignment{
+							Name: "two",
+							Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
+								corev1.ResourceCPU: "tas-second",
+							},
+							ResourceUsage: corev1.ResourceList{
+								corev1.ResourceCPU: resource.MustParse("1"),
+							},
+							Count:                  ptr.To[int32](1),
+							DelayedTopologyRequest: ptr.To(kueue.DelayedTopologyRequestStateReady),
+							TopologyAssignment: &kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"y1",
+										},
+									},
+								},
+							},
+						},
+					).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with ProvisioningRequest gets QuotaReserved only; implicit defaulting": {
+			nodes:           []corev1.Node{},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{clusterQueueWithProvReq},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStatePending,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+					AssignmentPodCount(1).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with ProvisioningRequest when two TAS flavors; second pass; implicit defaulting": {
+			nodes: []corev1.Node{
+				*testingnode.MakeNode("x1").
+					Label("tas-node", "true").
+					Label(corev1.LabelHostname, "x1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+				*testingnode.MakeNode("y1").
+					Label("tas-node-second", "true").
+					Label(corev1.LabelHostname, "y1").
+					StatusAllocatable(corev1.ResourceList{
+						corev1.ResourceCPU:  resource.MustParse("1"),
+						corev1.ResourcePods: resource.MustParse("10"),
+					}).
+					Ready().
+					Obj(),
+			},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor,
+				*utiltesting.MakeResourceFlavor("tas-second").
+					NodeLabel("tas-node-second", "true").
+					TopologyName("tas-single-level").
+					Obj()},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("tas-main").
+					ResourceGroup(
+						*utiltesting.MakeFlavorQuotas("tas-default").
+							Resource(corev1.ResourceCPU, "50").Obj(),
+						*utiltesting.MakeFlavorQuotas("tas-second").
+							Resource(corev1.ResourceCPU, "50").Obj()).
+					AdmissionChecks(kueue.AdmissionCheckReference(defaultProvCheck.Name)).
+					Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-second", "1000m").
+							DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+							AssignmentPodCount(1).Obj(),
+					).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStateReady,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-second", "1000m").
+					AssignmentPodCount(1).
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStateReady).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"y1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload in CQ with ProvisioningRequest gets QuotaReserved only": {
+			nodes:           []corev1.Node{},
+			admissionChecks: []kueue.AdmissionCheck{defaultProvCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{clusterQueueWithProvReq},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "prov-check",
+						State: kueue.CheckStatePending,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					DelayedTopologyRequest(kueue.DelayedTopologyRequestStatePending).
+					AssignmentPodCount(1).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
+		"workload with a custom AdmissionCheck gets TAS assigned": {
+			nodes:           defaultSingleNode,
+			admissionChecks: []kueue.AdmissionCheck{defaultCustomCheck},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{clusterQueueWithCustomCheck},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					AdmissionCheck(kueue.AdmissionCheckState{
+						Name:  "custom-check",
+						State: kueue.CheckStatePending,
+					}).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
 		"workload which does not specify TAS annotation uses the only TAS flavor": {
 			nodes:           defaultSingleNode,
 			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
@@ -4304,7 +5903,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCount(1).
@@ -4320,7 +5919,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4356,7 +5955,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCount(1).
@@ -4372,7 +5971,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4407,13 +6006,13 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "default", "1000m").
 					AssignmentPodCount(1).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4453,7 +6052,7 @@ func TestScheduleForTAS(t *testing.T) {
 							Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					PodSets(
 						kueue.PodSetAssignment{
@@ -4490,7 +6089,7 @@ func TestScheduleForTAS(t *testing.T) {
 					).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4518,7 +6117,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCount(1).
@@ -4534,7 +6133,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4562,7 +6161,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -4615,7 +6214,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-custom-flavor", "1").
 					AssignmentPodCount(1).
@@ -4631,7 +6230,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4659,7 +6258,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -4709,7 +6308,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -4741,7 +6340,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -4799,7 +6398,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "500m").
 					AssignmentPodCount(1).
@@ -4815,7 +6414,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4870,7 +6469,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "500m").
 					Assignment(corev1.ResourceMemory, "tas-default", "500Mi").
@@ -4887,7 +6486,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -4947,7 +6546,7 @@ func TestScheduleForTAS(t *testing.T) {
 							Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5005,7 +6604,7 @@ func TestScheduleForTAS(t *testing.T) {
 							Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "launcher", "worker").
 					AssignmentWithIndex(0, corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCountWithIndex(0, 1).
@@ -5041,7 +6640,7 @@ func TestScheduleForTAS(t *testing.T) {
 					}).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5101,7 +6700,7 @@ func TestScheduleForTAS(t *testing.T) {
 							Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "launcher", "worker").
 					AssignmentWithIndex(0, corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCountWithIndex(0, 1).
@@ -5137,7 +6736,7 @@ func TestScheduleForTAS(t *testing.T) {
 					}).
 					Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5210,7 +6809,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCount(1).
@@ -5226,7 +6825,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5293,7 +6892,7 @@ func TestScheduleForTAS(t *testing.T) {
 					).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1000m").
 					AssignmentPodCount(1).
@@ -5309,7 +6908,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5338,7 +6937,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1").
 					AssignmentPodCount(1).
@@ -5354,7 +6953,7 @@ func TestScheduleForTAS(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
@@ -5423,7 +7022,7 @@ func TestScheduleForTAS(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5435,38 +7034,89 @@ func TestScheduleForTAS(t *testing.T) {
 				},
 			},
 		},
+		"workload with zero value request gets scheduled": {
+			nodes:           defaultSingleNode,
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueue},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						Request(corev1.ResourceCPU, "0").
+						Request(corev1.ResourceMemory, "10Mi").
+						Obj()).
+					Obj(),
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/foo": *utiltesting.MakeAdmission("tas-main", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "0").
+					Assignment(corev1.ResourceMemory, "tas-default", "10Mi").
+					AssignmentPodCount(1).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 1,
+								Values: []string{
+									"x1",
+								},
+							},
+						},
+					}).Obj(),
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
+				},
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
+					&kueue.AdmissionCheckList{Items: tc.admissionChecks},
 					&kueue.WorkloadList{Items: tc.workloads},
 					&kueuealpha.TopologyList{Items: tc.topologies},
 					&corev1.PodList{Items: tc.pods},
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
+			for _, ac := range tc.admissionChecks {
+				clientBuilder = clientBuilder.WithStatusSubresource(ac.DeepCopy())
+			}
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()
 			recorder := &utiltesting.EventRecorder{}
 			cqCache := cache.New(cl)
-			qManager := queue.NewManager(cl, cqCache)
+			now := time.Now()
+			fakeClock := testingclock.NewFakeClock(now)
+			qManager := queue.NewManager(cl, cqCache, queue.WithClock(fakeClock))
 			topologyByName := slices.ToMap(tc.topologies, func(i int) (kueue.TopologyReference, kueuealpha.Topology) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
+			for _, ac := range tc.admissionChecks {
+				cqCache.AddOrUpdateAdmissionCheck(log, &ac)
+			}
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {
@@ -5485,14 +7135,19 @@ func TestScheduleForTAS(t *testing.T) {
 					t.Fatalf("Inserting queue %s/%s in manager: %v", q.Namespace, q.Name, err)
 				}
 			}
-			initiallyAdmittedWorkloads := sets.New[string]()
+			initiallyAdmittedWorkloads := sets.New[workload.Reference]()
 			for _, w := range tc.workloads {
-				if workload.IsAdmitted(&w) {
+				if workload.IsAdmitted(&w) && !workload.HasNodeToReplace(&w) {
 					initiallyAdmittedWorkloads.Insert(workload.Key(&w))
 				}
 			}
+			for _, w := range tc.workloads {
+				if qManager.QueueSecondPassIfNeeded(ctx, &w) {
+					fakeClock.Step(time.Second)
+				}
+			}
 			scheduler := New(qManager, cqCache, cl, recorder)
-			gotScheduled := make([]string, 0)
+			gotScheduled := make([]workload.Reference, 0)
 			var mu sync.Mutex
 			scheduler.applyAdmission = func(ctx context.Context, w *kueue.Workload) error {
 				mu.Lock()
@@ -5516,7 +7171,7 @@ func TestScheduleForTAS(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error while building snapshot: %v", err)
 			}
-			gotAssignments := make(map[string]kueue.Admission)
+			gotAssignments := make(map[workload.Reference]kueue.Admission)
 			for cqName, c := range snapshot.ClusterQueues() {
 				for name, w := range c.Workloads {
 					if initiallyAdmittedWorkloads.Has(workload.Key(w.Obj)) {
@@ -5616,18 +7271,86 @@ func TestScheduleForTASPreemption(t *testing.T) {
 		workloads       []kueue.Workload
 
 		// wantNewAssignments is a summary of all new admissions in the cache after this cycle.
-		wantNewAssignments map[string]kueue.Admission
+		wantNewAssignments map[workload.Reference]kueue.Admission
 		// wantLeft is the workload keys that are left in the queues after this cycle.
-		wantLeft map[kueue.ClusterQueueReference][]string
+		wantLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantInadmissibleLeft is the workload keys that are left in the inadmissible state after this cycle.
-		wantInadmissibleLeft map[kueue.ClusterQueueReference][]string
+		wantInadmissibleLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantPreempted is the keys of the workloads that get preempted in the scheduling cycle.
-		wantPreempted sets.Set[string]
+		wantPreempted sets.Set[workload.Reference]
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
+		"workload preempted due to quota is using deleted Node": {
+			// In this scenario the preemption target, based on quota, is a
+			// using an already deleted node (z).
+			nodes:           defaultTwoNodes,
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues: []kueue.ClusterQueue{
+				*utiltesting.MakeClusterQueue("tas-main").
+					Preemption(kueue.ClusterQueuePreemption{WithinClusterQueue: kueue.PreemptionPolicyLowerPriority}).
+					ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
+						Resource(corev1.ResourceCPU, "10").
+						Resource(corev1.ResourceMemory, "10Gi").Obj()).
+					Obj(),
+			},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("foo", "default").
+					Queue("tas-main").
+					Priority(3).
+					PodSets(*utiltesting.MakePodSet("one", 10).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+				*utiltesting.MakeWorkload("low-priority-admitted", "default").
+					Queue("tas-main").
+					Priority(1).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-main", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "5").
+							AssignmentPodCount(1).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 1,
+										Values: []string{
+											"z1",
+										},
+									},
+								},
+							}).Obj(),
+					).
+					Admitted(true).
+					PodSets(*utiltesting.MakePodSet("one", 1).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "5").
+						Obj()).
+					Obj(),
+			},
+			wantPreempted: sets.New[workload.Reference]("default/low-priority-admitted"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"tas-main": {"default/foo"},
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "low-priority-admitted"},
+					EventType: "Normal",
+					Reason:    "Preempted",
+					Message:   "Preempted to accommodate a workload (UID: UNKNOWN, JobUID: UNKNOWN) due to prioritization in the ClusterQueue",
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "foo"},
+					EventType: "Warning",
+					Reason:    "Pending",
+					Message:   `couldn't assign flavors to pod set one: insufficient unused quota for cpu in flavor tas-default, 5 more needed. Pending the preemption of 1 workload(s)`,
+				},
+			},
+		},
 		"only low priority workload is preempted": {
 			// This test case demonstrates the baseline scenario where there
 			// is only one low-priority workload and it gets preempted.
@@ -5670,8 +7393,8 @@ func TestScheduleForTASPreemption(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantPreempted: sets.New("default/low-priority-admitted"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("default/low-priority-admitted"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5735,8 +7458,8 @@ func TestScheduleForTASPreemption(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantPreempted: sets.New("default/low-priority-admitted"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("default/low-priority-admitted"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/high-priority-waiting"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5821,8 +7544,8 @@ func TestScheduleForTASPreemption(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantPreempted: sets.New("default/low-priority-admitted"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("default/low-priority-admitted"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5909,8 +7632,8 @@ func TestScheduleForTASPreemption(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantPreempted: sets.New("default/low-priority-admitted"),
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantPreempted: sets.New[workload.Reference]("default/low-priority-admitted"),
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/foo"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -5981,10 +7704,10 @@ func TestScheduleForTASPreemption(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/low-priority-which-would-fit"},
 			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-main": {"default/mid-priority-waiting"},
 			},
 			wantEvents: []utiltesting.EventRecord{
@@ -6000,7 +7723,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
@@ -6010,7 +7733,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()
@@ -6021,13 +7744,10 @@ func TestScheduleForTASPreemption(t *testing.T) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {
@@ -6046,14 +7766,14 @@ func TestScheduleForTASPreemption(t *testing.T) {
 					t.Fatalf("Inserting queue %s/%s in manager: %v", q.Namespace, q.Name, err)
 				}
 			}
-			initiallyAdmittedWorkloads := sets.New[string]()
+			initiallyAdmittedWorkloads := sets.New[workload.Reference]()
 			for _, w := range tc.workloads {
 				if workload.IsAdmitted(&w) {
 					initiallyAdmittedWorkloads.Insert(workload.Key(&w))
 				}
 			}
 			scheduler := New(qManager, cqCache, cl, recorder)
-			gotScheduled := make([]string, 0)
+			gotScheduled := make([]workload.Reference, 0)
 			var mu sync.Mutex
 			scheduler.applyAdmission = func(ctx context.Context, w *kueue.Workload) error {
 				mu.Lock()
@@ -6067,7 +7787,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 				func() { wg.Done() },
 			))
 
-			gotPreempted := sets.New[string]()
+			gotPreempted := sets.New[workload.Reference]()
 			scheduler.preemptor.OverrideApply(func(_ context.Context, w *kueue.Workload, _, _ string) error {
 				mu.Lock()
 				gotPreempted.Insert(workload.Key(w))
@@ -6088,7 +7808,7 @@ func TestScheduleForTASPreemption(t *testing.T) {
 			if diff := cmp.Diff(tc.wantPreempted, gotPreempted); diff != "" {
 				t.Errorf("Unexpected preemptions (-want,+got):\n%s", diff)
 			}
-			gotAssignments := make(map[string]kueue.Admission)
+			gotAssignments := make(map[workload.Reference]kueue.Admission)
 			for cqName, c := range snapshot.ClusterQueues() {
 				for name, w := range c.Workloads {
 					if initiallyAdmittedWorkloads.Has(workload.Key(w.Obj)) {
@@ -6216,17 +7936,17 @@ func TestScheduleForTASCohorts(t *testing.T) {
 		workloads       []kueue.Workload
 
 		// wantNewAssignments is a summary of all new admissions in the cache after this cycle.
-		wantNewAssignments map[string]kueue.Admission
+		wantNewAssignments map[workload.Reference]kueue.Admission
 		// wantLeft is the workload keys that are left in the queues after this cycle.
-		wantLeft map[kueue.ClusterQueueReference][]string
+		wantLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantInadmissibleLeft is the workload keys that are left in the inadmissible state after this cycle.
-		wantInadmissibleLeft map[kueue.ClusterQueueReference][]string
+		wantInadmissibleLeft map[kueue.ClusterQueueReference][]workload.Reference
 		// wantPreempted is the keys of the workloads that get preempted in the scheduling cycle.
-		wantPreempted sets.Set[string]
+		wantPreempted sets.Set[workload.Reference]
 		// wantEvents asserts on the events, the comparison options are passed by eventCmpOpts
 		wantEvents []utiltesting.EventRecord
 		// eventCmpOpts are the comparison options for the events
-		eventCmpOpts []cmp.Option
+		eventCmpOpts cmp.Options
 	}{
 		"workload which requires borrowing gets scheduled": {
 			nodes:           defaultTwoNodes,
@@ -6242,7 +7962,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "6").
 					AssignmentPodCount(6).
@@ -6264,7 +7984,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1"},
@@ -6318,11 +8038,11 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			wantPreempted: sets.New[workload.Reference]("default/a1-admitted"),
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6429,11 +8149,11 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			wantPreempted: sets.New[workload.Reference]("default/a1-admitted"),
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1-admitted"},
@@ -6518,11 +8238,11 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			wantPreempted: sets.New("default/a2-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			wantPreempted: sets.New[workload.Reference]("default/a2-admitted"),
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a2-admitted"},
@@ -6643,12 +8363,12 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 				"tas-cq-c": {"default/c1"},
 			},
-			wantPreempted: sets.New("default/a2-admitted", "default/a3-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			wantPreempted: sets.New[workload.Reference]("default/a2-admitted", "default/a3-admitted"),
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6695,7 +8415,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "5").
 					AssignmentPodCount(1).
@@ -6725,7 +8445,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6772,7 +8492,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1").
 					AssignmentPodCount(1).
@@ -6802,7 +8522,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6849,7 +8569,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "1").
 					AssignmentPodCount(1).
@@ -6865,10 +8585,10 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6910,10 +8630,10 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "5").
 					AssignmentPodCount(5).
@@ -6929,7 +8649,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
@@ -6973,7 +8693,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantNewAssignments: map[string]kueue.Admission{
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
 				"default/a1": *utiltesting.MakeAdmission("tas-cq-a", "one").
 					Assignment(corev1.ResourceCPU, "tas-default", "2").
 					AssignmentPodCount(1).
@@ -6989,10 +8709,10 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						},
 					}).Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-b": {"default/b1"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a1"},
@@ -7068,12 +8788,12 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-a": {"default/a2"},
 				"tas-cq-b": {"default/b1"},
 			},
-			wantPreempted: sets.New("default/a1-admitted"),
-			eventCmpOpts:  []cmp.Option{eventIgnoreMessage},
+			wantPreempted: sets.New[workload.Reference]("default/a1-admitted"),
+			eventCmpOpts:  cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
@@ -7093,6 +8813,83 @@ func TestScheduleForTASCohorts(t *testing.T) {
 			},
 		},
 		"preempting workload without targets reserves capacity so that lower priority workload cannot use it": {
+			nodes:           []corev1.Node{defaultNodeY1},
+			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues: []kueue.ClusterQueue{*utiltesting.MakeClusterQueue("tas-cq-a").
+				Cohort("tas-cohort-main").
+				Preemption(kueue.ClusterQueuePreemption{
+					WithinClusterQueue:  kueue.PreemptionPolicyLowerPriority,
+					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+				}).
+				ResourceGroup(*utiltesting.MakeFlavorQuotas("tas-default").
+					Resource(corev1.ResourceCPU, "8", "0").
+					Resource(corev1.ResourceMemory, "4Gi", "0").Obj()).
+				Obj(), defaultClusterQueueB},
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("a1-admitted", "default").
+					Queue("tas-lq-a").
+					Priority(2).
+					ReserveQuota(
+						utiltesting.MakeAdmission("tas-cq-a", "one").
+							Assignment(corev1.ResourceCPU, "tas-default", "2").
+							AssignmentPodCount(2).
+							TopologyAssignment(&kueue.TopologyAssignment{
+								Levels: utiltas.Levels(&defaultSingleLevelTopology),
+								Domains: []kueue.TopologyDomainAssignment{
+									{
+										Count: 2,
+										Values: []string{
+											"y1",
+										},
+									},
+								},
+							}).Obj(),
+					).
+					Admitted(true).
+					PodSets(*utiltesting.MakePodSet("one", 2).
+						RequiredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+				*utiltesting.MakeWorkload("a2", "default").
+					Queue("tas-lq-a").
+					Priority(2).
+					PodSets(*utiltesting.MakePodSet("one", 4).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+				*utiltesting.MakeWorkload("b1", "default").
+					Queue("tas-lq-b").
+					Priority(1).
+					PodSets(*utiltesting.MakePodSet("one", 3).
+						PreferredTopologyRequest(corev1.LabelHostname).
+						Request(corev1.ResourceCPU, "1").
+						Obj()).
+					Obj(),
+			},
+			wantLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"tas-cq-b": {"default/b1"},
+			},
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
+				"tas-cq-a": {"default/a2"},
+			},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
+					Reason:    "Pending",
+					EventType: corev1.EventTypeWarning,
+				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
+					Reason:    "Pending",
+					EventType: corev1.EventTypeWarning,
+				},
+			},
+		},
+		"preempting workload without targets doesn't reserve capacity when it can always reclaim": {
 			nodes:           []corev1.Node{defaultNodeY1},
 			topologies:      []kueuealpha.Topology{defaultSingleLevelTopology},
 			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
@@ -7149,31 +8946,50 @@ func TestScheduleForTASCohorts(t *testing.T) {
 						Obj()).
 					Obj(),
 			},
-			wantLeft: map[kueue.ClusterQueueReference][]string{
-				"tas-cq-b": {"default/b1"},
-			},
-			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]string{
+			wantInadmissibleLeft: map[kueue.ClusterQueueReference][]workload.Reference{
 				"tas-cq-a": {"default/a2"},
 			},
-			eventCmpOpts: []cmp.Option{eventIgnoreMessage},
+			eventCmpOpts: cmp.Options{eventIgnoreMessage},
 			wantEvents: []utiltesting.EventRecord{
 				{
-					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
-					Reason:    "Pending",
-					EventType: corev1.EventTypeWarning,
+					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
+					Reason:    "QuotaReserved",
+					EventType: corev1.EventTypeNormal,
 				},
 				{
 					Key:       types.NamespacedName{Namespace: "default", Name: "b1"},
-					Reason:    "Pending",
-					EventType: corev1.EventTypeWarning,
+					Reason:    "Admitted",
+					EventType: corev1.EventTypeNormal,
 				},
+				{
+					Key:       types.NamespacedName{Namespace: "default", Name: "a2"},
+					EventType: "Warning",
+					Reason:    "Pending",
+					Message:   `couldn't assign flavors to pod set one: topology "tas-single-level" allows to fit only 3 out of 4 pod(s)`,
+				},
+			},
+			wantNewAssignments: map[workload.Reference]kueue.Admission{
+				"default/b1": *utiltesting.MakeAdmission("tas-cq-b", "one").
+					Assignment(corev1.ResourceCPU, "tas-default", "3").
+					AssignmentPodCount(3).
+					TopologyAssignment(&kueue.TopologyAssignment{
+						Levels: utiltas.Levels(&defaultSingleLevelTopology),
+						Domains: []kueue.TopologyDomainAssignment{
+							{
+								Count: 3,
+								Values: []string{
+									"y1",
+								},
+							},
+						},
+					}).Obj(),
 			},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithLists(
@@ -7183,7 +8999,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 					&corev1.NodeList{Items: tc.nodes},
 					&kueue.LocalQueueList{Items: queues}).
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 				)
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
 			cl := clientBuilder.Build()
@@ -7194,13 +9010,10 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				return kueue.TopologyReference(tc.topologies[i].Name), tc.topologies[i]
 			})
 			for _, flavor := range tc.resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(&flavor)
+				cqCache.AddOrUpdateResourceFlavor(log, &flavor)
 				if flavor.Spec.TopologyName != nil {
 					t := topologyByName[*flavor.Spec.TopologyName]
-					tasCache := cqCache.TASCache()
-					levels := utiltas.Levels(&t)
-					tasFlavorCache := tasCache.NewTASFlavorCache(*flavor.Spec.TopologyName, levels, flavor.Spec.NodeLabels, flavor.Spec.Tolerations)
-					tasCache.Set(kueue.ResourceFlavorReference(flavor.Name), tasFlavorCache)
+					cqCache.AddOrUpdateTopology(log, &t)
 				}
 			}
 			for _, cq := range tc.clusterQueues {
@@ -7219,14 +9032,14 @@ func TestScheduleForTASCohorts(t *testing.T) {
 					t.Fatalf("Inserting queue %s/%s in manager: %v", q.Namespace, q.Name, err)
 				}
 			}
-			initiallyAdmittedWorkloads := sets.New[string]()
+			initiallyAdmittedWorkloads := sets.New[workload.Reference]()
 			for _, w := range tc.workloads {
 				if workload.IsAdmitted(&w) {
 					initiallyAdmittedWorkloads.Insert(workload.Key(&w))
 				}
 			}
 			scheduler := New(qManager, cqCache, cl, recorder)
-			gotScheduled := make([]string, 0)
+			gotScheduled := make([]workload.Reference, 0)
 			var mu sync.Mutex
 			scheduler.applyAdmission = func(ctx context.Context, w *kueue.Workload) error {
 				mu.Lock()
@@ -7240,7 +9053,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 				func() { wg.Done() },
 			))
 
-			gotPreempted := sets.New[string]()
+			gotPreempted := sets.New[workload.Reference]()
 			scheduler.preemptor.OverrideApply(func(_ context.Context, w *kueue.Workload, _, _ string) error {
 				mu.Lock()
 				gotPreempted.Insert(workload.Key(w))
@@ -7261,7 +9074,7 @@ func TestScheduleForTASCohorts(t *testing.T) {
 			if diff := cmp.Diff(tc.wantPreempted, gotPreempted); diff != "" {
 				t.Errorf("Unexpected preemptions (-want,+got):\n%s", diff)
 			}
-			gotAssignments := make(map[string]kueue.Admission)
+			gotAssignments := make(map[workload.Reference]kueue.Admission)
 			for cqName, c := range snapshot.ClusterQueues() {
 				for name, w := range c.Workloads {
 					if initiallyAdmittedWorkloads.Has(workload.Key(w.Obj)) {

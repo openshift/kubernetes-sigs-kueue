@@ -23,7 +23,6 @@ import (
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -41,12 +40,7 @@ var _ = ginkgo.Describe("ResourceFlavor Webhook", func() {
 	var ns *corev1.Namespace
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "core-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "core-")
 	})
 
 	ginkgo.AfterEach(func() {
@@ -61,7 +55,7 @@ var _ = ginkgo.Describe("ResourceFlavor Webhook", func() {
 					Value:  "true",
 					Effect: corev1.TaintEffectNoSchedule,
 				}).Obj()
-			gomega.Expect(k8sClient.Create(ctx, resourceFlavor)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, resourceFlavor)
 			defer func() {
 				var rf kueue.ResourceFlavor
 				gomega.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(resourceFlavor), &rf)).Should(gomega.Succeed())
@@ -73,7 +67,7 @@ var _ = ginkgo.Describe("ResourceFlavor Webhook", func() {
 		ginkgo.It("Should have a finalizer", func() {
 			ginkgo.By("Creating a new empty resourceFlavor")
 			resourceFlavor := testing.MakeResourceFlavor("resource-flavor").Obj()
-			gomega.Expect(k8sClient.Create(ctx, resourceFlavor)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, resourceFlavor)
 			defer func() {
 				var rf kueue.ResourceFlavor
 				gomega.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(resourceFlavor), &rf)).Should(gomega.Succeed())
@@ -90,13 +84,13 @@ var _ = ginkgo.Describe("ResourceFlavor Webhook", func() {
 
 	ginkgo.DescribeTable("invalid number of properties", func(taintsCount int, nodeSelectorCount int, isInvalid bool) {
 		rf := testing.MakeResourceFlavor("resource-flavor")
-		for i := 0; i < taintsCount; i++ {
+		for i := range taintsCount {
 			rf = rf.Taint(corev1.Taint{
 				Key:    fmt.Sprintf("t%d", i),
 				Effect: corev1.TaintEffectNoExecute,
 			})
 		}
-		for i := 0; i < nodeSelectorCount; i++ {
+		for i := range nodeSelectorCount {
 			rf = rf.NodeLabel(fmt.Sprintf("l%d", i), "")
 		}
 		resourceFlavor := rf.Obj()
@@ -124,7 +118,7 @@ var _ = ginkgo.Describe("ResourceFlavor Webhook", func() {
 		ginkgo.It("Should fail to update", func() {
 			ginkgo.By("Creating a new resourceFlavor")
 			resourceFlavor := testing.MakeResourceFlavor("resource-flavor").Obj()
-			gomega.Expect(k8sClient.Create(ctx, resourceFlavor)).Should(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, resourceFlavor)
 			defer func() {
 				var rf kueue.ResourceFlavor
 				gomega.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(resourceFlavor), &rf)).To(gomega.Succeed())

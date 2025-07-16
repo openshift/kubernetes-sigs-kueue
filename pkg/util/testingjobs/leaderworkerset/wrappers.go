@@ -97,11 +97,6 @@ func (w *LeaderWorkerSetWrapper) UID(uid string) *LeaderWorkerSetWrapper {
 	return w
 }
 
-func (w *LeaderWorkerSetWrapper) WithOwnerReference(ownerReference metav1.OwnerReference) *LeaderWorkerSetWrapper {
-	w.OwnerReferences = append(w.OwnerReferences, ownerReference)
-	return w
-}
-
 func (w *LeaderWorkerSetWrapper) StartupPolicy(startupPolicyType leaderworkersetv1.StartupPolicyType) *LeaderWorkerSetWrapper {
 	w.Spec.StartupPolicy = startupPolicyType
 	return w
@@ -130,6 +125,15 @@ func (w *LeaderWorkerSetWrapper) WorkerTemplateSpecQueue(q string) *LeaderWorker
 	return w.WorkerTemplateSpecLabel(constants.QueueLabel, q)
 }
 
+// LeaderTemplateSpecLabel sets the label of the pod template spec of the LeaderLeaderSet
+func (w *LeaderWorkerSetWrapper) LeaderTemplateSpecLabel(k, v string) *LeaderWorkerSetWrapper {
+	if w.Spec.LeaderWorkerTemplate.LeaderTemplate.Labels == nil {
+		w.Spec.LeaderWorkerTemplate.LeaderTemplate.Labels = make(map[string]string, 1)
+	}
+	w.Spec.LeaderWorkerTemplate.LeaderTemplate.Labels[k] = v
+	return w
+}
+
 // LeaderTemplateSpecAnnotation sets the annotation of the pod template spec of the LeaderLeaderSet
 func (w *LeaderWorkerSetWrapper) LeaderTemplateSpecAnnotation(k, v string) *LeaderWorkerSetWrapper {
 	if w.Spec.LeaderWorkerTemplate.LeaderTemplate.Annotations == nil {
@@ -142,6 +146,12 @@ func (w *LeaderWorkerSetWrapper) LeaderTemplateSpecAnnotation(k, v string) *Lead
 // Replicas sets the number of replicas of the LeaderWorkerSet.
 func (w *LeaderWorkerSetWrapper) Replicas(n int32) *LeaderWorkerSetWrapper {
 	w.Spec.Replicas = ptr.To[int32](n)
+	return w
+}
+
+// ReadyReplicas sets the number of ready replicas of the LeaderWorkerSet.
+func (w *LeaderWorkerSetWrapper) ReadyReplicas(n int32) *LeaderWorkerSetWrapper {
+	w.Status.ReadyReplicas = n
 	return w
 }
 
@@ -186,6 +196,11 @@ func (w *LeaderWorkerSetWrapper) Limit(r corev1.ResourceName, v string) *LeaderW
 	return w
 }
 
+// RequestAndLimit adds a resource request and limit to the default container.
+func (w *LeaderWorkerSetWrapper) RequestAndLimit(r corev1.ResourceName, v string) *LeaderWorkerSetWrapper {
+	return w.Request(r, v).Limit(r, v)
+}
+
 // LeaderTemplate sets the leader template of the LeaderWorkerSet.
 func (w *LeaderWorkerSetWrapper) LeaderTemplate(leader corev1.PodTemplateSpec) *LeaderWorkerSetWrapper {
 	w.Spec.LeaderWorkerTemplate.LeaderTemplate = &leader
@@ -196,4 +211,17 @@ func (w *LeaderWorkerSetWrapper) LeaderTemplate(leader corev1.PodTemplateSpec) *
 func (w *LeaderWorkerSetWrapper) WorkerTemplate(worker corev1.PodTemplateSpec) *LeaderWorkerSetWrapper {
 	w.Spec.LeaderWorkerTemplate.WorkerTemplate = worker
 	return w
+}
+
+func (w *LeaderWorkerSetWrapper) TerminationGracePeriod(seconds int64) *LeaderWorkerSetWrapper {
+	if w.Spec.LeaderWorkerTemplate.LeaderTemplate != nil {
+		w.Spec.LeaderWorkerTemplate.LeaderTemplate.Spec.TerminationGracePeriodSeconds = &seconds
+	}
+	w.Spec.LeaderWorkerTemplate.WorkerTemplate.Spec.TerminationGracePeriodSeconds = &seconds
+	return w
+}
+
+// WorkloadPriorityClass sets workloadpriorityclass.
+func (w *LeaderWorkerSetWrapper) WorkloadPriorityClass(wpc string) *LeaderWorkerSetWrapper {
+	return w.Label(constants.WorkloadPriorityClassLabel, wpc)
 }

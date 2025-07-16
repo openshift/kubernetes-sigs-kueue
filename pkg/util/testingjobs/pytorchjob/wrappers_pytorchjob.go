@@ -58,7 +58,7 @@ type PyTorchReplicaSpecRequirement struct {
 }
 
 func (j *PyTorchJobWrapper) PyTorchReplicaSpecs(replicaSpecs ...PyTorchReplicaSpecRequirement) *PyTorchJobWrapper {
-	j = j.PyTorchReplicaSpecsDefault()
+	j.PyTorchReplicaSpecsDefault()
 	for _, rs := range replicaSpecs {
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Replicas = ptr.To[int32](rs.ReplicaCount)
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Name = rs.Name
@@ -68,7 +68,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecs(replicaSpecs ...PyTorchReplicaSp
 		j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Spec.Containers[0].Args = rs.Args
 
 		if rs.Annotations != nil {
-			j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.ObjectMeta.Annotations = rs.Annotations
+			j.Spec.PyTorchReplicaSpecs[rs.ReplicaType].Template.Annotations = rs.Annotations
 		}
 	}
 
@@ -83,7 +83,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecsDefault() *PyTorchJobWrapper {
 				RestartPolicy: "Never",
 				Containers: []corev1.Container{
 					{
-						Name:    "c",
+						Name:    "pytorch",
 						Image:   "pause",
 						Command: []string{},
 						Resources: corev1.ResourceRequirements{
@@ -104,7 +104,7 @@ func (j *PyTorchJobWrapper) PyTorchReplicaSpecsDefault() *PyTorchJobWrapper {
 				RestartPolicy: "Never",
 				Containers: []corev1.Container{
 					{
-						Name:    "c",
+						Name:    "pytorch",
 						Image:   "pause",
 						Command: []string{},
 						Resources: corev1.ResourceRequirements{
@@ -179,6 +179,11 @@ func (j *PyTorchJobWrapper) Limit(replicaType kftraining.ReplicaType, r corev1.R
 	return j
 }
 
+// RequestAndLimit adds a resource request and limit to the default container.
+func (j *PyTorchJobWrapper) RequestAndLimit(replicaType kftraining.ReplicaType, r corev1.ResourceName, v string) *PyTorchJobWrapper {
+	return j.Request(replicaType, r, v).Limit(replicaType, r, v)
+}
+
 // Parallelism updates job parallelism.
 func (j *PyTorchJobWrapper) Parallelism(p int32) *PyTorchJobWrapper {
 	j.Spec.PyTorchReplicaSpecs[kftraining.PyTorchJobReplicaTypeWorker].Replicas = ptr.To(p)
@@ -215,7 +220,7 @@ func (j *PyTorchJobWrapper) PodLabel(replicaType kftraining.ReplicaType, k, v st
 	return j
 }
 
-// Condition adds a condition
+// StatusConditions adds a condition.
 func (j *PyTorchJobWrapper) StatusConditions(c kftraining.JobCondition) *PyTorchJobWrapper {
 	j.Status.Conditions = append(j.Status.Conditions, c)
 	return j
@@ -236,5 +241,11 @@ func (j *PyTorchJobWrapper) SetTypeMeta() *PyTorchJobWrapper {
 // ManagedBy adds a managedby.
 func (j *PyTorchJobWrapper) ManagedBy(c string) *PyTorchJobWrapper {
 	j.Spec.RunPolicy.ManagedBy = &c
+	return j
+}
+
+func (j *PyTorchJobWrapper) TerminationGracePeriodSeconds(seconds int64) *PyTorchJobWrapper {
+	j.Spec.PyTorchReplicaSpecs[kftraining.PyTorchJobReplicaTypeMaster].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
+	j.Spec.PyTorchReplicaSpecs[kftraining.PyTorchJobReplicaTypeWorker].Template.Spec.TerminationGracePeriodSeconds = ptr.To(seconds)
 	return j
 }

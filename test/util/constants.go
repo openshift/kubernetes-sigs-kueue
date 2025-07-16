@@ -42,6 +42,7 @@ const (
 	// a change in the deployment status.
 	StartUpTimeout     = 5 * time.Minute
 	ConsistentDuration = time.Second
+	ShortInterval      = 10 * time.Millisecond
 	Interval           = time.Millisecond * 250
 )
 
@@ -64,7 +65,16 @@ var (
 )
 
 var (
-	BehaviorWaitForDeletion           = []string{"netexec"}
-	BehaviorWaitForDeletionFailOnExit = []string{"pause"}
-	BehaviorExitFast                  = []string{"entrypoint-tester"}
+	// For full documentation on agnhost subcommands see the following documentation:
+	// https://pkg.go.dev/k8s.io/kubernetes/test/images/agnhost#section-readme
+
+	// Starts a simple HTTP(S) with a few endpoints, one of which is the /exit endpoint which exits with `exit 0`
+	BehaviorWaitForDeletion = []string{"netexec"}
+
+	// Starts a container which always ends in failure on deletion.
+	// To achieve this runs simple webserver, but does not register any signal handler.
+	BehaviorWaitForDeletionFailOnExit = []string{"test-webserver"}
+
+	// The agnhost container will print args passed and `exit 0`
+	BehaviorExitFast = []string{"entrypoint-tester"}
 )

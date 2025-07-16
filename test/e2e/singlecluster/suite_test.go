@@ -28,7 +28,6 @@ import (
 	"github.com/onsi/gomega"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/clock"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	visibilityv1beta1 "sigs.k8s.io/kueue/client-go/clientset/versioned/typed/visibility/v1beta1"
@@ -44,6 +43,7 @@ var (
 	ctx                          context.Context
 	visibilityClient             visibilityv1beta1.VisibilityV1beta1Interface
 	impersonatedVisibilityClient visibilityv1beta1.VisibilityV1beta1Interface
+	kueueNS                      = util.GetKueueNamespace()
 )
 
 func TestAPIs(t *testing.T) {
@@ -58,19 +58,22 @@ func TestAPIs(t *testing.T) {
 }
 
 var _ = ginkgo.BeforeSuite(func() {
-	ctrl.SetLogger(util.NewTestingLogger(ginkgo.GinkgoWriter, -3))
+	util.SetupLogger()
 
 	k8sClient, cfg = util.CreateClientUsingCluster("")
 	restClient = util.CreateRestClient(cfg)
 	visibilityClient = util.CreateVisibilityClient("")
-	impersonatedVisibilityClient = util.CreateVisibilityClient("system:serviceaccount:kueue-system:default")
-	ctx = context.Background()
+	impersonatedVisibilityClient = util.CreateVisibilityClient(fmt.Sprintf("system:serviceaccount:%s:default", kueueNS))
+	ctx = ginkgo.GinkgoT().Context()
 
 	waitForAvailableStart := time.Now()
 	util.WaitForKueueAvailability(ctx, k8sClient)
-	/* Disable these lines for Openshift as it doesn't support these integrations yet. */
-	//util.WaitForJobSetAvailability(ctx, k8sClient)
-	//util.WaitForLeaderWorkerSetAvailability(ctx, k8sClient)
-	//util.WaitForAppWrapperAvailability(ctx, k8sClient)
-	ginkgo.GinkgoLogr.Info("Kueue, JobSet, LeaderWorkerSet and AppWrapper operators are available in the cluster", "waitingTime", time.Since(waitForAvailableStart))
+	util.WaitForJobSetAvailability(ctx, k8sClient)
+	util.WaitForLeaderWorkerSetAvailability(ctx, k8sClient)
+	util.WaitForAppWrapperAvailability(ctx, k8sClient)
+	util.WaitForKubeFlowTrainingOperatorAvailability(ctx, k8sClient)
+	ginkgo.GinkgoLogr.Info(
+		"Kueue and all required operators are available in the cluster",
+		"waitingTime", time.Since(waitForAvailableStart),
+	)
 })

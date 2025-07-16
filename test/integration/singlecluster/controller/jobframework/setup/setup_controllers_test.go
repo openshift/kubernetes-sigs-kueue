@@ -22,7 +22,6 @@ import (
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -51,15 +50,10 @@ var _ = ginkgo.Describe("Setup Controllers", ginkgo.Ordered, ginkgo.ContinueOnFa
 		ctx, k8sClient = fwk.SetupClient(cfg)
 		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithEnabledFrameworks([]string{jobset.FrameworkName})))
 
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "jobset-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "jobset-")
 
 		flavor = testing.MakeResourceFlavor("on-demand").Obj()
-		gomega.Expect(k8sClient.Create(ctx, flavor)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, flavor)
 
 		clusterQueue = testing.MakeClusterQueue("cluster-queue").
 			ResourceGroup(
@@ -68,7 +62,7 @@ var _ = ginkgo.Describe("Setup Controllers", ginkgo.Ordered, ginkgo.ContinueOnFa
 					Obj(),
 			).Obj()
 
-		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.MustCreate(ctx, k8sClient, clusterQueue)
 		localQueue = testing.MakeLocalQueue("queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
 	})
 
@@ -108,7 +102,7 @@ var _ = ginkgo.Describe("Setup Controllers", ginkgo.Ordered, ginkgo.ContinueOnFa
 		})
 
 		ginkgo.By("Create a JobSet", func() {
-			gomega.Expect(k8sClient.Create(ctx, jobSet)).To(gomega.Succeed())
+			util.MustCreate(ctx, k8sClient, jobSet)
 		})
 
 		ginkgo.By("Check that the JobSet was created and got suspended", func() {
