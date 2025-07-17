@@ -23,6 +23,9 @@ clientConnection:
   qps: 50
   burst: 100
 manageJobsWithoutQueueName: false
+featureGates:
+  HierarchicalCohorts: false
+  VisibilityOnDemand: false
 internalCertManagement:
   enable: false
 integrations:
