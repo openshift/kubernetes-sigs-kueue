@@ -74,8 +74,8 @@ github.com/felixge/httpsnoop
 ## explicit; go 1.17
 github.com/fsnotify/fsnotify
 github.com/fsnotify/fsnotify/internal
-# github.com/fxamacker/cbor/v2 v2.7.0
-## explicit; go 1.17
+# github.com/fxamacker/cbor/v2 v2.8.0
+## explicit; go 1.20
 github.com/fxamacker/cbor/v2
 # github.com/go-errors/errors v1.4.2
 ## explicit; go 1.14
@@ -223,7 +223,7 @@ github.com/moby/term/windows
 # github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd
 ## explicit
 github.com/modern-go/concurrent
-# github.com/modern-go/reflect2 v1.0.2
+# github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee
 ## explicit; go 1.12
 github.com/modern-go/reflect2
 # github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00
@@ -449,7 +449,7 @@ go.uber.org/zap/internal/pool
 go.uber.org/zap/internal/stacktrace
 go.uber.org/zap/zapcore
 go.uber.org/zap/zapgrpc
-# golang.org/x/crypto v0.36.0
+# golang.org/x/crypto v0.39.0
 ## explicit; go 1.23.0
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
@@ -461,12 +461,12 @@ golang.org/x/crypto/salsa20/salsa
 # golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
 ## explicit; go 1.23.0
 golang.org/x/exp/slices
-# golang.org/x/mod v0.24.0
+# golang.org/x/mod v0.25.0
 ## explicit; go 1.23.0
 golang.org/x/mod/internal/lazyregexp
 golang.org/x/mod/module
 golang.org/x/mod/semver
-# golang.org/x/net v0.38.0
+# golang.org/x/net v0.41.0
 ## explicit; go 1.23.0
 golang.org/x/net/context
 golang.org/x/net/html
@@ -486,21 +486,21 @@ golang.org/x/net/websocket
 ## explicit; go 1.23.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.14.0
+# golang.org/x/sync v0.15.0
 ## explicit; go 1.23.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/singleflight
-# golang.org/x/sys v0.32.0
+# golang.org/x/sys v0.33.0
 ## explicit; go 1.23.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-# golang.org/x/term v0.30.0
+# golang.org/x/term v0.32.0
 ## explicit; go 1.23.0
 golang.org/x/term
-# golang.org/x/text v0.23.0
+# golang.org/x/text v0.26.0
 ## explicit; go 1.23.0
 golang.org/x/text/cases
 golang.org/x/text/encoding
@@ -534,10 +534,11 @@ golang.org/x/text/unicode/norm
 # golang.org/x/time v0.11.0
 ## explicit; go 1.23.0
 golang.org/x/time/rate
-# golang.org/x/tools v0.31.0
+# golang.org/x/tools v0.34.0
 ## explicit; go 1.23.0
 golang.org/x/tools/cover
 golang.org/x/tools/go/ast/astutil
+golang.org/x/tools/go/ast/edge
 golang.org/x/tools/go/ast/inspector
 golang.org/x/tools/go/gcexportdata
 golang.org/x/tools/go/packages
@@ -545,7 +546,6 @@ golang.org/x/tools/go/types/objectpath
 golang.org/x/tools/go/types/typeutil
 golang.org/x/tools/imports
 golang.org/x/tools/internal/aliases
-golang.org/x/tools/internal/astutil/edge
 golang.org/x/tools/internal/event
 golang.org/x/tools/internal/event/core
 golang.org/x/tools/internal/event/keys
@@ -564,15 +564,15 @@ golang.org/x/tools/internal/versions
 # gomodules.xyz/jsonpatch/v2 v2.5.0
 ## explicit; go 1.20
 gomodules.xyz/jsonpatch/v2
-# google.golang.org/genproto v0.0.0-20240528184218-531527333157
-## explicit; go 1.20
+# google.golang.org/genproto v0.0.0-20241118233622-e639e219e697
+## explicit; go 1.21
 # google.golang.org/genproto/googleapis/api v0.0.0-20241219192143-6b3ec007d9bb
 ## explicit; go 1.21
 google.golang.org/genproto/googleapis/api
 google.golang.org/genproto/googleapis/api/annotations
 google.golang.org/genproto/googleapis/api/expr/v1alpha1
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20241219192143-6b3ec007d9bb
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20241223144023-3abc09e42ca8
 ## explicit; go 1.21
 google.golang.org/genproto/googleapis/rpc/errdetails
 google.golang.org/genproto/googleapis/rpc/status
@@ -1456,7 +1456,7 @@ k8s.io/kms/apis/v1beta1
 k8s.io/kms/apis/v2
 k8s.io/kms/pkg/service
 k8s.io/kms/pkg/util
-# k8s.io/kube-openapi v0.0.0-20250304201544-e5f78fe3ede9
+# k8s.io/kube-openapi v0.0.0-20250610211856-8b98d1ed966a
 ## explicit; go 1.21
 k8s.io/kube-openapi/cmd/openapi-gen
 k8s.io/kube-openapi/cmd/openapi-gen/args
@@ -1501,7 +1501,7 @@ k8s.io/kubectl/pkg/validation
 k8s.io/metrics/pkg/apis/metrics
 k8s.io/metrics/pkg/apis/metrics/install
 k8s.io/metrics/pkg/apis/metrics/v1beta1
-# k8s.io/utils v0.0.0-20241210054802-24370beab758
+# k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
 ## explicit; go 1.18
 k8s.io/utils/buffer
 k8s.io/utils/clock
