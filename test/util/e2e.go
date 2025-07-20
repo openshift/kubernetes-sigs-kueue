@@ -236,7 +236,7 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 }
 
 func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
 	waitForOperatorAvailability(ctx, k8sClient, kcmKey)
 }
 
@@ -275,7 +275,7 @@ func WaitForKubeRayOperatorAvailability(ctx context.Context, k8sClient client.Cl
 
 func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *configapi.Configuration {
 	var kueueCfg configapi.Configuration
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
 	configMap := &corev1.ConfigMap{}
 
 	gomega.Expect(k8sClient.Get(ctx, kcmKey, configMap)).To(gomega.Succeed())
@@ -285,7 +285,7 @@ func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *config
 
 func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueueCfg *configapi.Configuration) {
 	configMap := &corev1.ConfigMap{}
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-manager-config"}
 	config, err := yaml.Marshal(kueueCfg)
 
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
@@ -297,7 +297,7 @@ func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueue
 }
 
 func RestartKueueController(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
 	rolloutOperatorDeployment(ctx, k8sClient, kcmKey)
 }
 
@@ -353,9 +353,7 @@ func CreateNamespaceFromPrefixWithLog(ctx context.Context, k8sClient client.Clie
 }
 
 func CreateNamespaceFromObjectWithLog(ctx context.Context, k8sClient client.Client, ns *corev1.Namespace) *corev1.Namespace {
-	MustCreate(ctx, k8sClient, ns)
-	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns.Name)
-	ns := utiltesting.MakeNamespaceWithGenerateName(nsPrefix)
+	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns)
 	// Add label to the namespace to mark it as managed by Kueue.
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)
