@@ -353,9 +353,7 @@ func CreateNamespaceFromPrefixWithLog(ctx context.Context, k8sClient client.Clie
 }
 
 func CreateNamespaceFromObjectWithLog(ctx context.Context, k8sClient client.Client, ns *corev1.Namespace) *corev1.Namespace {
-	MustCreate(ctx, k8sClient, ns)
-	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns.Name)
-	ns := utiltesting.MakeNamespaceWithGenerateName(nsPrefix)
+	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns)
 	// Add label to the namespace to mark it as managed by Kueue.
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)

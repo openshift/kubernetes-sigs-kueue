@@ -23,3 +23,7 @@ git checkout openshift/release-0.11 config/components/manager-ocp
 # step get ocp dependency magnet
 git checkout openshift/release-0.11 pkg/openshift
 
+# cherry pick openshift pods for pod, deployment and statefulsets.
+# commented out as this branch already applied it
+# git cherry-pick 577da0b2ece0fc16bc85d0a4feabe724deb443e4
+
