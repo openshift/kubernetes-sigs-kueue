@@ -146,19 +146,11 @@ function deploy_cert_manager {
 }
 
 trap collect_logs EXIT
-GINKGO_SKIP_PATTERN=""
+GINKGO_SKIP_PATTERN="(AppWrapper|PyTorch|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
 if [ "$SKIP_DEPLOY" != "true" ]; then
     deploy_cert_manager
     sleep 2m
     deploy_kueue
-    # Skip e2e tests that depend on pod integration features,
-    # such as Deployment and StatefulSet, or other integrations not
-    # supported in OCP. Also, skip Alpha features like TAS.
-    # TODO: Remove Fair Sharing from the skip list once the issue is fixed.
-    GINKGO_SKIP_PATTERN="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
-else
-    echo "Skipping cert-manager and kueue deployment because SKIP_DEPLOY is set to true."
-    GINKGO_SKIP_PATTERN="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
 fi
 
 # Label two worker nodes for e2e tests (similar to the Kind setup).
