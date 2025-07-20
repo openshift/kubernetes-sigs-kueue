@@ -129,7 +129,7 @@ label_worker_nodes
 # supported in OCP. Also, skip Alpha features like TAS.
 # TODO: Remove Fair Sharing from the skip list once the issue is fixed.
 $GINKGO $GINKGO_ARGS \
-  --skip="(AppWrapper|JobSet|LeaderWorkerSet|Pod|Deployment|StatefulSet|Metrics|Fair Sharing|TopologyAwareScheduling)" \
+  --skip="(AppWrapper|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods)" \
   --junit-report=junit.xml \
   --json-report=e2e.json \
   --output-dir="$ARTIFACTS" \
