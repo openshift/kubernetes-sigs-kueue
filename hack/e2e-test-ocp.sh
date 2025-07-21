@@ -148,6 +148,7 @@ trap collect_logs EXIT
 GINKGO_SKIP_PATTERN=""
 if [ "$SKIP_DEPLOY" != "true" ]; then
     deploy_cert_manager
+    sleep 3m
     deploy_kueue
     # Skip e2e tests that depend on pod integration features,
     # such as Deployment and StatefulSet, or other integrations not
