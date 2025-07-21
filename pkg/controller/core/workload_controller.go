@@ -439,10 +439,7 @@ func (r *WorkloadReconciler) reconcileOnLocalQueueActiveState(ctx context.Contex
 		if err == nil {
 			cqName := lq.Spec.ClusterQueue
 			if slices.Contains(r.queues.GetClusterQueueNames(), cqName) {
-				metrics.ReportEvictedWorkloads(cqName, kueue.WorkloadEvictedByLocalQueueStopped)
-				if features.Enabled(features.LocalQueueMetrics) {
-					metrics.ReportLocalQueueEvictedWorkloads(metrics.LQRefFromWorkload(wl), kueue.WorkloadEvictedByLocalQueueStopped)
-				}
+				workload.ReportEvictedWorkload(r.recorder, wl, cqName, kueue.WorkloadEvictedByLocalQueueStopped, "The LocalQueue is stopped")
 			}
 		}
 		return true, client.IgnoreNotFound(err)
@@ -793,7 +790,10 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.Conf
 			&handler.TypedEnqueueRequestForObject[*kueue.Workload]{},
 			r,
 		)).
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(false),
+			MaxConcurrentReconciles: mgr.GetControllerOptions().GroupKindConcurrency[kueue.GroupVersion.WithKind("Workload").GroupKind().String()],
+		}).
 		Watches(&corev1.LimitRange{}, ruh).
 		Watches(&nodev1.RuntimeClass{}, ruh).
 		Watches(&kueue.ClusterQueue{}, wqh).
