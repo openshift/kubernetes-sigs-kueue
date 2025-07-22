@@ -675,7 +675,7 @@ func (r *WorkloadReconciler) Create(e event.TypedCreateEvent[*kueue.Workload]) b
 	wlCopy := e.Object.DeepCopy()
 	workload.AdjustResources(ctx, r.client, wlCopy)
 
-	if !workload.HasQuotaReservation(e.Object) {
+	if workload.IsActive(e.Object) && !workload.HasQuotaReservation(e.Object) {
 		if err := r.queues.AddOrUpdateWorkload(wlCopy); err != nil {
 			log.V(2).Info("ignored an error for now", "error", err)
 		}
@@ -861,7 +861,10 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.Conf
 			&handler.TypedEnqueueRequestForObject[*kueue.Workload]{},
 			r,
 		)).
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(false),
+			MaxConcurrentReconciles: mgr.GetControllerOptions().GroupKindConcurrency[kueue.GroupVersion.WithKind("Workload").GroupKind().String()],
+		}).
 		Watches(&corev1.LimitRange{}, ruh).
 		Watches(&nodev1.RuntimeClass{}, ruh).
 		Watches(&kueue.ClusterQueue{}, wqh).

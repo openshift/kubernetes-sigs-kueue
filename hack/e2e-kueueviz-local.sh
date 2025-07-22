@@ -21,9 +21,6 @@ ROOT_DIR="$SOURCE_DIR/.."
 # shellcheck source=hack/e2e-common.sh
 source "${SOURCE_DIR}/e2e-common.sh"
 
-# Set CYPRESS_IMAGE_NAME to the value of the env var or default to cypress/base
-CYPRESS_IMAGE_NAME="${CYPRESS_IMAGE_NAME:-cypress/base}"
-
 # Function to clean up background processes
 cleanup() {
   echo "Cleaning up kueueviz processes"
@@ -54,11 +51,12 @@ cd -
 
 # Start kueueviz frontend
 cd "${ROOT_DIR}/cmd/kueueviz/frontend"
-npm start & FRONTEND_PID=$!
+npm run dev & FRONTEND_PID=$!
 cd -
 
 cd "${ROOT_DIR}/test/e2e/kueueviz/"
 # Run Cypress tests for kueueviz frontend
 npm run cypress:run --headless
+cd -
 
 # The trap will handle cleanup 
