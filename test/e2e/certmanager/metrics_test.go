@@ -77,11 +77,11 @@ var _ = ginkgo.Describe("Metrics", ginkgo.Ordered, func() {
 
 		curlPod = testingjobspod.MakePod("curl-metrics", config.DefaultNamespace).
 			ServiceAccountName(serviceAccountName).
-			Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+			Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 			TerminationGracePeriod(1).
 			Obj()
 		curlPod.Spec.Volumes = []corev1.Volume{
-			corev1.Volume{
+			{
 				Name: "metrics-certs",
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{

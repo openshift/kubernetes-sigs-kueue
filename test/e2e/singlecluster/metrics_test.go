@@ -79,7 +79,7 @@ var _ = ginkgo.Describe("Metrics", func() {
 
 		curlPod = testingjobspod.MakePod("curl-metrics", config.DefaultNamespace).
 			ServiceAccountName(serviceAccountName).
-			Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+			Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 			TerminationGracePeriod(1).
 			Obj()
 		util.MustCreate(ctx, k8sClient, curlPod)
@@ -422,7 +422,7 @@ var _ = ginkgo.Describe("Metrics", func() {
 			util.ExpectWorkloadsToBeAdmitted(ctx, k8sClient, lowerWorkload1)
 
 			lowerJob2 = testingjob.MakeJob("lower-job-2", ns.Name).
-				Queue(v1beta1.LocalQueueName(localQueue1.Name)).
+				Queue(v1beta1.LocalQueueName(localQueue2.Name)).
 				RequestAndLimit("cpu", "1").
 				Obj()
 			util.MustCreate(ctx, k8sClient, lowerJob2)
