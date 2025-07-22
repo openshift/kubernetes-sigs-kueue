@@ -54,13 +54,34 @@ import (
 )
 
 const (
-	// E2eTestAgnHostImageOld is the image used for testing rolling update.
-	E2eTestAgnHostImageOld = "registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6"
-	// E2eTestAgnHostImage is the image used for testing.
-	E2eTestAgnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
+	defaultE2eTestAgnHostImageOld = "registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6"
+	defaultE2eTestAgnHostImage    = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
 
 	defaultMetricsServiceName = "kueue-controller-manager-metrics-service"
 )
+
+func GetKueueNamespace() string {
+	if ns := os.Getenv("KUEUE_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return configapi.DefaultNamespace
+}
+
+func GetAgnHostImageOld() string {
+	if image := os.Getenv("E2E_TEST_AGNHOST_IMAGE_OLD"); image != "" {
+		return image
+	}
+
+	return defaultE2eTestAgnHostImageOld
+}
+
+func GetAgnHostImage() string {
+	if image := os.Getenv("E2E_TEST_AGNHOST_IMAGE"); image != "" {
+		return image
+	}
+
+	return defaultE2eTestAgnHostImage
+}
 
 func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) {
 	cfg, err := config.GetConfigWithContext(kContext)
@@ -332,8 +353,14 @@ func CreateNamespaceFromPrefixWithLog(ctx context.Context, k8sClient client.Clie
 }
 
 func CreateNamespaceFromObjectWithLog(ctx context.Context, k8sClient client.Client, ns *corev1.Namespace) *corev1.Namespace {
-	MustCreate(ctx, k8sClient, ns)
-	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns.Name)
+	ginkgo.GinkgoLogr.Info("Created namespace", "namespace", ns)
+	// Add label to the namespace to mark it as managed by Kueue.
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+	ns.Labels["kueue.openshift.io/managed"] = "true"
+	gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+	ginkgo.GinkgoLogr.Info(fmt.Sprintf("Created namespace: %s", ns.Name))
 	return ns
 }
 

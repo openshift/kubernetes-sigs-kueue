@@ -15,6 +15,7 @@ controllerManager:
   #  - name: PartialAdmission
   #    enabled: true
   manager:
+    # priorityClassName: "system-cluster-critical"
     image:
       repository: us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue
       # This should be set to 'IfNotPresent' for released version
@@ -51,6 +52,11 @@ controllerManager:
     timeoutSeconds: 1
     failureThreshold: 3
     successThreshold: 1
+  # -- ControllerManager's nodeSelector
+  nodeSelector: {}
+  # -- ControllerManager's tolerations
+  tolerations: []
+  # -- ControllerManager's topologySpreadConstraints
   topologySpreadConstraints: []
   podDisruptionBudget:
     enabled: false
@@ -169,9 +175,23 @@ mutatingWebhook:
 enableKueueViz: false
 kueueViz:
   backend:
-    image: "us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-backend:main"
+    # -- KueueViz backend nodeSelector
+    nodeSelector: {}
+    # -- KueueViz backend tolerations
+    tolerations: []
+    image:
+      repository: "us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-backend"
+      # This should be set to 'IfNotPresent' for released version
+      pullPolicy: Always
   frontend:
-    image: "us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend:main"
+    # -- KueueViz frontend nodeSelector
+    nodeSelector: {}
+    # -- KueueViz frontend tolerations
+    tolerations: []
+    image:
+      repository: "us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend"
+      # This should be set to 'IfNotPresent' for released version
+      pullPolicy: Always
 metrics:
   prometheusNamespace: monitoring
   serviceMonitor:
