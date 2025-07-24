@@ -1,3 +1,28 @@
+#!/bin/bash
+
+# OpenShift Synchronization Script
+#
+# This script synchronizes OpenShift-specific customizations from the upstream
+# OpenShift fork back into the current working branch. It's used to maintain
+# OpenShift-specific changes and configurations that differ from the upstream
+# Kueue project.
+#
+# Prerequisites:
+# - Must have an 'openshift' git remote configured pointing to the OpenShift fork
+# - Current branch should be the target branch where you want to sync changes
+#
+# What this script does:
+# 1. Syncs the OpenShift README from the main branch
+# 2. Pulls OpenShift-specific build files (Makefiles, scripts) from release-0.11
+# 3. Syncs dependency CRDs that are specific to OpenShift environments
+# 4. Updates OpenShift-specific Kustomize configurations
+# 5. Syncs OpenShift-specific package dependencies
+#
+# Usage: ./hack/openshift/sync.sh
+#
+# Note: Some sections are commented out as they may not be needed for every sync
+# (e.g., Dockerfile.rhel, cherry-picking specific commits)
+
 # Make sure you have a openshift remote
 
 # get readme openshift template and update if there is anything missing in branch
