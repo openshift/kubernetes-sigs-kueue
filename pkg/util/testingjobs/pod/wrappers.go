@@ -62,6 +62,12 @@ func MakePod(name, ns string) *PodWrapper {
 	}}
 }
 
+// MakeOCPPod creates a wrapper for a pod with a single container that is
+// configured to run on OpenShift.
+// Openshift requires more security than upstream Kubernetes.
+// So this script replaces the upstream pod wrapper with one that runs on Openshift
+// without any issue.
+// TODO: we should see about bringing this into upstream.
 func MakeOCPPod(name, ns string) *PodWrapper {
 	return &PodWrapper{corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
