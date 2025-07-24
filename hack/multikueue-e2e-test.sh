@@ -24,10 +24,6 @@ export MANAGER_KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME}-manager
 export WORKER1_KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME}-worker1
 export WORKER2_KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME}-worker2
 
-export MANAGER_KUBECONFIG="${ARTIFACTS}/kubeconfig-$MANAGER_KIND_CLUSTER_NAME"
-export WORKER1_KUBECONFIG="${ARTIFACTS}/kubeconfig-$WORKER1_KIND_CLUSTER_NAME"
-export WORKER2_KUBECONFIG="${ARTIFACTS}/kubeconfig-$WORKER2_KIND_CLUSTER_NAME"
-
 # shellcheck source=hack/e2e-common.sh
 source "${SOURCE_DIR}/e2e-common.sh"
 
@@ -38,13 +34,10 @@ function cleanup {
             mkdir -p "$ARTIFACTS"
         fi
 
-        cluster_cleanup "$MANAGER_KIND_CLUSTER_NAME" "$MANAGER_KUBECONFIG" &
-        cluster_cleanup "$WORKER1_KIND_CLUSTER_NAME" "$WORKER1_KUBECONFIG" &
-        cluster_cleanup "$WORKER2_KIND_CLUSTER_NAME" "$WORKER2_KUBECONFIG" &
+        cluster_cleanup "$MANAGER_KIND_CLUSTER_NAME"
+        cluster_cleanup "$WORKER1_KIND_CLUSTER_NAME"
+        cluster_cleanup "$WORKER2_KIND_CLUSTER_NAME"
     fi
-    #do the image restore here for the case when an error happened during deploy
-    restore_managers_image
-    wait
 }
 
 
@@ -55,41 +48,76 @@ function startup {
             mkdir -p "$ARTIFACTS"
         fi
 
-        cp "${SOURCE_DIR}/multikueue/manager-cluster.kind.yaml" "$ARTIFACTS"
+	cp "${SOURCE_DIR}/multikueue/manager-cluster.kind.yaml" "$ARTIFACTS"
 
         #Enable the JobManagedBy feature gates for k8s 1.30+ versions 
         IFS=. read -r -a varr <<< "$KIND_VERSION"
         minor=$(( varr[1] ))        
         if [ "$minor" -ge 30 ]; then
-            echo "Enable JobManagedBy feature in manager's kind config"
-            $YQ e -i '.featureGates.JobManagedBy = true' "${ARTIFACTS}/manager-cluster.kind.yaml"
+	    echo "Enable JobManagedBy feature in manager's kind config"
+	    $YQ e -i '.featureGates.JobManagedBy = true' "${ARTIFACTS}/manager-cluster.kind.yaml"
         fi
 
-        cluster_create "$MANAGER_KIND_CLUSTER_NAME" "${ARTIFACTS}/manager-cluster.kind.yaml" "$MANAGER_KUBECONFIG" &
-        cluster_create "$WORKER1_KIND_CLUSTER_NAME" "$SOURCE_DIR/multikueue/worker-cluster.kind.yaml" "$WORKER1_KUBECONFIG" &
-        cluster_create "$WORKER2_KIND_CLUSTER_NAME" "$SOURCE_DIR/multikueue/worker-cluster.kind.yaml" "$WORKER2_KUBECONFIG" &
+        cluster_create "$MANAGER_KIND_CLUSTER_NAME" "${ARTIFACTS}/manager-cluster.kind.yaml"
+        cluster_create "$WORKER1_KIND_CLUSTER_NAME" "$SOURCE_DIR/multikueue/worker-cluster.kind.yaml"
+        cluster_create "$WORKER2_KIND_CLUSTER_NAME" "$SOURCE_DIR/multikueue/worker-cluster.kind.yaml"
     fi
 }
 
-function kueue_deploy {
-    (cd "${ROOT_DIR}/config/components/manager" && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
+function kind_load {
+    prepare_docker_images
 
-    cluster_kueue_deploy "$MANAGER_KUBECONFIG"
-    cluster_kueue_deploy "$WORKER1_KUBECONFIG"
-    cluster_kueue_deploy "$WORKER2_KUBECONFIG"
+    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
+    then
+        cluster_kind_load "$MANAGER_KIND_CLUSTER_NAME"
+        cluster_kind_load "$WORKER1_KIND_CLUSTER_NAME"
+        cluster_kind_load "$WORKER2_KIND_CLUSTER_NAME"
+    fi
+
+    # JOBSET SETUP
+    install_jobset "$MANAGER_KIND_CLUSTER_NAME"
+    install_jobset "$WORKER1_KIND_CLUSTER_NAME"
+    install_jobset "$WORKER2_KIND_CLUSTER_NAME"
+
+    # APPWRAPPER SETUP
+    install_appwrapper "$MANAGER_KIND_CLUSTER_NAME"
+    install_appwrapper "$WORKER1_KIND_CLUSTER_NAME"
+    install_appwrapper "$WORKER2_KIND_CLUSTER_NAME"
+
+    # KUBEFLOW SETUP
+    # In order for MPI-operator and Training-operator to work on the same cluster it is required that:
+    # 1. 'kubeflow.org_mpijobs.yaml' is removed from base/crds/kustomization.yaml - https://github.com/kubeflow/training-operator/issues/1930
+    # 2. Training-operator deployment is modified to enable all kubeflow jobs except for mpi -  https://github.com/kubeflow/training-operator/issues/1777
+    install_kubeflow "$MANAGER_KIND_CLUSTER_NAME"
+    install_kubeflow "$WORKER1_KIND_CLUSTER_NAME"
+    install_kubeflow "$WORKER2_KIND_CLUSTER_NAME"
+    
+    ## MPI
+    install_mpi "$MANAGER_KIND_CLUSTER_NAME"
+    install_mpi "$WORKER1_KIND_CLUSTER_NAME"
+    install_mpi "$WORKER2_KIND_CLUSTER_NAME"
+
+    ## KUBERAY
+    install_kuberay "$MANAGER_KIND_CLUSTER_NAME"
+    install_kuberay "$WORKER1_KIND_CLUSTER_NAME"
+    install_kuberay "$WORKER2_KIND_CLUSTER_NAME"
+}
+
+function multikueue_kueue_deploy {
+    # We use a subshell to avoid overwriting the global cleanup trap, which also uses the EXIT signal.
+    (
+        set_managers_image
+        trap restore_managers_image EXIT
+        cluster_kueue_deploy "$MANAGER_KIND_CLUSTER_NAME"
+        cluster_kueue_deploy "$WORKER1_KIND_CLUSTER_NAME"
+        cluster_kueue_deploy "$WORKER2_KIND_CLUSTER_NAME"
+    )
 }
 
 trap cleanup EXIT
-startup 
-prepare_docker_images
-wait # for clusters creation
-kind_load "$MANAGER_KIND_CLUSTER_NAME" "$MANAGER_KUBECONFIG" &
-kind_load "$WORKER1_KIND_CLUSTER_NAME" "$WORKER1_KUBECONFIG" &
-kind_load "$WORKER2_KIND_CLUSTER_NAME" "$WORKER2_KUBECONFIG" &
-wait # for libraries installation
-# Merge kubeconfigs to one file to be used in tests now
-export KUBECONFIG="$MANAGER_KUBECONFIG:$WORKER1_KUBECONFIG:$WORKER2_KUBECONFIG"
-kueue_deploy
+startup
+kind_load
+multikueue_kueue_deploy
 
 if [ "$E2E_RUN_ONLY_ENV" == 'true' ]; then
   read -rp "Press Enter to cleanup."

@@ -89,15 +89,10 @@ func (fp *FileProcessor) ProcessPlan(plan ProcessingPlan) {
 		}
 
 		if len(matchedFiles) == 0 {
-			logger.Debug("No files matched for pattern", zap.String("pattern", file.Path))
+			logger.Warn("No files matched for pattern", zap.String("pattern", file.Path))
 		}
 
-		filteredFiles, err := filterFiles(matchedFiles, file.Excludes)
-		if err != nil {
-			logger.Fatal("Failed to filter files", zap.Strings("excludes", file.Excludes), zap.Error(err))
-		}
-
-		for _, filePath := range filteredFiles {
+		for _, filePath := range filterFiles(matchedFiles, file.Excludes) {
 			file.Path = filePath
 			err := fp.ProcessFile(file)
 			if err != nil && !file.ContinueOnError {
@@ -107,34 +102,30 @@ func (fp *FileProcessor) ProcessPlan(plan ProcessingPlan) {
 	}
 }
 
-func filterFiles(files, excludes []string) ([]string, error) {
+func filterFiles(files, excludes []string) []string {
 	var filtered []string
 	for _, file := range files {
-		excluded, err := isExcluded(file, excludes)
-		if err != nil {
-			return nil, err
-		}
-		if !excluded {
+		if !isExcluded(file, excludes) {
 			filtered = append(filtered, file)
 		}
 	}
-	return filtered, nil
+	return filtered
 }
 
-func isExcluded(file string, excludes []string) (bool, error) {
+func isExcluded(file string, excludes []string) bool {
 	base := filepath.Base(file)
 	for _, pattern := range excludes {
 		matched, err := filepath.Match(pattern, base)
 		if err != nil {
-			logger.Debug("Invalid exclude pattern", zap.String("pattern", file), zap.Error(err))
-			return false, err
+			logger.Warn("Invalid exclude pattern", zap.String("pattern", file), zap.Error(err))
+			continue
 		}
 
 		if matched {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func (fp *FileProcessor) ProcessFile(fileOps FileOperations) error {
@@ -201,7 +192,7 @@ func (fp *FileProcessor) processRegularOperations(data []byte, fileOps FileOpera
 
 	for _, op := range fileOps.Operations {
 		if err := fp.validateOperation(op, data); err != nil {
-			logger.Debug("Skipping operation", zap.String("operation", op.Type), zap.String("file", fileOps.Path), zap.Error(err))
+			logger.Warn("Skipping operation", zap.String("operation", op.Type), zap.String("file", fileOps.Path), zap.Error(err))
 			opErrors = append(opErrors, err)
 			continue
 		}
@@ -217,13 +208,13 @@ func (fp *FileProcessor) processRegularOperations(data []byte, fileOps FileOpera
 		case Delete:
 			data, err = fp.yq.DeleteKey(data, op.Key, op.OnItemCondition)
 		default:
-			logger.Debug("Unknown operation type", zap.String("operation", op.Type), zap.String("file", fileOps.Path))
+			logger.Warn("Unknown operation type", zap.String("operation", op.Type), zap.String("file", fileOps.Path))
 			opErrors = append(opErrors, fmt.Errorf("unknown operation type: %s", op.Type))
 			continue
 		}
 
 		if err != nil {
-			logger.Debug("Cannot apply operation", zap.String("operation", op.Type), zap.Error(err))
+			logger.Warn("Cannot apply operation", zap.String("operation", op.Type), zap.Error(err))
 			opErrors = append(opErrors, err)
 		}
 	}
@@ -238,7 +229,7 @@ func (fp *FileProcessor) processPostOperations(data []byte, fileOps FileOperatio
 	// Validate all post operations beforehand, as INSERT_TEXT operations can potentially lead to invalid YAML.
 	for _, op := range fileOps.PostOperations {
 		if err := fp.validatePostOperation(op, data); err != nil {
-			logger.Debug("Skipping post operation", zap.String("operation", op.Type), zap.String("file", fileOps.Path), zap.Error(err))
+			logger.Warn("Skipping post operation", zap.String("operation", op.Type), zap.String("file", fileOps.Path), zap.Error(err))
 			opErrors = append(opErrors, err)
 			continue
 		}
@@ -257,13 +248,13 @@ func (fp *FileProcessor) processPostOperations(data []byte, fileOps FileOperatio
 				OnItemCondition: op.OnItemCondition,
 			})
 		default:
-			logger.Debug("Unknown post operation type", zap.String("operation", op.Type), zap.String("file", fileOps.Path))
+			logger.Warn("Unknown post operation type", zap.String("operation", op.Type), zap.String("file", fileOps.Path))
 			opErrors = append(opErrors, fmt.Errorf("unknown post operation type: %s", op.Type))
 			continue
 		}
 
 		if err != nil {
-			logger.Debug("Cannot apply post operation", zap.String("operation", op.Type), zap.Error(err))
+			logger.Warn("Cannot apply post operation", zap.String("operation", op.Type), zap.Error(err))
 			opErrors = append(opErrors, err)
 		}
 	}
@@ -286,21 +277,11 @@ func (fp *FileProcessor) prepareFile(fileOps FileOperations) ([]byte, error) {
 }
 
 func (fp *FileProcessor) validateOperation(op Operation, data []byte) error {
-	met, err := fp.yq.EvaluateCondition(data, op.OnFileCondition)
-	if err != nil {
-		return err
-	}
-
-	if op.OnFileCondition != "" && !met {
+	if op.OnFileCondition != "" && !fp.yq.EvaluateCondition(data, op.OnFileCondition) {
 		return fmt.Errorf("condition '%s' not met", op.OnFileCondition)
 	}
 
-	exist, err := fp.yq.HasKey(data, op.Key)
-	if err != nil {
-		return err
-	}
-
-	if !exist && !op.AddKeyIfMissing {
+	if !fp.yq.HasKey(data, op.Key) && !op.AddKeyIfMissing {
 		return fmt.Errorf("key '%s' does not exist", op.Key)
 	}
 
@@ -308,12 +289,7 @@ func (fp *FileProcessor) validateOperation(op Operation, data []byte) error {
 }
 
 func (fp *FileProcessor) validatePostOperation(op Operation, data []byte) error {
-	met, err := fp.yq.EvaluateCondition(data, op.OnFileCondition)
-	if err != nil {
-		return err
-	}
-
-	if op.OnFileCondition != "" && !met {
+	if op.OnFileCondition != "" && !fp.yq.EvaluateCondition(data, op.OnFileCondition) {
 		return fmt.Errorf("condition '%s' not met", op.OnFileCondition)
 	}
 

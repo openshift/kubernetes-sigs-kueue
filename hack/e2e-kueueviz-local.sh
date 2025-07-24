@@ -25,20 +25,18 @@ source "${SOURCE_DIR}/e2e-common.sh"
 cleanup() {
   echo "Cleaning up kueueviz processes"
   kill $BACKEND_PID $FRONTEND_PID
-  cluster_cleanup "$KIND_CLUSTER_NAME" ""
-  restore_managers_image
+  cluster_cleanup "$KIND_CLUSTER_NAME"
 }
 
 # Set trap to clean up on exit
 trap cleanup EXIT
 
-cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE" ""
+cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE"
 echo Waiting for kind cluster "${KIND_CLUSTER_NAME}" to start...
 prepare_docker_images
 cluster_kind_load "${KIND_CLUSTER_NAME}"
-(cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
-cluster_kueue_deploy ""
-kubectl wait deploy/kueue-controller-manager -n"$KUEUE_NAMESPACE" --for=condition=available --timeout=5m
+kueue_deploy "${KIND_CLUSTER_NAME}"
+kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=available --timeout=5m
 
 # Deploy kueueviz resources
 kubectl create -f "${ROOT_DIR}/cmd/kueueviz/examples/"
@@ -51,14 +49,12 @@ cd -
 
 # Start kueueviz frontend
 cd "${ROOT_DIR}/cmd/kueueviz/frontend"
-npm install
 npm run dev & FRONTEND_PID=$!
 cd -
 
 cd "${ROOT_DIR}/test/e2e/kueueviz/"
-npm install
 # Run Cypress tests for kueueviz frontend
-npm run cypress:run
+npm run cypress:run --headless
 cd -
 
 # The trap will handle cleanup 

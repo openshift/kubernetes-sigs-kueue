@@ -31,22 +31,20 @@ fi
 # Function to clean up background processes
 cleanup() {
   echo "Cleaning up kueueviz processes"
-  kill "${BACKEND_PID}" 
-  cluster_cleanup "${KIND_CLUSTER_NAME}" ""
-  restore_managers_image
+  kill "${BACKEND_PID}"
+  cluster_cleanup "${KIND_CLUSTER_NAME}"
 }
 
 # Set trap to clean up on exit
 trap cleanup EXIT
 
 echo Creating kind cluster "${KIND_CLUSTER_NAME}"
-cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE" ""
+cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE"
 echo Waiting for kind cluster "${KIND_CLUSTER_NAME}" to start...
 prepare_docker_images
 cluster_kind_load "${KIND_CLUSTER_NAME}"
-(cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
-cluster_kueue_deploy ""
-kubectl wait deploy/kueue-controller-manager -n"$KUEUE_NAMESPACE" --for=condition=available --timeout=5m
+kueue_deploy "${KIND_CLUSTER_NAME}"
+kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=available --timeout=5m
 
 # Deploy KueueViz resources
 kubectl create -f "${ROOT_DIR}/cmd/kueueviz/examples/"
@@ -76,9 +74,9 @@ if [ -z "$WORKSPACE_VOLUME" ]; then
 fi
 echo "Workspace Volume: $WORKSPACE_VOLUME"
 
-# if CYPRESS_IMAGE_NAME is not set, extract it from ./hack/cypress/Dockerfile
+# if CYPRESS_IMAGE_NAME is not set, set it to cypress/base:22.14.0
 if [ -z "$CYPRESS_IMAGE_NAME" ]; then
-  CYPRESS_IMAGE_NAME=$(grep '^FROM' "${ROOT_DIR}/hack/cypress/Dockerfile" | awk '{print $2}')
+  CYPRESS_IMAGE_NAME="cypress/base:22.14.0"
 fi
 
 # Start KueueViz frontend and cypress in a container
