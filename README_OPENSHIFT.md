@@ -24,3 +24,4 @@ Therefore, we have to generate the dependent-crds` on each release and commit th
 One should run `make dep-crds` and then commit the dep-crds folder.
 
 This will run the integration tests with the latest changes for each supported integration.
+
