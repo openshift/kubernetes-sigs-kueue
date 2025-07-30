@@ -14,5 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+<<<<<<< HEAD:vendor/github.com/google/gofuzz/doc.go
 // Package fuzz is a library for populating go objects with random values.
 package fuzz
+=======
+// Package types implements various generic types used throughout kubernetes.
+package types // import "k8s.io/apimachinery/pkg/types"
+>>>>>>> 5dbc73b26 (<CARRY> create a script and onboard release 0.12):hack/internal/tools/vendor/k8s.io/apimachinery/pkg/types/doc.go
