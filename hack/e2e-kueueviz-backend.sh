@@ -31,9 +31,8 @@ fi
 # Function to clean up background processes
 cleanup() {
   echo "Cleaning up kueueviz processes"
-  kill "${BACKEND_PID}" 
+  kill "${BACKEND_PID}"
   cluster_cleanup "${KIND_CLUSTER_NAME}"
-  restore_managers_image
 }
 
 # Set trap to clean up on exit
@@ -44,8 +43,7 @@ cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE"
 echo Waiting for kind cluster "${KIND_CLUSTER_NAME}" to start...
 prepare_docker_images
 cluster_kind_load "${KIND_CLUSTER_NAME}"
-(cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
-cluster_kueue_deploy "${KIND_CLUSTER_NAME}"
+kueue_deploy "${KIND_CLUSTER_NAME}"
 kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=available --timeout=5m
 
 # Deploy KueueViz resources
@@ -84,8 +82,12 @@ fi
 # Start KueueViz frontend and cypress in a container
 echo "Current container information: CONTAINER_ID=${CONTAINER_ID} WORKSPACE_VOLUME=${WORKSPACE_VOLUME}"
 docker run -i --entrypoint /workspace/hack/e2e-kueueviz-frontend.sh \
+           -e CYPRESS_SCREENSHOTS_FOLDER="${CYPRESS_SCREENSHOTS_FOLDER}" \
+           -e CYPRESS_VIDEOS_FOLDER="${CYPRESS_VIDEOS_FOLDER}" \
            -e PROJECT_DIR="/workspace" -w /workspace --network host \
            -v "${WORKSPACE_VOLUME}":/workspace:rw \
+           -v "${CYPRESS_SCREENSHOTS_FOLDER}":"${CYPRESS_SCREENSHOTS_FOLDER}" \
+           -v "${CYPRESS_VIDEOS_FOLDER}":"${CYPRESS_VIDEOS_FOLDER}" \
            -v /var/run/docker.sock:/var/run/docker.sock "${CYPRESS_IMAGE_NAME}"
 
 set +x  # Disable debug mode

@@ -43,6 +43,7 @@ var (
 	ctx                          context.Context
 	visibilityClient             visibilityv1beta1.VisibilityV1beta1Interface
 	impersonatedVisibilityClient visibilityv1beta1.VisibilityV1beta1Interface
+	kueueNS                      = util.GetKueueNamespace()
 )
 
 func TestAPIs(t *testing.T) {
@@ -62,15 +63,16 @@ var _ = ginkgo.BeforeSuite(func() {
 	k8sClient, cfg = util.CreateClientUsingCluster("")
 	restClient = util.CreateRestClient(cfg)
 	visibilityClient = util.CreateVisibilityClient("")
-	impersonatedVisibilityClient = util.CreateVisibilityClient("system:serviceaccount:kueue-system:default")
+	impersonatedVisibilityClient = util.CreateVisibilityClient(fmt.Sprintf("system:serviceaccount:%s:default", kueueNS))
 	ctx = ginkgo.GinkgoT().Context()
 
 	waitForAvailableStart := time.Now()
 	util.WaitForKueueAvailability(ctx, k8sClient)
-	util.WaitForJobSetAvailability(ctx, k8sClient)
-	util.WaitForLeaderWorkerSetAvailability(ctx, k8sClient)
-	util.WaitForAppWrapperAvailability(ctx, k8sClient)
-	util.WaitForKubeFlowTrainingOperatorAvailability(ctx, k8sClient)
+	// Openshift: disable these controllers as we don't install them yet
+	// util.WaitForJobSetAvailability(ctx, k8sClient)
+	// util.WaitForLeaderWorkerSetAvailability(ctx, k8sClient)
+	// util.WaitForAppWrapperAvailability(ctx, k8sClient)
+	// util.WaitForKubeFlowTrainingOperatorAvailability(ctx, k8sClient)
 	ginkgo.GinkgoLogr.Info(
 		"Kueue and all required operators are available in the cluster",
 		"waitingTime", time.Since(waitForAvailableStart),
