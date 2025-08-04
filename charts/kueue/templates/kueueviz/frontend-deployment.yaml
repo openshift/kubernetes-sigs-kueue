@@ -14,10 +14,18 @@ spec:
       labels:
         app: kueueviz-frontend
     spec:
+      {{- with .Values.kueueViz.frontend.nodeSelector }}
+      nodeSelector:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kueueViz.frontend.tolerations }}
+      tolerations:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: frontend
-          image: '{{ .Values.kueueViz.frontend.image | default "us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend:main" }}'
-          imagePullPolicy: IfNotPresent
+          image: '{{ .Values.kueueViz.frontend.image.repository }}:{{ .Values.kueueViz.frontend.image.tag | default .Chart.AppVersion }}'
+          imagePullPolicy: '{{ .Values.kueueViz.frontend.image.pullPolicy }}'
           ports:
             - containerPort: 8080
           env:
