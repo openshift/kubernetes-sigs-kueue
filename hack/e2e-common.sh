@@ -18,6 +18,7 @@ export KUSTOMIZE="$ROOT_DIR"/bin/kustomize
 export GINKGO="$ROOT_DIR"/bin/ginkgo
 export KIND="$ROOT_DIR"/bin/kind
 export YQ="$ROOT_DIR"/bin/yq
+export KUEUE_NAMESPACE="${KUEUE_NAMESPACE:-kueue-system}"
 
 export KIND_VERSION="${E2E_KIND_VERSION/"kindest/node:v"/}"
 
@@ -62,10 +63,10 @@ if [[ -n "${CERTMANAGER_VERSION:-}" ]]; then
 fi
 
 # agnhost image to use for testing.
-export E2E_TEST_AGNHOST_IMAGE_OLD=registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6
-E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA=${E2E_TEST_AGNHOST_IMAGE_OLD%%@*}
-export E2E_TEST_AGNHOST_IMAGE=registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
-E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA=${E2E_TEST_AGNHOST_IMAGE%%@*}
+E2E_TEST_AGNHOST_IMAGE_OLD_WITH_SHA=registry.k8s.io/e2e-test-images/agnhost:2.52@sha256:b173c7d0ffe3d805d49f4dfe48375169b7b8d2e1feb81783efd61eb9d08042e6
+export E2E_TEST_AGNHOST_IMAGE_OLD=${E2E_TEST_AGNHOST_IMAGE_OLD_WITH_SHA%%@*}
+E2E_TEST_AGNHOST_IMAGE_WITH_SHA=registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+export E2E_TEST_AGNHOST_IMAGE=${E2E_TEST_AGNHOST_IMAGE_WITH_SHA%%@*}
 
 
 # $1 - cluster name
@@ -88,14 +89,14 @@ function cluster_create {
 }
 
 function prepare_docker_images {
-    docker pull "$E2E_TEST_AGNHOST_IMAGE_OLD"
-    docker pull "$E2E_TEST_AGNHOST_IMAGE"
+    docker pull "$E2E_TEST_AGNHOST_IMAGE_OLD_WITH_SHA"
+    docker pull "$E2E_TEST_AGNHOST_IMAGE_WITH_SHA"
 
     # We can load image by a digest but we cannot reference it by the digest that we pulled.
     # For more information https://github.com/kubernetes-sigs/kind/issues/2394#issuecomment-888713831.
     # Manually create tag for image with digest which is already pulled
-    docker tag $E2E_TEST_AGNHOST_IMAGE_OLD "$E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA"
-    docker tag $E2E_TEST_AGNHOST_IMAGE "$E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA"
+    docker tag $E2E_TEST_AGNHOST_IMAGE_OLD_WITH_SHA "$E2E_TEST_AGNHOST_IMAGE_OLD"
+    docker tag $E2E_TEST_AGNHOST_IMAGE_WITH_SHA "$E2E_TEST_AGNHOST_IMAGE"
 
     if [[ -n ${APPWRAPPER_VERSION:-} ]]; then
         docker pull "${APPWRAPPER_IMAGE}"
@@ -123,8 +124,8 @@ function prepare_docker_images {
 
 # $1 cluster
 function cluster_kind_load {
-    cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA}"
-    cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA}"
+    cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE_OLD}"
+    cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE}"
     cluster_kind_load_image "$1" "$IMAGE_TAG"
 }
 
@@ -166,8 +167,10 @@ function deploy_with_certmanager() {
         $KUSTOMIZE edit add patch --path "validating_webhookcainjection_patch.yaml"
         $KUSTOMIZE edit add patch --path "cert_metrics_manager_patch.yaml" --kind Deployment
         
-        $KUSTOMIZE build "${ROOT_DIR}/test/e2e/config/certmanager" | \
-            kubectl apply --server-side -f -
+        local build_output
+        build_output=$($KUSTOMIZE build "${ROOT_DIR}/test/e2e/config/certmanager")
+        build_output="${build_output//kueue-system/$KUEUE_NAMESPACE}"
+        echo "$build_output" | kubectl apply --kubeconfig="$1" --server-side -f -
     )
 
     printf "%s\n" "$crd_backup" > "$crd_kust"
@@ -185,7 +188,10 @@ function cluster_kueue_deploy {
         
         deploy_with_certmanager
     else
-        kubectl apply --server-side -k test/e2e/config/default
+        local build_output
+        build_output=$($KUSTOMIZE build "${ROOT_DIR}/test/e2e/config/default")
+        build_output="${build_output//kueue-system/$KUEUE_NAMESPACE}"
+        echo "$build_output" | kubectl apply --kubeconfig="$1" --server-side -f -
     fi
 }
 
@@ -240,8 +246,22 @@ function install_cert_manager {
 INITIAL_IMAGE=$($YQ '.images[] | select(.name == "controller") | [.newName, .newTag] | join(":")' config/components/manager/kustomization.yaml)
 export INITIAL_IMAGE
 
+function set_managers_image {
+    (cd "${ROOT_DIR}/config/components/manager" && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
+}
+
 function restore_managers_image {
-    (cd config/components/manager && $KUSTOMIZE edit set image controller="$INITIAL_IMAGE")
+    (cd "${ROOT_DIR}/config/components/manager" && $KUSTOMIZE edit set image controller="$INITIAL_IMAGE")
+}
+
+# $1 cluster
+function kueue_deploy {
+    # We use a subshell to avoid overwriting the global cleanup trap, which also uses the EXIT signal.
+    (
+        set_managers_image
+        trap restore_managers_image EXIT
+        cluster_kueue_deploy "$1"
+    )
 }
 
 function determine_kuberay_ray_image {

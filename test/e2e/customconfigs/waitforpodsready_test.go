@@ -64,7 +64,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 				{
 					Kind:      "ServiceAccount",
 					Name:      serviceAccountName,
-					Namespace: configapi.DefaultNamespace,
+					Namespace: kueueNS,
 				},
 			},
 			RoleRef: rbacv1.RoleRef{
@@ -120,7 +120,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 
 			curlPod = testingjobspod.MakePod("curl-metrics", configapi.DefaultNamespace).
 				ServiceAccountName(serviceAccountName).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				TerminationGracePeriod(1).
 				Obj()
 			util.MustCreate(ctx, k8sClient, curlPod)
@@ -220,7 +220,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 
 			curlPod = testingjobspod.MakePod("curl-metrics", configapi.DefaultNamespace).
 				ServiceAccountName(serviceAccountName).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				TerminationGracePeriod(1).
 				Obj()
 			util.MustCreate(ctx, k8sClient, curlPod)
@@ -239,7 +239,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 		ginkgo.It("should evict and requeue workload when pod failure causes recovery timeout", func() {
 			ginkgo.By("creating a job", func() {
 				job = testingjob.MakeJob("job-recovery-timeout", ns.Name).
-					Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+					Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 					Queue(kueue.LocalQueueName(lq.Name)).
 					Request(corev1.ResourceCPU, "2").
 					Parallelism(1).
@@ -311,7 +311,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 
 			curlPod = testingjobspod.MakePod("curl-metrics", configapi.DefaultNamespace).
 				ServiceAccountName(serviceAccountName).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				TerminationGracePeriod(1).
 				Obj()
 			util.MustCreate(ctx, k8sClient, curlPod)
@@ -330,7 +330,7 @@ var _ = ginkgo.Describe("WaitForPodsReady Job Controller E2E", ginkgo.Ordered, f
 		ginkgo.It("should continue running workload if pod recovers before recoveryTimeout", func() {
 			ginkgo.By("creating a job", func() {
 				job = testingjob.MakeJob("job-recovery-timeout", ns.Name).
-					Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+					Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 					Queue(kueue.LocalQueueName(lq.Name)).
 					Request(corev1.ResourceCPU, "2").
 					Parallelism(1).

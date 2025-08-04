@@ -84,7 +84,7 @@ var _ = ginkgo.Describe("NodeFailure Controller", ginkgo.Ordered, func() {
 				Obj()
 			sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).
 				PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, testing.DefaultBlockTopologyLevel).
-				Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletion).
+				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				Obj()
 			util.MustCreate(ctx, k8sClient, sampleJob)
 
