@@ -300,7 +300,7 @@ var _ = ginkgo.Describe("JobSet controller", ginkgo.Ordered, ginkgo.ContinueOnFa
 				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: jobSetName, Namespace: jobSet.Namespace}, createdJobSet)).Should(gomega.Succeed())
 				g.Expect(ptr.Deref(createdJobSet.Spec.Suspend, false)).Should(gomega.BeFalse())
 				g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(testing.BeNotFoundError())
-			}, util.ConsistentDuration, util.Interval).Should(gomega.Succeed())
+			}, util.ConsistentDuration, util.ShortInterval).Should(gomega.Succeed())
 		})
 
 		ginkgo.It("Should finish the preemption when the jobset becomes inactive", func() {
@@ -370,7 +370,7 @@ var _ = ginkgo.Describe("JobSet controller", ginkgo.Ordered, ginkgo.ContinueOnFa
 				gomega.Consistently(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).To(gomega.Succeed())
 					g.Expect(createdWorkload.Status.Conditions).To(testing.HaveConditionStatusTrue(kueue.WorkloadQuotaReserved))
-				}, util.ConsistentDuration, util.Interval).Should(gomega.Succeed())
+				}, util.ConsistentDuration, util.ShortInterval).Should(gomega.Succeed())
 			})
 
 			ginkgo.By("mark the jobset as inactive", func() {
@@ -1229,8 +1229,8 @@ var _ = ginkgo.Describe("JobSet controller when TopologyAwareScheduling enabled"
 					Args:  util.BehaviorExitFast,
 				},
 			).
-			Request("rj1", "cpu", "100m").
-			Request("rj2", "cpu", "100m").
+			Request("rj1", corev1.ResourceCPU, "100m").
+			Request("rj2", corev1.ResourceCPU, "100m").
 			Obj()
 		ginkgo.By("creating a JobSet", func() {
 			util.MustCreate(ctx, k8sClient, jobSet)

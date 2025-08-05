@@ -75,6 +75,7 @@ Defaults to 1.</p>
 <td>
    <p>QPS controls the number of queries per second allowed for K8S api server
 connection.</p>
+<p>Setting this to a negative value will disable client-side ratelimiting.</p>
 </td>
 </tr>
 <tr><td><code>burst</code> <B>[Required]</B><br/>
@@ -706,6 +707,17 @@ them if their local counterpart no longer exists.</p>
    <p>WorkerLostTimeout defines the time a local workload's multikueue admission check state is kept Ready
 if the connection with its reserving worker cluster is lost.</p>
 <p>Defaults to 15 minutes.</p>
+</td>
+</tr>
+<tr><td><code>dispatcherName</code><br/>
+<code>string</code>
+</td>
+<td>
+   <p>DispatcherName defines the dispatcher responsible for selecting worker clusters to handle the workload.</p>
+<ul>
+<li>If specified, the workload will be handled by the named dispatcher.</li>
+<li>If not specified, the workload will be handled by the default (&quot;kueue.x-k8s.io/multikueue-dispatcher-all-at-once&quot;) dispatcher.</li>
+</ul>
 </td>
 </tr>
 </tbody>

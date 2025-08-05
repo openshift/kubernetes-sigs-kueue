@@ -677,7 +677,7 @@ func TestReconcile(t *testing.T) {
 				).
 				SchedulingStatsEviction(
 					kueue.WorkloadSchedulingStatsEviction{
-						Reason: kueue.WorkloadDeactivated,
+						Reason: "DeactivatedDueToAdmissionCheck",
 						Count:  1,
 					},
 				).
@@ -1344,7 +1344,7 @@ func TestReconcile(t *testing.T) {
 					Message: "exceeding the maximum number of re-queuing retries",
 				}).
 				SchedulingStatsEviction(
-					kueue.WorkloadSchedulingStatsEviction{Reason: kueue.WorkloadDeactivated, Count: 1},
+					kueue.WorkloadSchedulingStatsEviction{Reason: "DeactivatedDueToRequeuingLimitExceeded", Count: 1},
 				).
 				Obj(),
 			wantEvents: []utiltesting.EventRecord{
@@ -1408,7 +1408,7 @@ func TestReconcile(t *testing.T) {
 				}).
 				SchedulingStatsEviction(
 					kueue.WorkloadSchedulingStatsEviction{
-						Reason: kueue.WorkloadDeactivated,
+						Reason: "DeactivatedDueToRequeuingLimitExceeded",
 						Count:  1,
 					},
 				).
@@ -1477,7 +1477,7 @@ func TestReconcile(t *testing.T) {
 				RequeueState(ptr.To[int32](100), nil).
 				SchedulingStatsEviction(
 					kueue.WorkloadSchedulingStatsEviction{
-						Reason: kueue.WorkloadDeactivated,
+						Reason: "DeactivatedDueToRequeuingLimitExceeded",
 						Count:  1,
 					},
 				).
@@ -1546,7 +1546,7 @@ func TestReconcile(t *testing.T) {
 				RequeueState(ptr.To[int32](100), nil).
 				SchedulingStatsEviction(
 					kueue.WorkloadSchedulingStatsEviction{
-						Reason: kueue.WorkloadDeactivated,
+						Reason: "DeactivatedDueToRequeuingLimitExceeded",
 						Count:  1,
 					},
 				).
@@ -1640,7 +1640,21 @@ func TestReconcile(t *testing.T) {
 					Reason:  kueue.WorkloadEvictedByLocalQueueStopped,
 					Message: "The LocalQueue is stopped",
 				}).
+				SchedulingStatsEviction(
+					kueue.WorkloadSchedulingStatsEviction{
+						Reason: kueue.WorkloadEvictedByLocalQueueStopped,
+						Count:  1,
+					},
+				).
 				Obj(),
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Name: "wl", Namespace: "ns"},
+					EventType: corev1.EventTypeNormal,
+					Reason:    "EvictedDueToLocalQueueStopped",
+					Message:   "The LocalQueue is stopped",
+				},
+			},
 		},
 		"should set the Inadmissible reason on QuotaReservation condition when the LocalQueue was deleted": {
 			cq: utiltesting.MakeClusterQueue("cq").AdmissionChecks("check").Obj(),

@@ -23,13 +23,18 @@ import (
 	"slices"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/hierarchy"
+	afs "sigs.k8s.io/kueue/pkg/util/admissionfairsharing"
 	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
+	utilqueue "sigs.k8s.io/kueue/pkg/util/queue"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -101,9 +106,26 @@ func (s *Snapshot) Log(log logr.Logger) {
 	}
 }
 
-func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
+type snapshotOption struct {
+	afsEntryPenalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]
+}
+
+type SnapshotOption func(*snapshotOption)
+
+func WithAfsEntryPenalties(penalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]) SnapshotOption {
+	return func(o *snapshotOption) {
+		o.afsEntryPenalties = penalties
+	}
+}
+
+func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snapshot, error) {
 	c.RLock()
 	defer c.RUnlock()
+
+	opts := &snapshotOption{}
+	for _, option := range options {
+		option(opts)
+	}
 
 	snap := Snapshot{
 		Manager:                  hierarchy.NewManager(newCohortSnapshot),
@@ -137,7 +159,10 @@ func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
 			snap.InactiveClusterQueueSets.Insert(cq.Name)
 			continue
 		}
-		cqSnapshot := snapshotClusterQueue(cq)
+		cqSnapshot, err := c.snapshotClusterQueue(ctx, cq, opts.afsEntryPenalties)
+		if err != nil {
+			return nil, err
+		}
 		snap.AddClusterQueue(cqSnapshot)
 		if cq.HasParent() {
 			snap.UpdateClusterQueueEdge(cq.Name, cq.Parent().Name)
@@ -157,7 +182,8 @@ func (c *Cache) Snapshot(ctx context.Context) (*Snapshot, error) {
 
 // snapshotClusterQueue creates a copy of ClusterQueue that includes
 // references to immutable objects and deep copies of changing ones.
-func snapshotClusterQueue(cq *clusterQueue) *ClusterQueueSnapshot {
+func (c *Cache) snapshotClusterQueue(ctx context.Context, cq *clusterQueue, afsEntryPenalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]) (*ClusterQueueSnapshot, error) {
+	log := log.FromContext(ctx)
 	cc := &ClusterQueueSnapshot{
 		Name:                          cq.Name,
 		ResourceGroups:                make([]ResourceGroup, len(cq.ResourceGroups)),
@@ -177,7 +203,24 @@ func snapshotClusterQueue(cq *clusterQueue) *ClusterQueueSnapshot {
 	for i, rg := range cq.ResourceGroups {
 		cc.ResourceGroups[i] = rg.Clone()
 	}
-	return cc
+	if features.Enabled(features.AdmissionFairSharing) {
+		if cq.AdmissionScope != nil {
+			cc.AdmissionScope = *cq.AdmissionScope.DeepCopy()
+		}
+		afsEnabled, resourceWeights := afs.ResourceWeights(&cc.AdmissionScope, c.admissionFairSharing)
+		if !afsEnabled {
+			return cc, nil
+		}
+		for _, wl := range cc.Workloads {
+			usage, err := wl.CalcLocalQueueFSUsage(ctx, c.client, resourceWeights, afsEntryPenalties)
+			if err != nil {
+				return nil, fmt.Errorf("failed to calculate LocalQueue FS usage for LocalQueue %v", client.ObjectKey{Namespace: wl.Obj.Namespace, Name: string(wl.Obj.Spec.QueueName)})
+			}
+			wl.LocalQueueFSUsage = &usage
+			log.V(3).Info("Calculated LocalQueueFSUsage for workload", "workload", klog.KObj(wl.Obj), "queue", wl.Obj.Spec.QueueName, "usage", usage)
+		}
+	}
+	return cc, nil
 }
 
 func newCohortSnapshot(name kueue.CohortReference) *CohortSnapshot {

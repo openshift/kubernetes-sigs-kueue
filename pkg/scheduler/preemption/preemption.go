@@ -39,7 +39,7 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
-	"sigs.k8s.io/kueue/pkg/metrics"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/scheduler/flavorassigner"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption/classical"
@@ -139,13 +139,13 @@ var HumanReadablePreemptionReasons = map[string]string{
 
 func preemptionMessage(preemptor *kueue.Workload, reason string) string {
 	var wUID, jUID string
-	if preemptor == nil || preemptor.UID == "" {
+	if preemptor.UID == "" {
 		wUID = "UNKNOWN"
 	} else {
 		wUID = string(preemptor.UID)
 	}
-	uid, ok := preemptor.Labels[constants.JobUIDLabel]
-	if !ok || uid == "" {
+	uid := preemptor.Labels[constants.JobUIDLabel]
+	if uid == "" {
 		jUID = "UNKNOWN"
 	} else {
 		jUID = uid
@@ -173,7 +173,7 @@ func (p *Preemptor) IssuePreemptions(ctx context.Context, preemptor *workload.In
 
 			log.V(3).Info("Preempted", "targetWorkload", klog.KObj(target.WorkloadInfo.Obj), "preemptingWorkload", klog.KObj(preemptor.Obj), "reason", target.Reason, "message", message, "targetClusterQueue", klog.KRef("", string(target.WorkloadInfo.ClusterQueue)))
 			p.recorder.Eventf(target.WorkloadInfo.Obj, corev1.EventTypeNormal, "Preempted", message)
-			metrics.ReportPreemption(preemptor.ClusterQueue, target.Reason, target.WorkloadInfo.ClusterQueue)
+			workload.ReportPreemption(preemptor.ClusterQueue, target.Reason, target.WorkloadInfo.ClusterQueue)
 		} else {
 			log.V(3).Info("Preemption ongoing", "targetWorkload", klog.KObj(target.WorkloadInfo.Obj), "preemptingWorkload", klog.KObj(preemptor.Obj))
 		}
@@ -184,14 +184,8 @@ func (p *Preemptor) IssuePreemptions(ctx context.Context, preemptor *workload.In
 
 func (p *Preemptor) applyPreemptionWithSSA(ctx context.Context, w *kueue.Workload, reason, message string) error {
 	w = w.DeepCopy()
-	workload.SetEvictedCondition(w, kueue.WorkloadEvictedByPreemption, message)
-	workload.ResetChecksOnEviction(w, p.clock.Now())
-	reportWorkloadEvictedOnce := workload.WorkloadEvictionStateInc(w, kueue.WorkloadEvictedByPreemption, "")
 	workload.SetPreemptedCondition(w, reason, message)
-	if reportWorkloadEvictedOnce {
-		metrics.ReportEvictedWorkloadsOnce(w.Status.Admission.ClusterQueue, kueue.WorkloadEvictedByPreemption, "")
-	}
-	return workload.ApplyAdmissionStatus(ctx, p.client, w, true, p.clock)
+	return workload.Evict(ctx, p.client, p.recorder, w, kueue.WorkloadEvictedByPreemption, "", message, p.clock)
 }
 
 type preemptionAttemptOpts struct {
@@ -208,6 +202,7 @@ type preemptionAttemptOpts struct {
 // fits
 func (p *Preemptor) classicalPreemptions(preemptionCtx *preemptionCtx) []*Target {
 	hierarchicalReclaimCtx := &classical.HierarchicalPreemptionCtx{
+		Log:               preemptionCtx.log,
 		Wl:                preemptionCtx.preemptor.Obj,
 		Cq:                preemptionCtx.preemptorCQ,
 		FrsNeedPreemption: preemptionCtx.frsNeedPreemption,
@@ -380,7 +375,7 @@ func (p *Preemptor) fairPreemptions(preemptionCtx *preemptionCtx, strategies []f
 		return nil
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		return CandidatesOrdering(candidates[i], candidates[j], preemptionCtx.preemptorCQ.Name, p.clock.Now())
+		return CandidatesOrdering(preemptionCtx.log, candidates[i], candidates[j], preemptionCtx.preemptorCQ.Name, p.clock.Now())
 	})
 	if logV := preemptionCtx.log.V(5); logV.Enabled() {
 		logV.Info("Simulating fair preemption", "candidates", workload.References(candidates), "resourcesRequiringPreemption", preemptionCtx.frsNeedPreemption.UnsortedList(), "preemptingWorkload", klog.KObj(preemptionCtx.preemptor.Obj))
@@ -422,19 +417,23 @@ func flavorResourcesNeedPreemption(assignment flavorassigner.Assignment) sets.Se
 func (p *Preemptor) findCandidates(wl *kueue.Workload, cq *cache.ClusterQueueSnapshot, frsNeedPreemption sets.Set[resources.FlavorResource]) []*workload.Info {
 	var candidates []*workload.Info
 	wlPriority := priority.Priority(wl)
+	preemptorTS := p.workloadOrdering.GetQueueOrderTimestamp(wl)
 
 	if cq.Preemption.WithinClusterQueue != kueue.PreemptionPolicyNever {
-		considerSamePrio := cq.Preemption.WithinClusterQueue == kueue.PreemptionPolicyLowerOrNewerEqualPriority
-		preemptorTS := p.workloadOrdering.GetQueueOrderTimestamp(wl)
-
 		for _, candidateWl := range cq.Workloads {
 			candidatePriority := priority.Priority(candidateWl.Obj)
-			if candidatePriority > wlPriority {
-				continue
-			}
-
-			if candidatePriority == wlPriority && (!considerSamePrio || !preemptorTS.Before(p.workloadOrdering.GetQueueOrderTimestamp(candidateWl.Obj))) {
-				continue
+			switch cq.Preemption.WithinClusterQueue {
+			case kueue.PreemptionPolicyLowerPriority:
+				if candidatePriority >= wlPriority {
+					continue
+				}
+			case kueue.PreemptionPolicyLowerOrNewerEqualPriority:
+				if candidatePriority > wlPriority {
+					continue
+				}
+				if candidatePriority == wlPriority && !preemptorTS.Before(p.workloadOrdering.GetQueueOrderTimestamp(candidateWl.Obj)) {
+					continue
+				}
 			}
 
 			if !classical.WorkloadUsesResources(candidateWl, frsNeedPreemption) {
@@ -445,15 +444,25 @@ func (p *Preemptor) findCandidates(wl *kueue.Workload, cq *cache.ClusterQueueSna
 	}
 
 	if cq.HasParent() && cq.Preemption.ReclaimWithinCohort != kueue.PreemptionPolicyNever {
-		onlyLowerPriority := cq.Preemption.ReclaimWithinCohort != kueue.PreemptionPolicyAny
 		for _, cohortCQ := range cq.Parent().Root().SubtreeClusterQueues() {
 			if cq == cohortCQ || !cqIsBorrowing(cohortCQ, frsNeedPreemption) {
 				// Can't reclaim quota from itself or ClusterQueues that are not borrowing.
 				continue
 			}
 			for _, candidateWl := range cohortCQ.Workloads {
-				if onlyLowerPriority && priority.Priority(candidateWl.Obj) >= priority.Priority(wl) {
-					continue
+				candidatePriority := priority.Priority(candidateWl.Obj)
+				switch cq.Preemption.ReclaimWithinCohort {
+				case kueue.PreemptionPolicyLowerPriority:
+					if candidatePriority >= wlPriority {
+						continue
+					}
+				case kueue.PreemptionPolicyLowerOrNewerEqualPriority:
+					if candidatePriority > wlPriority {
+						continue
+					}
+					if candidatePriority == wlPriority && !preemptorTS.Before(p.workloadOrdering.GetQueueOrderTimestamp(candidateWl.Obj)) {
+						continue
+					}
 				}
 				if !classical.WorkloadUsesResources(candidateWl, frsNeedPreemption) {
 					continue
@@ -513,13 +522,22 @@ func queueUnderNominalInResourcesNeedingPreemption(preemptionCtx *preemptionCtx)
 	return true
 }
 
+func resourceUsagePreemptionEnabled(a, b *workload.Info) bool {
+	// If both workloads are in the same ClusterQueue, but different LocalQueues,
+	// we can compare their LocalQueue usage.
+	// If the LocalQueueUsage is not nil for both Workloads, it means the feature gate has been enabled, and the
+	// AdmissionScope of the ClusterQueue is set to UsageBasedFairSharing. We inherit this information from the snapshot initialization.
+	return a.ClusterQueue == b.ClusterQueue && a.Obj.Spec.QueueName != b.Obj.Spec.QueueName && a.LocalQueueFSUsage != nil && b.LocalQueueFSUsage != nil
+}
+
 // candidatesOrdering criteria:
 // 0. Workloads already marked for preemption first.
 // 1. Workloads from other ClusterQueues in the cohort before the ones in the
 // same ClusterQueue as the preemptor.
-// 2. Workloads with lower priority first.
-// 3. Workloads admitted more recently first.
-func CandidatesOrdering(a, b *workload.Info, cq kueue.ClusterQueueReference, now time.Time) bool {
+// 2. (AdmissionFairSharing only) Workloads with lower LocalQueue's usage first
+// 3. Workloads with lower priority first.
+// 4. Workloads admitted more recently first.
+func CandidatesOrdering(log logr.Logger, a, b *workload.Info, cq kueue.ClusterQueueReference, now time.Time) bool {
 	aEvicted := meta.IsStatusConditionTrue(a.Obj.Status.Conditions, kueue.WorkloadEvicted)
 	bEvicted := meta.IsStatusConditionTrue(b.Obj.Status.Conditions, kueue.WorkloadEvicted)
 	if aEvicted != bEvicted {
@@ -531,6 +549,14 @@ func CandidatesOrdering(a, b *workload.Info, cq kueue.ClusterQueueReference, now
 		return !aInCQ
 	}
 
+	if features.Enabled(features.AdmissionFairSharing) && resourceUsagePreemptionEnabled(a, b) {
+		if a.LocalQueueFSUsage != b.LocalQueueFSUsage {
+			log.V(3).Info("Comparing workloads by LocalQueue fair sharing usage",
+				"workloadA", klog.KObj(a.Obj), "queueA", a.Obj.Spec.QueueName, "usageA", a.LocalQueueFSUsage,
+				"workloadB", klog.KObj(b.Obj), "queueB", b.Obj.Spec.QueueName, "usageB", b.LocalQueueFSUsage)
+			return *a.LocalQueueFSUsage > *b.LocalQueueFSUsage
+		}
+	}
 	pa := priority.Priority(a.Obj)
 	pb := priority.Priority(b.Obj)
 	if pa != pb {
