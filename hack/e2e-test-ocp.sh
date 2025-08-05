@@ -98,6 +98,7 @@ function collect_logs {
     $OC get deployments -n kueue-system -o yaml > "$ARTIFACTS/kueue-deployment.yaml" || true
     $OC describe pods -n kueue-system > "$ARTIFACTS/kueue-system-pods.log" || true
     $OC logs -n kueue-system -l app=kueue --tail=-1 > "$ARTIFACTS/kueue-system-logs.log" || true
+    $OC get events -n kueue-system "$ARTIFACTS/kueue-events.log" || true
     restore_ocp_manager_image
     restore_kueue_namespace
 }
