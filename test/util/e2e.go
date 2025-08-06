@@ -339,9 +339,10 @@ func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueue
 	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
-func RestartKueueController(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: GetKueueNamespace(), Name: "kueue-controller-manager"}
-	rolloutOperatorDeployment(ctx, k8sClient, kcmKey)
+func RestartKueueController(ctx context.Context, k8sClient client.Client, kindClusterName string) {
+	kueueNS := GetKueueNamespace()
+	kcmKey := types.NamespacedName{Namespace: kueueNS, Name: "kueue-controller-manager"}
+	rolloutOperatorDeployment(ctx, k8sClient, kcmKey, kindClusterName)
 }
 
 func WaitForActivePodsAndTerminate(ctx context.Context, k8sClient client.Client, restClient *rest.RESTClient, cfg *rest.Config, namespace string, activePodsCount, exitCode int, opts ...client.ListOption) {

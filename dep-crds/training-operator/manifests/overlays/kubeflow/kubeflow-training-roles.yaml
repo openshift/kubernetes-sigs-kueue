@@ -27,6 +27,7 @@ rules:
       - pytorchjobs
       - xgboostjobs
       - paddlejobs
+      - jaxjobs
     verbs:
       - create
       - delete
@@ -43,8 +44,16 @@ rules:
       - pytorchjobs/status
       - xgboostjobs/status
       - paddlejobs/status
+      - jaxjobs/status
     verbs:
       - get
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - localqueues
+    verbs:
+      - get
+      - list
   - apiGroups:
       - ""
     resources:
@@ -80,6 +89,7 @@ rules:
       - pytorchjobs
       - xgboostjobs
       - paddlejobs
+      - jaxjobs
     verbs:
       - get
       - list
@@ -92,5 +102,13 @@ rules:
       - pytorchjobs/status
       - xgboostjobs/status
       - paddlejobs/status
+      - jaxjobs/status
     verbs:
       - get
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - localqueues
+    verbs:
+      - get
+      - list
