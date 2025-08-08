@@ -27,8 +27,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	configv1alpha1 "k8s.io/component-base/config/v1alpha1"
 	"k8s.io/utils/ptr"
-
-	"sigs.k8s.io/kueue/pkg/features"
 )
 
 const (
@@ -96,12 +94,10 @@ func SetDefaults_Configuration(cfg *Configuration) {
 	cfg.ClientConnection.QPS = cmp.Or(cfg.ClientConnection.QPS, ptr.To(DefaultClientConnectionQPS))
 	cfg.ClientConnection.Burst = cmp.Or(cfg.ClientConnection.Burst, ptr.To(DefaultClientConnectionBurst))
 
-	if cfg.WaitForPodsReady != nil {
+	cfg.WaitForPodsReady = cmp.Or(cfg.WaitForPodsReady, &WaitForPodsReady{Enable: false})
+	if cfg.WaitForPodsReady.Enable {
 		cfg.WaitForPodsReady.Timeout = cmp.Or(cfg.WaitForPodsReady.Timeout, &metav1.Duration{Duration: defaultPodsReadyTimeout})
-		if cfg.WaitForPodsReady.BlockAdmission == nil {
-			defaultBlockAdmission := cfg.WaitForPodsReady.Enable
-			cfg.WaitForPodsReady.BlockAdmission = &defaultBlockAdmission
-		}
+		cfg.WaitForPodsReady.BlockAdmission = cmp.Or(cfg.WaitForPodsReady.BlockAdmission, &cfg.WaitForPodsReady.Enable)
 		cfg.WaitForPodsReady.RequeuingStrategy = cmp.Or(cfg.WaitForPodsReady.RequeuingStrategy, &RequeuingStrategy{})
 		cfg.WaitForPodsReady.RequeuingStrategy.Timestamp = cmp.Or(cfg.WaitForPodsReady.RequeuingStrategy.Timestamp, ptr.To(EvictionTimestamp))
 		cfg.WaitForPodsReady.RequeuingStrategy.BackoffBaseSeconds = cmp.Or(cfg.WaitForPodsReady.RequeuingStrategy.BackoffBaseSeconds, ptr.To[int32](DefaultRequeuingBackoffBaseSeconds))
@@ -119,20 +115,6 @@ func SetDefaults_Configuration(cfg *Configuration) {
 		MaxCount: DefaultClusterQueuesMaxCount,
 	})
 
-	if !features.Enabled(features.ManagedJobsNamespaceSelector) {
-		// Backwards compatibility: default podOptions.NamespaceSelector if ManagedJobsNamespaceSelector disabled
-		cfg.Integrations.PodOptions = cmp.Or(cfg.Integrations.PodOptions, &PodIntegrationOptions{})
-		cfg.Integrations.PodOptions.NamespaceSelector = cmp.Or(cfg.Integrations.PodOptions.NamespaceSelector, &metav1.LabelSelector{
-			MatchExpressions: []metav1.LabelSelectorRequirement{
-				{
-					Key:      corev1.LabelMetadataName,
-					Operator: metav1.LabelSelectorOpNotIn,
-					Values:   []string{"kube-system", *cfg.Namespace},
-				},
-			},
-		})
-	}
-
 	cfg.ManagedJobsNamespaceSelector = cmp.Or(cfg.ManagedJobsNamespaceSelector, &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{
 			{
@@ -147,6 +129,7 @@ func SetDefaults_Configuration(cfg *Configuration) {
 	cfg.MultiKueue.GCInterval = cmp.Or(cfg.MultiKueue.GCInterval, &metav1.Duration{Duration: DefaultMultiKueueGCInterval})
 	cfg.MultiKueue.Origin = ptr.To(cmp.Or(ptr.Deref(cfg.MultiKueue.Origin, ""), DefaultMultiKueueOrigin))
 	cfg.MultiKueue.WorkerLostTimeout = cmp.Or(cfg.MultiKueue.WorkerLostTimeout, &metav1.Duration{Duration: DefaultMultiKueueWorkerLostTimeout})
+	cfg.MultiKueue.DispatcherName = cmp.Or(cfg.MultiKueue.DispatcherName, ptr.To(MultiKueueDispatcherModeAllAtOnce))
 
 	if fs := cfg.FairSharing; fs != nil && fs.Enable && len(fs.PreemptionStrategies) == 0 {
 		fs.PreemptionStrategies = []PreemptionStrategy{LessThanOrEqualToFinalShare, LessThanInitialShare}

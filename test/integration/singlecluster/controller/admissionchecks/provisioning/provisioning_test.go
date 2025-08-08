@@ -25,11 +25,9 @@ import (
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
-	"k8s.io/utils/ptr"
+	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
@@ -146,29 +144,11 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 				Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 1),
 			}
 
-			admission = testing.MakeAdmission(cq.Name).
-				PodSets(
-					kueue.PodSetAssignment{
-						Name: "ps1",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU: resource.MustParse("3"),
-						},
-						Count: ptr.To[int32](3),
-					},
-					kueue.PodSetAssignment{
-						Name: "ps2",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU: resource.MustParse("2"),
-						},
-						Count: ptr.To[int32](4),
-					},
-				).
+			admission = testing.MakeAdmission(cq.Name, "ps1", "ps2").
+				AssignmentWithIndex(0, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "3").
+				AssignmentPodCountWithIndex(0, 3).
+				AssignmentWithIndex(1, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "2").
+				AssignmentPodCountWithIndex(1, 4).
 				Obj()
 		})
 
@@ -185,7 +165,7 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 			ginkgo.By("Checking no provision request is created", func() {
 				gomega.Consistently(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(testing.BeNotFoundError())
-				}, util.ConsistentDuration, util.Interval).Should(gomega.Succeed())
+				}, util.ConsistentDuration, util.ShortInterval).Should(gomega.Succeed())
 			})
 		})
 
@@ -255,7 +235,7 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 			ginkgo.By("Checking that the provision request is preserved", func() {
 				gomega.Consistently(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
-				}, util.ConsistentDuration, util.Interval).Should(gomega.Succeed())
+				}, util.ConsistentDuration, util.ShortInterval).Should(gomega.Succeed())
 			})
 		})
 
@@ -322,19 +302,15 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 						{
 							Name: "ps1",
 							Annotations: map[string]string{
-								provisioning.ConsumesAnnotationKey:            provReqKey.Name,
-								provisioning.DeprecatedConsumesAnnotationKey:  provReqKey.Name,
-								provisioning.ClassNameAnnotationKey:           prc.Spec.ProvisioningClassName,
-								provisioning.DeprecatedClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
+								provisioning.ConsumesAnnotationKey:  provReqKey.Name,
+								provisioning.ClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
 							},
 						},
 						{
 							Name: "ps2",
 							Annotations: map[string]string{
-								provisioning.ConsumesAnnotationKey:            provReqKey.Name,
-								provisioning.DeprecatedConsumesAnnotationKey:  provReqKey.Name,
-								provisioning.ClassNameAnnotationKey:           prc.Spec.ProvisioningClassName,
-								provisioning.DeprecatedClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
+								provisioning.ConsumesAnnotationKey:  provReqKey.Name,
+								provisioning.ClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
 							},
 						},
 					}))
@@ -767,19 +743,15 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 						{
 							Name: "ps1",
 							Annotations: map[string]string{
-								provisioning.ConsumesAnnotationKey:            provReqKey.Name,
-								provisioning.DeprecatedConsumesAnnotationKey:  provReqKey.Name,
-								provisioning.ClassNameAnnotationKey:           prc.Spec.ProvisioningClassName,
-								provisioning.DeprecatedClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
+								provisioning.ConsumesAnnotationKey:  provReqKey.Name,
+								provisioning.ClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
 							},
 						},
 						{
 							Name: "ps2",
 							Annotations: map[string]string{
-								provisioning.ConsumesAnnotationKey:            provReqKey.Name,
-								provisioning.DeprecatedConsumesAnnotationKey:  provReqKey.Name,
-								provisioning.ClassNameAnnotationKey:           prc.Spec.ProvisioningClassName,
-								provisioning.DeprecatedClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
+								provisioning.ConsumesAnnotationKey:  provReqKey.Name,
+								provisioning.ClassNameAnnotationKey: prc.Spec.ProvisioningClassName,
 							},
 						},
 					}))
@@ -882,29 +854,11 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 			util.MustCreate(ctx, k8sClient, wl)
 
 			wlKey = client.ObjectKeyFromObject(wl)
-			admission = testing.MakeAdmission(cq.Name).
-				PodSets(
-					kueue.PodSetAssignment{
-						Name: "ps1",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU: resource.MustParse("3"),
-						},
-						Count: ptr.To[int32](3),
-					},
-					kueue.PodSetAssignment{
-						Name: "ps2",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU: resource.MustParse("2"),
-						},
-						Count: ptr.To[int32](4),
-					},
-				).
+			admission = testing.MakeAdmission(cq.Name, "ps1", "ps2").
+				AssignmentWithIndex(0, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "3").
+				AssignmentPodCountWithIndex(0, 3).
+				AssignmentWithIndex(1, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "2").
+				AssignmentPodCountWithIndex(1, 4).
 				Obj()
 		})
 
@@ -915,6 +869,49 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, ac, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, readyAC, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, prc, true)
+		})
+
+		ginkgo.It("Admission checks for an evicted workload are Pending", func() {
+			// Repro for https://github.com/kubernetes-sigs/kueue/issues/5129
+			ginkgo.By("Setting the quota reservation to the workload", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).Should(gomega.Succeed())
+					g.Expect(util.SetQuotaReservation(ctx, k8sClient, &updatedWl, admission)).To(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Setting the provision request-1 as Failed", func() {
+				provReqKey := types.NamespacedName{
+					Namespace: wlKey.Namespace,
+					Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 1),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
+					apimeta.SetStatusCondition(&createdRequest.Status.Conditions, metav1.Condition{
+						Type:   autoscaling.Failed,
+						Status: metav1.ConditionTrue,
+						Reason: autoscaling.Failed,
+					})
+					g.Expect(k8sClient.Status().Update(ctx, &createdRequest)).Should(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the Workload is Evicted", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					_, evicted := workload.IsEvictedByAdmissionCheck(&updatedWl)
+					g.Expect(evicted).To(gomega.BeTrue())
+				}, util.Timeout, time.Millisecond).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the AdmissionChecks are reset to Pending and remain this way", func() {
+				gomega.Consistently(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					check := workload.FindAdmissionCheck(updatedWl.Status.AdmissionChecks, kueue.AdmissionCheckReference(ac.Name))
+					g.Expect(check).NotTo(gomega.BeNil())
+					g.Expect(check.State).To(gomega.Equal(kueue.CheckStatePending), fmt.Sprintf("status: %v", updatedWl.Status))
+				}, util.ConsistentDuration, util.ShortInterval).Should(gomega.Succeed())
+			})
 		})
 
 		ginkgo.It("Should retry if a ProvisioningRequest fails, then succeed if the second Provisioning request succeeds", func() {
@@ -1257,6 +1254,181 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 		})
 	})
 
+	ginkgo.When("Workload uses a provision admission check with BackoffLimitCount=2", func() {
+		var (
+			ns             *corev1.Namespace
+			wlKey          types.NamespacedName
+			ac             *kueue.AdmissionCheck
+			prc            *kueue.ProvisioningRequestConfig
+			rf             *kueue.ResourceFlavor
+			cq             *kueue.ClusterQueue
+			lq             *kueue.LocalQueue
+			admission      *kueue.Admission
+			createdRequest autoscaling.ProvisioningRequest
+			updatedWl      kueue.Workload
+			provReqKey     types.NamespacedName
+		)
+		ginkgo.JustBeforeEach(func() {
+			ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "provisioning-")
+
+			prc = baseConfig.Clone().RetryLimit(2).BaseBackoff(2).Obj()
+			util.MustCreate(ctx, k8sClient, prc)
+
+			ac = testing.MakeAdmissionCheck("ac-prov").
+				ControllerName(kueue.ProvisioningRequestControllerName).
+				Parameters(kueue.GroupVersion.Group, "ProvisioningRequestConfig", prc.Name).
+				Obj()
+			util.MustCreate(ctx, k8sClient, ac)
+
+			rf = testing.MakeResourceFlavor("rf1").Obj()
+			util.MustCreate(ctx, k8sClient, rf)
+
+			cq = testing.MakeClusterQueue("cluster-queue").
+				ResourceGroup(*testing.MakeFlavorQuotas(rf.Name).
+					Resource(resourceGPU, "5").Obj()).
+				AdmissionChecks(kueue.AdmissionCheckReference(ac.Name)).
+				Obj()
+			util.MustCreate(ctx, k8sClient, cq)
+
+			lq = testing.MakeLocalQueue("queue", ns.Name).ClusterQueue(cq.Name).Obj()
+			util.MustCreate(ctx, k8sClient, lq)
+
+			wl := testing.MakeWorkload("wl", ns.Name).
+				Queue(kueue.LocalQueueName(lq.Name)).
+				PodSets(
+					*testing.MakePodSet("ps1", 3).
+						Request(corev1.ResourceCPU, "1").
+						Image("image").
+						Obj(),
+				).Obj()
+			util.MustCreate(ctx, k8sClient, wl)
+
+			wlKey = client.ObjectKeyFromObject(wl)
+			admission = testing.MakeAdmission(cq.Name, "ps1").
+				Assignment(corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "3").
+				AssignmentPodCount(3).
+				Obj()
+		})
+
+		ginkgo.AfterEach(func() {
+			gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, cq, true)
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, rf, true)
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, ac, true)
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, prc, true)
+		})
+
+		ginkgo.It("Should retry twice if a ProvisioningRequest fails twice", func() {
+			ginkgo.By("Setting the quota reservation to the workload", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).Should(gomega.Succeed())
+					g.Expect(util.SetQuotaReservation(ctx, k8sClient, &updatedWl, admission)).To(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Setting the provision request-1 as Failed", func() {
+				provReqKey = types.NamespacedName{
+					Namespace: wlKey.Namespace,
+					Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 1),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
+					apimeta.SetStatusCondition(&createdRequest.Status.Conditions, metav1.Condition{
+						Type:   autoscaling.Failed,
+						Status: metav1.ConditionTrue,
+						Reason: autoscaling.Failed,
+					})
+					g.Expect(k8sClient.Status().Update(ctx, &createdRequest)).Should(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the AdmissionCheck is set to Retry, and the workload has requeueState set", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					g.Expect(updatedWl.Status.RequeueState).NotTo(gomega.BeNil())
+					g.Expect(*updatedWl.Status.RequeueState.Count).To(gomega.Equal(int32(1)))
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the Workload is Evicted, and all AdmissionChecks are reset to Pending", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					_, evicted := workload.IsEvictedByAdmissionCheck(&updatedWl)
+					g.Expect(evicted).To(gomega.BeTrue())
+					check := workload.FindAdmissionCheck(updatedWl.Status.AdmissionChecks, kueue.AdmissionCheckReference(ac.Name))
+					g.Expect(check).NotTo(gomega.BeNil())
+					g.Expect(check.State).To(gomega.Equal(kueue.CheckStatePending))
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Setting the quota reservation to the workload", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).Should(gomega.Succeed())
+					g.Expect(util.SetQuotaReservation(ctx, k8sClient, &updatedWl, admission)).To(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the provision request-2 exists", func() {
+				gomega.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+				provReqKey = types.NamespacedName{
+					Namespace: wlKey.Namespace,
+					Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 2),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Setting the provision request-2 as Failed", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
+					apimeta.SetStatusCondition(&createdRequest.Status.Conditions, metav1.Condition{
+						Type:   autoscaling.Failed,
+						Status: metav1.ConditionTrue,
+						Reason: autoscaling.Failed,
+					})
+					g.Expect(k8sClient.Status().Update(ctx, &createdRequest)).Should(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the AdmissionCheck is set to Retry, and the workload has requeueState set", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					g.Expect(updatedWl.Status.RequeueState).NotTo(gomega.BeNil())
+					g.Expect(*updatedWl.Status.RequeueState.Count).To(gomega.Equal(int32(2)))
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the Workload is Evicted, and all AdmissionChecks are reset to Pending", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).To(gomega.Succeed())
+					_, evicted := workload.IsEvictedByAdmissionCheck(&updatedWl)
+					g.Expect(evicted).To(gomega.BeTrue())
+					check := workload.FindAdmissionCheck(updatedWl.Status.AdmissionChecks, kueue.AdmissionCheckReference(ac.Name))
+					g.Expect(check).NotTo(gomega.BeNil())
+					g.Expect(check.State).To(gomega.Equal(kueue.CheckStatePending))
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Setting the quota reservation to the workload", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlKey, &updatedWl)).Should(gomega.Succeed())
+					g.Expect(util.SetQuotaReservation(ctx, k8sClient, &updatedWl, admission)).To(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Checking the provision request-3 exists", func() {
+				provReqKey = types.NamespacedName{
+					Namespace: wlKey.Namespace,
+					Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 3),
+				}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, provReqKey, &createdRequest)).Should(gomega.Succeed())
+				}, util.Timeout, util.Interval).Should(gomega.Succeed())
+			})
+		})
+	})
+
 	ginkgo.When("A workload is using a provision request with enabled PodSetMergePolicy", func() {
 		var (
 			ns             *corev1.Namespace
@@ -1331,31 +1503,13 @@ var _ = ginkgo.Describe("Provisioning", ginkgo.Ordered, ginkgo.ContinueOnFailure
 				Name:      provisioning.ProvisioningRequestName(wlKey.Name, kueue.AdmissionCheckReference(ac.Name), 1),
 			}
 
-			admission = testing.MakeAdmission(cq.Name).
-				PodSets(
-					kueue.PodSetAssignment{
-						Name: "master",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU:    resource.MustParse("1"),
-							corev1.ResourceMemory: resource.MustParse("2Gi"),
-						},
-						Count: ptr.To[int32](1),
-					},
-					kueue.PodSetAssignment{
-						Name: "worker",
-						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
-							corev1.ResourceCPU: kueue.ResourceFlavorReference(rf.Name),
-						},
-						ResourceUsage: map[corev1.ResourceName]resource.Quantity{
-							corev1.ResourceCPU:    resource.MustParse("1"),
-							corev1.ResourceMemory: resource.MustParse("2Gi"),
-						},
-						Count: ptr.To[int32](2),
-					},
-				).
+			admission = testing.MakeAdmission(cq.Name, "master", "worker").
+				AssignmentWithIndex(0, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "1").
+				AssignmentWithIndex(0, corev1.ResourceMemory, kueue.ResourceFlavorReference(rf.Name), "2Gi").
+				AssignmentPodCountWithIndex(0, 1).
+				AssignmentWithIndex(1, corev1.ResourceCPU, kueue.ResourceFlavorReference(rf.Name), "1").
+				AssignmentWithIndex(1, corev1.ResourceMemory, kueue.ResourceFlavorReference(rf.Name), "2Gi").
+				AssignmentPodCountWithIndex(1, 2).
 				Obj()
 		})
 

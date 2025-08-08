@@ -28,6 +28,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -37,19 +38,24 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	config "sigs.k8s.io/kueue/apis/config/v1beta1"
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
+	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/queue"
 	"sigs.k8s.io/kueue/pkg/resources"
 	"sigs.k8s.io/kueue/pkg/scheduler/flavorassigner"
 	"sigs.k8s.io/kueue/pkg/scheduler/preemption"
+	afs "sigs.k8s.io/kueue/pkg/util/admissionfairsharing"
 	"sigs.k8s.io/kueue/pkg/util/api"
 	"sigs.k8s.io/kueue/pkg/util/priority"
+	utilqueue "sigs.k8s.io/kueue/pkg/util/queue"
 	"sigs.k8s.io/kueue/pkg/util/routine"
 	"sigs.k8s.io/kueue/pkg/util/wait"
 	"sigs.k8s.io/kueue/pkg/workload"
+	"sigs.k8s.io/kueue/pkg/workloadslicing"
 )
 
 const (
@@ -71,6 +77,7 @@ type Scheduler struct {
 	preemptor               *preemption.Preemptor
 	workloadOrdering        workload.Ordering
 	fairSharing             config.FairSharing
+	admissionFairSharing    *config.AdmissionFairSharing
 	clock                   clock.Clock
 
 	// schedulingCycle identifies the number of scheduling
@@ -84,6 +91,7 @@ type Scheduler struct {
 type options struct {
 	podsReadyRequeuingTimestamp config.RequeuingTimestamp
 	fairSharing                 config.FairSharing
+	admissionFairSharing        *config.AdmissionFairSharing
 	clock                       clock.Clock
 }
 
@@ -111,6 +119,12 @@ func WithFairSharing(fs *config.FairSharing) Option {
 	}
 }
 
+func WithAdmissionFairSharing(afs *config.AdmissionFairSharing) Option {
+	return func(o *options) {
+		o.admissionFairSharing = afs
+	}
+}
+
 func WithClock(_ testing.TB, c clock.Clock) Option {
 	return func(o *options) {
 		o.clock = c
@@ -135,6 +149,7 @@ func New(queues *queue.Manager, cache *cache.Cache, cl client.Client, recorder r
 		admissionRoutineWrapper: routine.DefaultWrapper,
 		workloadOrdering:        wo,
 		clock:                   options.clock,
+		admissionFairSharing:    options.admissionFairSharing,
 	}
 	s.applyAdmission = s.applyAdmissionWithSSA
 	return s
@@ -179,6 +194,12 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 	log := ctrl.LoggerFrom(ctx).WithValues("schedulingCycle", s.schedulingCycle)
 	ctx = ctrl.LoggerInto(ctx, log)
 
+	var snapshotOpts []cache.SnapshotOption
+	if features.Enabled(features.AdmissionFairSharing) {
+		s.queues.RebuildClusterQueuesWithEntryPenalties()
+		snapshotOpts = append(snapshotOpts, cache.WithAfsEntryPenalties(s.queues.GetAfsEntryPenalties()))
+	}
+
 	// 1. Get the heads from the queues, including their desired clusterQueue.
 	// This operation blocks while the queues are empty.
 	headWorkloads := s.queues.Heads(ctx)
@@ -189,7 +210,7 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 	startTime := s.clock.Now()
 
 	// 2. Take a snapshot of the cache.
-	snapshot, err := s.cache.Snapshot(ctx)
+	snapshot, err := s.cache.Snapshot(ctx, snapshotOpts...)
 	if err != nil {
 		log.Error(err, "failed to build snapshot for scheduling")
 		return wait.SlowDown
@@ -220,6 +241,17 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 		ctx := ctrl.LoggerInto(ctx, log)
 
 		mode := e.assignment.RepresentativeMode()
+
+		if features.Enabled(features.TASFailedNodeReplacementFailFast) && workload.HasTopologyAssignmentWithNodeToReplace(e.Obj) && mode != flavorassigner.Fit {
+			// evict workload we couldn't find the replacement for
+			if err := s.evictWorkloadAfterFailedTASReplacement(ctx, log, e.Obj); err != nil {
+				log.V(2).Error(err, "Failed to evict workload after failed try to find a node replacement")
+				continue
+			}
+			e.status = evicted
+			continue
+		}
+
 		if mode == flavorassigner.NoFit {
 			log.V(3).Info("Skipping workload as FlavorAssigner assigned NoFit mode")
 			continue
@@ -261,10 +293,16 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 		preemptedWorkloads.Insert(e.preemptionTargets)
 		cq.AddUsage(usage)
 
+		// Filter out the old workload slice from the preemption targets.
+		// The old workload slice is initially included in the preemption targets because it is treated
+		// as a preemptible target during flavor assignment. However, it should be evicted rather than preempted.
+		// Note: it is valid for either or both preemptionTargets and oldWorkloadSlice to be nil.
+		preemptionTargets, oldWorkloadSlice := workloadslicing.FindReplacedSliceTarget(e.Obj, e.preemptionTargets)
+
 		if e.assignment.RepresentativeMode() == flavorassigner.Preempt {
 			// If preemptions are issued, the next attempt should try all the flavors.
 			e.LastAssignment = nil
-			preempted, err := s.preemptor.IssuePreemptions(ctx, &e.Info, e.preemptionTargets)
+			preempted, err := s.preemptor.IssuePreemptions(ctx, &e.Info, preemptionTargets)
 			if err != nil {
 				log.Error(err, "Failed to preempt workloads")
 			}
@@ -286,6 +324,16 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 			s.cache.WaitForPodsReady(ctx)
 			log.V(5).Info("Finished waiting for all admitted workloads to be in the PodsReady condition")
 		}
+
+		// Evict old workload-slice if any. Note: that oldWorkloadSlice is not nil only if
+		// this is a workload-slice enabled workload and there is an old slice to evict.
+		if features.Enabled(features.ElasticJobsViaWorkloadSlices) && oldWorkloadSlice != nil {
+			if err := s.replaceWorkloadSlice(ctx, oldWorkloadSlice.WorkloadInfo.ClusterQueue, e.Obj, oldWorkloadSlice.WorkloadInfo.Obj.DeepCopy()); err != nil {
+				log.Error(err, "Failed to aggregate workload slice")
+				continue
+			}
+		}
+
 		e.status = nominated
 		if err := s.admit(ctx, e, cq); err != nil {
 			e.inadmissibleMsg = fmt.Sprintf("Failed to admit workload: %v", err)
@@ -296,7 +344,9 @@ func (s *Scheduler) schedule(ctx context.Context) wait.SpeedSignal {
 	result := metrics.AdmissionResultInadmissible
 	for _, e := range entries {
 		logAdmissionAttemptIfVerbose(log, &e)
-		if e.status != assumed {
+		// When the workload is evicted by scheduler we skip requeueAndUpdate.
+		// The eviction process will be finalized by the workload controller.
+		if e.status != assumed && e.status != evicted {
 			s.requeueAndUpdate(ctx, e)
 		} else {
 			result = metrics.AdmissionResultSuccess
@@ -322,6 +372,8 @@ const (
 	nominated entryStatus = "nominated"
 	// indicates if the workload was skipped in this cycle.
 	skipped entryStatus = "skipped"
+	// indicates if the workload was evicted in this cycle.
+	evicted entryStatus = "evicted"
 	// indicates if the workload was assumed to have been admitted.
 	assumed entryStatus = "assumed"
 	// indicates that the workload was never nominated for admission.
@@ -446,20 +498,45 @@ func (s *Scheduler) getAssignments(log logr.Logger, wl *workload.Info, snap *cac
 	return assignment, targets
 }
 
+// getInitialAssignments computes the initial resource flavor assignment and any required preemption targets
+// for a workload slice.
+//
+// The function attempts to assign resources to the provided workload slice using the current
+// snapshot of the scheduling state. It proceeds in the following steps:
+//
+//  1. It first checks for any preemptible workload slices that workload may replace, using an annotation-based lookup.
+//  2. It creates a flavor assigner to compute a full assignment scale-adjusted for preemptable workload slice targets
+//     based on either:
+//     - direct fit (no preemption needed), or
+//     - preemption (if needed and possible).
+//  3. If direct assignment isn't possible but preemption is enabled and viable, it includes any additional
+//     preemption targets obtained through the configured preemptor.
+//  4. If partial admission is enabled and the workload allows it, the function attempts to reduce pod counts
+//     across PodSets to find an assignable configuration—again checking for preemption if needed.
+//
+// Returns:
+//   - A flavorassigner.Assignment representing the selected (possibly reduced) flavor allocation.
+//   - A slice of preemption targets, which may include both explicitly annotated slices and those
+//     identified during scheduling.
+//
+// If no valid assignment can be made, returns the original full assignment with no preemption targets.
 func (s *Scheduler) getInitialAssignments(log logr.Logger, wl *workload.Info, snap *cache.Snapshot) (flavorassigner.Assignment, []*preemption.Target) {
 	cq := snap.ClusterQueue(wl.ClusterQueue)
-	flvAssigner := flavorassigner.New(wl, cq, snap.ResourceFlavors, s.fairSharing.Enable, preemption.NewOracle(s.preemptor, snap))
+
+	preemptionTargets, replaceableWorkloadSlice := workloadslicing.ReplacedWorkloadSlice(wl, snap)
+
+	flvAssigner := flavorassigner.New(wl, cq, snap.ResourceFlavors, s.fairSharing.Enable, preemption.NewOracle(s.preemptor, snap), replaceableWorkloadSlice)
 	fullAssignment := flvAssigner.Assign(log, nil)
 
 	arm := fullAssignment.RepresentativeMode()
 	if arm == flavorassigner.Fit {
-		return fullAssignment, nil
+		return fullAssignment, preemptionTargets
 	}
 
 	if arm == flavorassigner.Preempt {
 		faPreemptionTargets := s.preemptor.GetTargets(log, *wl, fullAssignment, snap)
 		if len(faPreemptionTargets) > 0 {
-			return fullAssignment, faPreemptionTargets
+			return fullAssignment, append(preemptionTargets, faPreemptionTargets...)
 		}
 	}
 
@@ -480,10 +557,22 @@ func (s *Scheduler) getInitialAssignments(log logr.Logger, wl *workload.Info, sn
 			return nil, false
 		})
 		if pa, found := reducer.Search(); found {
-			return pa.assignment, pa.preemptionTargets
+			return pa.assignment, append(preemptionTargets, pa.preemptionTargets...)
 		}
 	}
 	return fullAssignment, nil
+}
+
+func (s *Scheduler) evictWorkloadAfterFailedTASReplacement(ctx context.Context, log logr.Logger, wl *kueue.Workload) error {
+	log.V(3).Info("Evicting workload after failed try to find a node replacement; TASFailedNodeReplacementFailFast enabled")
+	msg := fmt.Sprintf("Workload was evicted as there was no replacement for a failed node: %s", workload.NodeToReplace(wl))
+	if err := workload.Evict(ctx, s.client, s.recorder, wl, kueue.WorkloadEvictedDueToNodeFailures, "", msg, s.clock); err != nil {
+		return err
+	}
+	if err := workload.RemoveAnnotation(ctx, s.client, wl, kueuealpha.NodeToReplaceAnnotation); err != nil {
+		return fmt.Errorf("failed to remove annotation for node replacement %s", kueuealpha.NodeToReplaceAnnotation)
+	}
+	return nil
 }
 
 func updateAssignmentForTAS(cq *cache.ClusterQueueSnapshot, wl *workload.Info, assignment *flavorassigner.Assignment, targets []*preemption.Target) {
@@ -533,6 +622,13 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 	e.status = assumed
 	log.V(2).Info("Workload assumed in the cache")
 
+	if features.Enabled(features.AdmissionFairSharing) {
+		s.updateEntryPenalty(log, e, add)
+
+		// Trigger LocalQueue reconciler to apply any pending penalties
+		s.queues.NotifyWorkloadUpdateWatchers(e.Obj, newWorkload)
+	}
+
 	s.admissionRoutineWrapper.Run(func() {
 		err := s.applyAdmission(ctx, newWorkload)
 		if err == nil {
@@ -545,6 +641,9 @@ func (s *Scheduler) admit(ctx context.Context, e *entry, cq *cache.ClusterQueueS
 		// Ignore errors because the workload or clusterQueue could have been deleted
 		// by an event.
 		_ = s.cache.ForgetWorkload(log, newWorkload)
+		if features.Enabled(features.AdmissionFairSharing) {
+			s.updateEntryPenalty(log, e, subtract)
+		}
 		if apierrors.IsNotFound(err) {
 			log.V(2).Info("Workload not admitted because it was deleted")
 			return
@@ -721,5 +820,57 @@ func (s *Scheduler) recordWorkloadAdmissionEvents(newWorkload, originalWorkload 
 		if features.Enabled(features.LocalQueueMetrics) {
 			metrics.LocalQueueAdmissionChecksWaitTime(metrics.LQRefFromWorkload(newWorkload), 0)
 		}
+	}
+}
+
+// replaceWorkloadSlice handles the replacement of a workload slice by deactivating the old slice and
+// marking it as finished. It logs the replacement operation, records an event, and reports metrics.
+//
+// This function performs the following steps:
+//  1. Checks if the old workload slice is already finished by inspecting the "Finished" condition in its status.
+//     If the slice is already finished, the function logs a message and returns early.
+//  2. If the old slice is not finished, it deactivates the old slice and marks it with a "Finished" condition,
+//     indicating that the slice was replaced to accommodate the new workload slice.
+//  3. The function logs details about the replacement, including the reason for the removal and the associated message.
+//  4. An event is recorded for the old slice to indicate that the slice was aggregated (replaced) by the new slice.
+//  5. The function reports metrics for the aggregation of workload slices for the old queue.
+func (s *Scheduler) replaceWorkloadSlice(ctx context.Context, oldQueue kueue.ClusterQueueReference, newSlice, oldSlice *kueue.Workload) error {
+	log := ctrl.LoggerFrom(ctx)
+	if meta.IsStatusConditionTrue(oldSlice.Status.Conditions, kueue.WorkloadFinished) {
+		log.V(3).Info("Workload slice already finished", "old-slice", klog.KObj(oldSlice), "new-slice", klog.KObj(newSlice))
+		return nil
+	}
+	reason := kueue.WorkloadSliceReplaced
+	message := fmt.Sprintf("Replaced to accommodate a workload (UID: %s, JobUID: %s) due to workload slice aggregation", newSlice.UID, newSlice.Labels[controllerconstants.JobUIDLabel])
+	if err := workloadslicing.Finish(ctx, s.client, oldSlice, reason, message); err != nil {
+		return fmt.Errorf("failed to replace workload slice: %w", err)
+	}
+
+	log.V(3).Info("Replaced", "old slice", klog.KObj(oldSlice), "new slice", klog.KObj(newSlice), "reason", reason, "message", message, "old-queue", klog.KRef("", string(oldQueue)))
+	s.recorder.Eventf(oldSlice, corev1.EventTypeNormal, reason, message)
+	metrics.ReportReplacedWorkloadSlices(oldQueue)
+	return nil
+}
+
+type usageOp int
+
+const (
+	// add penalty
+	add usageOp = iota
+	// subtract penalty
+	subtract
+)
+
+func (s *Scheduler) updateEntryPenalty(log logr.Logger, e *entry, op usageOp) {
+	lqKey := utilqueue.NewLocalQueueReference(e.Obj.Namespace, e.Obj.Spec.QueueName)
+	penalty := afs.CalculateEntryPenalty(e.SumTotalRequests(), s.admissionFairSharing)
+
+	switch op {
+	case add:
+		s.queues.PushEntryPenalty(lqKey, penalty)
+		log.V(3).Info("Entry penalty added to lq", "lqKey", lqKey, "penalty", penalty)
+	case subtract:
+		s.queues.SubEntryPenalty(lqKey, penalty)
+		log.V(3).Info("Entry penalty subtracted from lq", "lqKey", lqKey, "penalty", penalty)
 	}
 }

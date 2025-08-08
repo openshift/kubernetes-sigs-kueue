@@ -136,7 +136,7 @@ func (w *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 		if err != nil {
 			return fmt.Errorf("failed to get namespace: %w", err)
 		}
-		if features.Enabled(features.ManagedJobsNamespaceSelector) && !w.managedJobsNamespaceSelector.Matches(labels.Set(ns.GetLabels())) {
+		if w.managedJobsNamespaceSelector != nil && !w.managedJobsNamespaceSelector.Matches(labels.Set(ns.GetLabels())) {
 			return nil
 		}
 
@@ -200,11 +200,8 @@ func (w *PodWebhook) Default(ctx context.Context, obj runtime.Object) error {
 			}
 			utilpod.Gate(&pod.pod, kueuealpha.TopologySchedulingGate)
 		}
-
-		if podGroupName(pod.pod) != "" {
-			if err := pod.addRoleHash(); err != nil {
-				return err
-			}
+		if err := pod.addRoleHash(); err != nil {
+			return err
 		}
 		// copy back changes to the object
 		pod.pod.DeepCopyInto(obj.(*corev1.Pod))

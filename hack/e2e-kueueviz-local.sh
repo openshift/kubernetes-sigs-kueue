@@ -25,18 +25,18 @@ source "${SOURCE_DIR}/e2e-common.sh"
 cleanup() {
   echo "Cleaning up kueueviz processes"
   kill $BACKEND_PID $FRONTEND_PID
-  cluster_cleanup "$KIND_CLUSTER_NAME"
+  cluster_cleanup "$KIND_CLUSTER_NAME" ""
 }
 
 # Set trap to clean up on exit
 trap cleanup EXIT
 
-cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE"
+cluster_create "${KIND_CLUSTER_NAME}" "$SOURCE_DIR/$KIND_CLUSTER_FILE" ""
 echo Waiting for kind cluster "${KIND_CLUSTER_NAME}" to start...
 prepare_docker_images
 cluster_kind_load "${KIND_CLUSTER_NAME}"
-kueue_deploy "${KIND_CLUSTER_NAME}"
-kubectl wait deploy/kueue-controller-manager -nkueue-system --for=condition=available --timeout=5m
+kueue_deploy
+kubectl wait deploy/kueue-controller-manager -n"$KUEUE_NAMESPACE" --for=condition=available --timeout=5m
 
 # Deploy kueueviz resources
 kubectl create -f "${ROOT_DIR}/cmd/kueueviz/examples/"
@@ -49,12 +49,27 @@ cd -
 
 # Start kueueviz frontend
 cd "${ROOT_DIR}/cmd/kueueviz/frontend"
+npm install
 npm run dev & FRONTEND_PID=$!
 cd -
 
 cd "${ROOT_DIR}/test/e2e/kueueviz/"
+npm install
+
+if [ "$E2E_RUN_ONLY_ENV" = "true" ]; then
+  read -rp "Do you want to cleanup? [Y/n] " reply
+  if [[ "$reply" =~ ^[nN]$ ]]; then
+    trap - EXIT
+    echo "Skipping cleanup for backend, frontend, and kind cluster."
+    echo -e "\nBackend cleanup:\n  kill $BACKEND_PID"
+    echo -e "\nFrontend cleanup:\n  kill $FRONTEND_PID"
+    echo -e "\nKind cluster cleanup:\n  kind delete cluster --name $KIND_CLUSTER_NAME"
+  fi
+  exit 0
+fi
+
 # Run Cypress tests for kueueviz frontend
-npm run cypress:run --headless
+npm run cypress:run
 cd -
 
 # The trap will handle cleanup 

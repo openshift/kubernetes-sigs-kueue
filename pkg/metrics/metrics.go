@@ -26,6 +26,7 @@ import (
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/constants"
 	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/version"
 )
 
 type AdmissionResult string
@@ -97,6 +98,15 @@ The label 'result' can have the following values:
 
 	// Metrics tied to the queue system.
 
+	buildInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: constants.KueueName,
+			Name:      "build_info",
+			Help:      "Kueue build information. 1 labeled by git version, git commit, build date, go version, compiler, platform",
+		},
+		[]string{"git_version", "git_commit", "build_date", "go_version", "compiler", "platform"},
+	)
+
 	PendingWorkloads = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Subsystem: constants.KueueName,
@@ -142,6 +152,26 @@ The label 'result' can have the following values:
 			Help:      "The time between a workload was created or requeued until it got quota reservation, per 'cluster_queue'",
 			Buckets:   generateExponentialBuckets(14),
 		}, []string{"cluster_queue"},
+	)
+
+	PodsReadyToEvictedTimeSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: constants.KueueName,
+			Name:      "pods_ready_to_evicted_time_seconds",
+			Help: `The number of seconds between a workload's pods being ready and eviction workloads per 'cluster_queue',
+The label 'reason' can have the following values:
+- "Preempted" means that the workload was evicted in order to free resources for a workload with a higher priority or reclamation of nominal quota.
+- "PodsReadyTimeout" means that the eviction took place due to a PodsReady timeout.
+- "AdmissionCheck" means that the workload was evicted because at least one admission check transitioned to False.
+- "ClusterQueueStopped" means that the workload was evicted because the ClusterQueue is stopped.
+- "LocalQueueStopped" means that the workload was evicted because the LocalQueue is stopped.
+- "NodeFailures" means that the workload was evicted due to node failures when using TopologyAwareScheduling.
+- "Deactivated" means that the workload was evicted because spec.active is set to false.
+- "DeactivatedDueToAdmissionCheck" means that the workload was evicted and deactivated by Kueue due to a rejected admission check.
+- "DeactivatedDueToMaximumExecutionTimeExceeded" means that the workload was evicted and deactivated by Kueue due to maximum execution time exceeded.
+- "DeactivatedDueToRequeuingLimitExceeded" means that the workload was evicted and deactivated by Kueue due to requeuing limit exceeded.`,
+			Buckets: generateExponentialBuckets(14),
+		}, []string{"cluster_queue", "reason"},
 	)
 
 	localQueueQuotaReservedWaitTime = prometheus.NewHistogramVec(
@@ -251,8 +281,21 @@ The label 'reason' can have the following values:
 - "PodsReadyTimeout" means that the eviction took place due to a PodsReady timeout.
 - "AdmissionCheck" means that the workload was evicted because at least one admission check transitioned to False.
 - "ClusterQueueStopped" means that the workload was evicted because the ClusterQueue is stopped.
-- "Deactivated" means that the workload was evicted because spec.active is set to false`,
+- "LocalQueueStopped" means that the workload was evicted because the LocalQueue is stopped.
+- "NodeFailures" means that the workload was evicted due to node failures when using TopologyAwareScheduling.
+- "Deactivated" means that the workload was evicted because spec.active is set to false.
+- "DeactivatedDueToAdmissionCheck" means that the workload was evicted and deactivated by Kueue due to a rejected admission check.
+- "DeactivatedDueToMaximumExecutionTimeExceeded" means that the workload was evicted and deactivated by Kueue due to maximum execution time exceeded.
+- "DeactivatedDueToRequeuingLimitExceeded" means that the workload was evicted and deactivated by Kueue due to requeuing limit exceeded.`,
 		}, []string{"cluster_queue", "reason"},
+	)
+
+	ReplacedWorkloadSlicesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Subsystem: constants.KueueName,
+			Name:      "replaced_workload_slices_total",
+			Help:      `The number of replaced workload slices per 'cluster_queue'`,
+		}, []string{"cluster_queue"},
 	)
 
 	LocalQueueEvictedWorkloadsTotal = prometheus.NewCounterVec(
@@ -265,7 +308,12 @@ The label 'reason' can have the following values:
 - "PodsReadyTimeout" means that the eviction took place due to a PodsReady timeout.
 - "AdmissionCheck" means that the workload was evicted because at least one admission check transitioned to False.
 - "ClusterQueueStopped" means that the workload was evicted because the ClusterQueue is stopped.
-- "Deactivated" means that the workload was evicted because spec.active is set to false`,
+- "LocalQueueStopped" means that the workload was evicted because the LocalQueue is stopped.
+- "NodeFailures" means that the workload was evicted due to node failures when using TopologyAwareScheduling.
+- "Deactivated" means that the workload was evicted because spec.active is set to false.
+- "DeactivatedDueToAdmissionCheck" means that the workload was evicted and deactivated by Kueue due to a rejected admission check.
+- "DeactivatedDueToMaximumExecutionTimeExceeded" means that the workload was evicted and deactivated by Kueue due to maximum execution time exceeded.
+- "DeactivatedDueToRequeuingLimitExceeded" means that the workload was evicted and deactivated by Kueue due to requeuing limit exceeded.`,
 		}, []string{"name", "namespace", "reason"},
 	)
 
@@ -279,7 +327,12 @@ The label 'reason' can have the following values:
 - "PodsReadyTimeout" means that the eviction took place due to a PodsReady timeout.
 - "AdmissionCheck" means that the workload was evicted because at least one admission check transitioned to False.
 - "ClusterQueueStopped" means that the workload was evicted because the ClusterQueue is stopped.
-- "Deactivated" means that the workload was evicted because spec.active is set to false`,
+- "LocalQueueStopped" means that the workload was evicted because the LocalQueue is stopped.
+- "NodeFailures" means that the workload was evicted due to node failures when using TopologyAwareScheduling.
+- "Deactivated" means that the workload was evicted because spec.active is set to false.
+- "DeactivatedDueToAdmissionCheck" means that the workload was evicted and deactivated by Kueue due to a rejected admission check.
+- "DeactivatedDueToMaximumExecutionTimeExceeded" means that the workload was evicted and deactivated by Kueue due to maximum execution time exceeded.
+- "DeactivatedDueToRequeuingLimitExceeded" means that the workload was evicted and deactivated by Kueue due to requeuing limit exceeded.`,
 		}, []string{"cluster_queue", "reason", "detailed_reason"},
 	)
 
@@ -410,8 +463,8 @@ For a LocalQueue, the metric only reports a value of 1 for one of the statuses.`
 		prometheus.GaugeOpts{
 			Subsystem: constants.KueueName,
 			Name:      "cluster_queue_weighted_share",
-			Help: `Reports a value that representing the maximum of the ratios of usage above nominal 
-quota to the lendable resources in the cohort, among all the resources provided by 
+			Help: `Reports a value that representing the maximum of the ratios of usage above nominal
+quota to the lendable resources in the cohort, among all the resources provided by
 the ClusterQueue, and divided by the weight.
 If zero, it means that the usage of the ClusterQueue is below the nominal quota.
 If the ClusterQueue has a weight of zero and is borrowing, this will return 9223372036854775807,
@@ -423,8 +476,8 @@ the maximum possible share value.`,
 		prometheus.GaugeOpts{
 			Subsystem: constants.KueueName,
 			Name:      "cohort_weighted_share",
-			Help: `Reports a value that representing the maximum of the ratios of usage above nominal 
-quota to the lendable resources in the Cohort, among all the resources provided by 
+			Help: `Reports a value that representing the maximum of the ratios of usage above nominal
+quota to the lendable resources in the Cohort, among all the resources provided by
 the Cohort, and divided by the weight.
 If zero, it means that the usage of the Cohort is below the nominal quota.
 If the Cohort has a weight of zero and is borrowing, this will return 9223372036854775807,
@@ -432,6 +485,11 @@ the maximum possible share value.`,
 		}, []string{"cohort"},
 	)
 )
+
+func init() {
+	versionInfo := version.Get()
+	buildInfo.WithLabelValues(versionInfo.GitVersion, versionInfo.GitCommit, versionInfo.BuildDate, versionInfo.GoVersion, versionInfo.Compiler, versionInfo.Platform).Set(1)
+}
 
 func generateExponentialBuckets(count int) []float64 {
 	return append([]float64{1}, prometheus.ExponentialBuckets(2.5, 2, count-1)...)
@@ -496,8 +554,12 @@ func ReportLocalQueuePendingWorkloads(lq LocalQueueReference, active, inadmissib
 	LocalQueuePendingWorkloads.WithLabelValues(string(lq.Name), lq.Namespace, PendingStatusInadmissible).Set(float64(inadmissible))
 }
 
-func ReportEvictedWorkloads(cqName kueue.ClusterQueueReference, reason string) {
-	EvictedWorkloadsTotal.WithLabelValues(string(cqName), reason).Inc()
+func ReportEvictedWorkloads(cqName kueue.ClusterQueueReference, evictionReason string) {
+	EvictedWorkloadsTotal.WithLabelValues(string(cqName), evictionReason).Inc()
+}
+
+func ReportReplacedWorkloadSlices(cqName kueue.ClusterQueueReference) {
+	ReplacedWorkloadSlicesTotal.WithLabelValues(string(cqName)).Inc()
 }
 
 func ReportLocalQueueEvictedWorkloads(lq LocalQueueReference, reason string) {
@@ -510,7 +572,6 @@ func ReportEvictedWorkloadsOnce(cqName kueue.ClusterQueueReference, reason, unde
 
 func ReportPreemption(preemptingCqName kueue.ClusterQueueReference, preemptingReason string, targetCqName kueue.ClusterQueueReference) {
 	PreemptedWorkloadsTotal.WithLabelValues(string(preemptingCqName), preemptingReason).Inc()
-	ReportEvictedWorkloads(targetCqName, kueue.WorkloadEvictedByPreemption)
 }
 
 func LQRefFromWorkload(wl *kueue.Workload) LocalQueueReference {
@@ -526,6 +587,7 @@ func ClearClusterQueueMetrics(cqName string) {
 	PendingWorkloads.DeleteLabelValues(cqName, PendingStatusInadmissible)
 	QuotaReservedWorkloadsTotal.DeleteLabelValues(cqName)
 	quotaReservedWaitTime.DeleteLabelValues(cqName)
+	PodsReadyToEvictedTimeSeconds.DeleteLabelValues(cqName)
 	AdmittedWorkloadsTotal.DeleteLabelValues(cqName)
 	admissionWaitTime.DeleteLabelValues(cqName)
 	admissionChecksWaitTime.DeleteLabelValues(cqName)
@@ -688,6 +750,7 @@ func ClearClusterQueueResourceReservations(cqName, flavor, resource string) {
 
 func Register() {
 	metrics.Registry.MustRegister(
+		buildInfo,
 		AdmissionAttemptsTotal,
 		admissionAttemptDuration,
 		AdmissionCyclePreemptionSkips,
@@ -696,6 +759,7 @@ func Register() {
 		AdmittedActiveWorkloads,
 		QuotaReservedWorkloadsTotal,
 		quotaReservedWaitTime,
+		PodsReadyToEvictedTimeSeconds,
 		AdmittedWorkloadsTotal,
 		EvictedWorkloadsTotal,
 		EvictedWorkloadsOnceTotal,
