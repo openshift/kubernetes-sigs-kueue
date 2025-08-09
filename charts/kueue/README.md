@@ -37,7 +37,7 @@ $ helm install kueue kueue/ --create-namespace --namespace kueue-system
 Or use the charts pushed to `oci://registry.k8s.io/kueue/charts/kueue`:
 
 ```bash
-helm install kueue oci://registry.k8s.io/kueue/charts/kueue --version="0.12.1" --create-namespace --namespace=kueue-system
+helm install kueue oci://registry.k8s.io/kueue/charts/kueue --version="0.12.6" --create-namespace --namespace=kueue-system
 ```
 
 ##### Verify that controller pods are running properly.
@@ -76,12 +76,19 @@ The following table lists the configurable parameters of the kueue chart and the
 | `enableVisibilityAPF`                                  | enable APF for the visibility API                      | `false`                                     |
 | `enableKueueViz`                                       | enable KueueViz dashboard                              | `false`                                     |
 | `KueueViz.backend.image`                               | KueueViz dashboard backend image                       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-backend:main` |
+| `kueueViz.backend.nodeSelector`                        | KueueViz backend nodeSelector                          | `{}`                                        |
+| `kueueViz.backend.tolerations`                         | KueueViz backend tolerations                           | `[]`                                        |
 | `KueueViz.frontend.image`                              | KueueViz dashboard frontend image                      | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueueviz-frontend:main` |
+| `kueueViz.frontend.nodeSelector`                       | KueueViz frontend nodeSelector                         | `{}`                                        |
+| `kueueViz.frontend.tolerations`                        | KueueViz frontend tolerations                          | `[]`                                        |
+| `controllerManager.manager.priorityClassName`          | controllerManager.manager's Pod priorityClassName      | ``                                          |
 | `controllerManager.manager.image.repository`           | controllerManager.manager's repository and image       | `us-central1-docker.pkg.dev/k8s-staging-images/kueue/kueue` |
 | `controllerManager.manager.image.tag`                  | controllerManager.manager's tag                        | `main`                                      |
 | `controllerManager.manager.resources`                  | controllerManager.manager's resources                  | abbr.                                       |
 | `controllerManager.replicas`                           | ControllerManager's replicaCount                       | `1`                                         |
 | `controllerManager.imagePullSecrets`                   | ControllerManager's imagePullSecrets                   | `[]`                                        |
+| `controllerManager.nodeSelector`                       | ControllerManager's nodeSelector                       | `{}`                                        |
+| `controllerManager.tolerations`                        | ControllerManager's tolerations                        | `[]`                                        |
 | `controllerManager.readinessProbe.initialDelaySeconds` | ControllerManager's readinessProbe initialDelaySeconds | `5`                                         |
 | `controllerManager.readinessProbe.periodSeconds`       | ControllerManager's readinessProbe periodSeconds       | `10`                                        |
 | `controllerManager.readinessProbe.timeoutSeconds`      | ControllerManager's readinessProbe timeoutSeconds      | `1`                                         |

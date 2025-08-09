@@ -176,12 +176,12 @@ var _ = ginkgo.Describe("MultiKueue", func() {
 		util.ExpectObjectToBeDeleted(ctx, k8sWorker2Client, worker2Cq, true)
 		util.ExpectObjectToBeDeleted(ctx, k8sWorker2Client, worker2Flavor, true)
 
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, managerCq, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, managerFlavor, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, multiKueueAc, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, multiKueueConfig, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, workerCluster1, true)
-		util.ExpectObjectToBeDeleted(ctx, k8sManagerClient, workerCluster2, true)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, managerCq, true, util.LongTimeout)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, managerFlavor, true, util.LongTimeout)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, multiKueueAc, true, util.LongTimeout)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, multiKueueConfig, true, util.LongTimeout)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, workerCluster1, true, util.LongTimeout)
+		util.ExpectObjectToBeDeletedWithTimeout(ctx, k8sManagerClient, workerCluster2, true, util.LongTimeout)
 
 		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sManagerClient, managerNs)
 		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sWorker1Client, worker1Ns)
@@ -192,8 +192,8 @@ var _ = ginkgo.Describe("MultiKueue", func() {
 		ginkgo.It("Should create a pod on worker if admitted", func() {
 			pod := testingpod.MakePod("pod", managerNs.Name).
 				Image(util.GetAgnHostImage(), util.BehaviorExitFast).
-				RequestAndLimit("cpu", "1").
-				RequestAndLimit("memory", "2G").
+				RequestAndLimit(corev1.ResourceCPU, "1").
+				RequestAndLimit(corev1.ResourceMemory, "2G").
 				Queue(managerLq.Name).
 				Obj()
 			// Since it requires 2G of memory, this pod can only be admitted in worker 2.
@@ -440,8 +440,8 @@ var _ = ginkgo.Describe("MultiKueue", func() {
 			// Since it requires 2G of memory, this job can only be admitted in worker 2.
 			job := testingjob.MakeJob("job", managerNs.Name).
 				Queue(kueue.LocalQueueName(managerLq.Name)).
-				RequestAndLimit("cpu", "1").
-				RequestAndLimit("memory", "2G").
+				RequestAndLimit(corev1.ResourceCPU, "1").
+				RequestAndLimit(corev1.ResourceMemory, "2G").
 				TerminationGracePeriod(1).
 				// Give it the time to be observed Active in the live status update step.
 				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
@@ -534,8 +534,8 @@ var _ = ginkgo.Describe("MultiKueue", func() {
 						Args: util.BehaviorWaitForDeletion,
 					},
 				).
-				RequestAndLimit("replicated-job-1", "cpu", "500m").
-				RequestAndLimit("replicated-job-1", "memory", "200M").
+				RequestAndLimit("replicated-job-1", corev1.ResourceCPU, "500m").
+				RequestAndLimit("replicated-job-1", corev1.ResourceMemory, "200M").
 				Obj()
 
 			ginkgo.By("Creating the jobSet", func() {

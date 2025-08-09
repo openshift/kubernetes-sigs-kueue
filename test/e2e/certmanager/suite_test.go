@@ -65,11 +65,4 @@ var _ = ginkgo.BeforeSuite(func() {
 		"Kueue and all required operators are available in the cluster",
 		"waitingTime", time.Since(waitForAvailableStart),
 	)
-	defaultKueueCfg = util.GetKueueConfiguration(ctx, k8sClient)
-})
-
-var _ = ginkgo.AfterSuite(func() {
-	util.ApplyKueueConfiguration(ctx, k8sClient, defaultKueueCfg)
-	util.RestartKueueController(ctx, k8sClient)
-	ginkgo.GinkgoLogr.Info("Default Kueue configuration restored")
 })
