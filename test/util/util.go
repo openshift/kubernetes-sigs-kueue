@@ -527,18 +527,18 @@ func ExpectLQAdmittedWorkloadsTotalMetric(lq *kueue.LocalQueue, value int) {
 }
 
 func ExpectLQByStatusMetric(lq *kueue.LocalQueue, status metav1.ConditionStatus) {
-	for i, s := range metrics.ConditionStatusValues {
-		var wantV float64
-		if metrics.ConditionStatusValues[i] == status {
-			wantV = 1
-		}
-		metric := metrics.LocalQueueByStatus.WithLabelValues(lq.Name, lq.Namespace, string(s))
-		gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
+		for i, s := range metrics.ConditionStatusValues {
+			var wantV float64
+			if metrics.ConditionStatusValues[i] == status {
+				wantV = 1
+			}
+			metric := metrics.LocalQueueByStatus.WithLabelValues(lq.Name, lq.Namespace, string(s))
 			v, err := testutil.GetGaugeMetricValue(metric)
 			g.Expect(err).ToNot(gomega.HaveOccurred())
 			g.Expect(v).Should(gomega.Equal(wantV), "local_queue_status with status=%s", s)
-		}, Timeout, Interval).Should(gomega.Succeed())
-	}
+		}
+	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
 func ExpectPendingWorkloadsMetric(cq *kueue.ClusterQueue, active, inadmissible int) {
@@ -1072,7 +1072,6 @@ func DeactivateWorkload(ctx context.Context, c client.Client, key client.ObjectK
 	}, Timeout, Interval).Should(gomega.Succeed())
 }
 
-// conditionType corev1.NodeConditionType, conditionStatus corev1.ConditionStatus, time time.Time
 func SetNodeCondition(ctx context.Context, k8sClient client.Client, node *corev1.Node, newCondition *corev1.NodeCondition) {
 	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
 		var updatedNode corev1.Node
@@ -1082,9 +1081,16 @@ func SetNodeCondition(ctx context.Context, k8sClient client.Client, node *corev1
 		if condition == nil {
 			updatedNode.Status.Conditions = append(updatedNode.Status.Conditions, *newCondition)
 			changed = true
-		} else if condition.Status != newCondition.Status {
-			condition.Status = newCondition.Status
+		}
+		if newCondition.LastTransitionTime.IsZero() {
+			condition.LastTransitionTime = metav1.Now()
+			changed = true
+		} else if condition.LastTransitionTime != newCondition.LastTransitionTime {
 			condition.LastTransitionTime = newCondition.LastTransitionTime
+			changed = true
+		}
+		if condition.Status != newCondition.Status {
+			condition.Status = newCondition.Status
 			changed = true
 		}
 		if changed {
