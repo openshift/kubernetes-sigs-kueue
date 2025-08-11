@@ -137,6 +137,11 @@ function restore_kueue_namespace {
     (cd config/default-ocp  && $KUSTOMIZE edit set namespace "$DEFAULT_NAMESPACE")
 }
 
+function allow_privileged_access {
+    $OC adm policy add-scc-to-group privileged system:authenticated system:serviceaccounts
+    $OC adm policy add-scc-to-group anyuid system:authenticated system:serviceaccounts
+}
+
 function deploy_cert_manager {
     echo "Deploying cert-manager..."
     ${SOURCE_DIR}/deploy-cert-manager-ocp.sh
@@ -155,6 +160,9 @@ fi
 
 # Label two worker nodes for e2e tests (similar to the Kind setup).
 label_worker_nodes
+
+# Disable scc rules for e2e pod tests
+allow_privileged_access
 
 $GINKGO $GINKGO_ARGS \
   --skip="${GINKGO_SKIP_PATTERN}" \
