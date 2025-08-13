@@ -83,8 +83,7 @@ func TestDefault(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		enableTopologyAwareScheduling      bool
-		enableManagedJobsNamespaceSelector bool
+		enableTopologyAwareScheduling bool
 
 		initObjects                  []client.Object
 		pod                          *corev1.Pod
@@ -107,6 +106,7 @@ func TestDefault(t *testing.T) {
 				Queue("test-queue").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
@@ -121,6 +121,7 @@ func TestDefault(t *testing.T) {
 				Queue("test-queue").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
@@ -134,6 +135,7 @@ func TestDefault(t *testing.T) {
 			want: testingpod.MakePod("test-pod", defaultNamespace.Name).
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
@@ -152,6 +154,7 @@ func TestDefault(t *testing.T) {
 				Queue("test-queue").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				OwnerReference("parent-job", batchv1.SchemeGroupVersion.WithKind("Job")).
 				Obj(),
@@ -362,6 +365,7 @@ func TestDefault(t *testing.T) {
 				Annotation(kueuealpha.PodSetRequiredTopologyAnnotation, "block").
 				ManagedByKueueLabel().
 				KueueFinalizer().
+				RoleHash("a9f06f3a").
 				KueueSchedulingGate().
 				TopologySchedulingGate().
 				Obj(),
@@ -384,6 +388,7 @@ func TestDefault(t *testing.T) {
 				Label("test-label", "test-value").
 				Label(kueuealpha.PodGroupPodIndexLabel, "test-value").
 				ManagedByKueueLabel().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				KueueSchedulingGate().
 				TopologySchedulingGate().
@@ -401,6 +406,7 @@ func TestDefault(t *testing.T) {
 				Queue("default").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
@@ -428,13 +434,13 @@ func TestDefault(t *testing.T) {
 				Queue("queue").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
-		"ManagedJobsNamespaceSelector is enabled and the namespace matches the selector": {
-			enableManagedJobsNamespaceSelector: true,
-			initObjects:                        []client.Object{defaultNamespace},
-			managedJobsNamespaceSelector:       defaultManagedJobsNamespaceSelector,
+		"the namespace matches the selector": {
+			initObjects:                  []client.Object{defaultNamespace},
+			managedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			pod: testingpod.MakePod("test-pod", defaultNamespace.Name).
 				Queue("queue").
 				Obj(),
@@ -442,11 +448,11 @@ func TestDefault(t *testing.T) {
 				Queue("queue").
 				ManagedByKueueLabel().
 				KueueSchedulingGate().
+				RoleHash("a9f06f3a").
 				KueueFinalizer().
 				Obj(),
 		},
-		"ManagedJobsNamespaceSelector is enabled but doesn’t match the managedJobsNamespaceSelector": {
-			enableManagedJobsNamespaceSelector: true,
+		"doesn’t match the managedJobsNamespaceSelector": {
 			initObjects: []client.Object{
 				utiltesting.MakeNamespaceWrapper("kube-system").Label(corev1.LabelMetadataName, "kube-system").Obj(),
 			},
@@ -467,6 +473,7 @@ func TestDefault(t *testing.T) {
 			want: testingpod.MakePod("test-pod", defaultNamespace.Name).
 				Queue("queue").
 				ManagedByKueueLabel().
+				RoleHash("a9f06f3a").
 				KueueSchedulingGate().
 				KueueFinalizer().
 				Obj(),
@@ -494,6 +501,7 @@ func TestDefault(t *testing.T) {
 				Label(corev1.LabelMetadataName, "test-pod").
 				Queue("queue").
 				ManagedByKueueLabel().
+				RoleHash("a9f06f3a").
 				KueueSchedulingGate().
 				KueueFinalizer().
 				Obj(),
@@ -515,7 +523,6 @@ func TestDefault(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, tc.enableTopologyAwareScheduling)
-			features.SetFeatureGateDuringTest(t, features.ManagedJobsNamespaceSelector, tc.enableManagedJobsNamespaceSelector)
 			features.SetFeatureGateDuringTest(t, features.LocalQueueDefaulting, tc.localQueueDefaulting)
 			t.Cleanup(jobframework.EnableIntegrationsForTest(t, tc.enableIntegrations...))
 			builder := utiltesting.NewClientBuilder(rayv1.AddToScheme, kfmpi.AddToScheme, kftraining.AddToScheme, appsv1.AddToScheme)

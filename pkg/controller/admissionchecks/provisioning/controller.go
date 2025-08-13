@@ -31,7 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
@@ -327,7 +327,7 @@ func (c *Controller) handleError(ctx context.Context, wl *kueue.Workload, ac *ku
 	c.record.Eventf(wl, corev1.EventTypeWarning, "FailedCreate", api.TruncateEventMessage(msg))
 
 	ac.Message = api.TruncateConditionMessage(msg)
-	wlPatch := workload.BaseSSAWorkload(wl)
+	wlPatch := workload.BaseSSAWorkload(wl, true)
 	workload.SetAdmissionCheckState(&wlPatch.Status.AdmissionChecks, *ac, c.clock)
 
 	patchErr := c.client.Status().Patch(
@@ -498,7 +498,8 @@ func (c *Controller) syncCheckStates(
 	log := ctrl.LoggerFrom(ctx)
 	wlInfo.update(wl, c.clock)
 	checksMap := slices.ToRefMap(wl.Status.AdmissionChecks, func(c *kueue.AdmissionCheckState) kueue.AdmissionCheckReference { return c.Name })
-	wlPatch := workload.BaseSSAWorkload(wl)
+	wlPatch := workload.BaseSSAWorkload(wl, true)
+	wlPatch.Status.RequeueState = wl.Status.RequeueState.DeepCopy()
 	recorderMessages := make([]string, 0, len(checkConfig))
 	updated := false
 	for check, prc := range checkConfig {
@@ -623,10 +624,8 @@ func podSetUpdates(log logr.Logger, wl *kueue.Workload, pr *autoscaling.Provisio
 		podSetUpdate := kueue.PodSetUpdate{
 			Name: refMap[ps.PodTemplateRef.Name],
 			Annotations: map[string]string{
-				DeprecatedConsumesAnnotationKey:  pr.Name,
-				DeprecatedClassNameAnnotationKey: pr.Spec.ProvisioningClassName,
-				ConsumesAnnotationKey:            pr.Name,
-				ClassNameAnnotationKey:           pr.Spec.ProvisioningClassName},
+				ConsumesAnnotationKey:  pr.Name,
+				ClassNameAnnotationKey: pr.Spec.ProvisioningClassName},
 		}
 		if psUpdate := prc.Spec.PodSetUpdates; psUpdate != nil {
 			podSetUpdate.NodeSelector = make(map[string]string, len(psUpdate.NodeSelector))

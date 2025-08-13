@@ -1,3 +1,122 @@
+## v0.12.6
+
+Changes since `v0.12.5`:
+
+## Urgent Upgrade Notes
+
+### (No, really, you MUST read this before you upgrade)
+
+- Rename kueue-metrics-certs to kueue-metrics-cert cert-manager.io/v1 Certificate name in cert-manager manifests when installing Kueue using the Kustomize configuration.
+
+  If you're using cert-manager and have deployed Kueue using the Kustomize configuration, you must delete the existing kueue-metrics-certs cert-manager.io/v1 Certificate before applying the new changes to avoid conflicts. (#6361, @mbobrovskyi)
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fix accounting for the `evicted_workloads_once_total` metric:
+  - the metric wasn't incremented for workloads evicted due to stopped LocalQueue (LocalQueueStopped reason)
+  - the reason used for the metric was "Deactivated" for workloads deactivated by users and Kueue, now the reason label can have the following values: Deactivated, DeactivatedDueToAdmissionCheck, DeactivatedDueToMaximumExecutionTimeExceeded, DeactivatedDueToRequeuingLimitExceeded. This approach aligns the metric with `evicted_workloads_total`.
+  - the metric was incremented during preemption before the preemption request was issued. Thus, it could be incorrectly over-counted in case of the preemption request failure.
+  - the metric was not incremented for workload evicted due to NodeFailures (TAS)
+
+  The existing and introduced DeactivatedDueToXYZ reason label values will be replaced by the single "Deactivated" reason label value and underlying_cause in the future release. (#6363, @mimowo)
+- Fix the bug which could occasionally cause workloads evicted by the built-in AdmissionChecks
+  (ProvisioningRequest and MultiKueue) to get stuck in the evicted state which didn't allow re-scheduling.
+  This could happen when the AdmissionCheck controller would trigger eviction by setting the
+  Admission check state to "Retry". (#6301, @mimowo)
+- Fixed a bug that prevented adding the kueue- prefix to the secretName field in cert-manager manifests when installing Kueue using the Kustomize configuration. (#6344, @mbobrovskyi)
+- ProvisioningRequest: Fix a bug that Kueue didn't recreate the next ProvisioningRequest instance after the
+  second (and consecutive) failed attempt. (#6330, @PBundyra)
+- Support disabling client-side ratelimiting in Config API clientConnection.qps with a negative value (e.g., -1) (#6306, @tenzen-y)
+- TAS: Fix a bug that the node failure controller tries to re-schedule Pods on the failure node even after the Node is recovered and reappears (#6348, @pajakd)
+
+## v0.12.5
+
+Changes since `v0.12.4`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Emit the Workload event indicating eviction when LocalQueue is stopped (#5994, @amy)
+- Fix incorrect workload admission after CQ is deleted in a cohort reducing the amount of available quota. The culprit of the issue was that the cached amount of quota was not updated on CQ deletion. (#6026, @amy)
+
+## v0.12.4
+
+Changes since `v0.12.3`:
+
+## Changes by Kind
+
+### Feature
+
+- Helm: support for specifying nodeSelector and tolerations for all Kueue components (#5869, @zmalik)
+
+### Bug or Regression
+
+- Fix a bug where the GroupKindConcurrency in Kueue Config is not propagated to the controllers (#5826, @tenzen-y)
+- TAS: Fix a bug for the incompatible NodeFailureController name with Prometheus (#5824, @tenzen-y)
+- TAS: Fix a bug that Kueue unintentionally gives up a workload scheduling in LeastFreeCapacity if there is at least one unmatched domain. (#5804, @PBundyra)
+- TAS: Fix a bug that the tas-node-failure-controller unexpectedly is started under the HA mode even though the replica is not the leader. (#5851, @tenzen-y)
+- TAS: Fix the bug when Kueue crashes if the preemption target, due to quota, is using a node which is already deleted. (#5843, @mimowo)
+
+### Other (Cleanup or Flake)
+
+- KueueViz: reduce the image size from 1.14 GB to 267MB, resulting in faster pull and shorter startup time. (#5875, @mbobrovskyi)
+
+## v0.12.3
+
+Changes since `v0.12.2`:
+
+## Urgent Upgrade Notes
+
+### (No, really, you MUST read this before you upgrade)
+
+- Helm:
+
+  - Fixed KueueViz installation when enableKueueViz=true is used with default values for the image specifying parameters.
+  - Split the image specifying parameters into separate repository and tag, both for KueueViz backend and frontend.
+
+  If you are using Helm charts and installing KueueViz using custom images,
+  then you need to specify them by kueueViz.backend.image.repository, kueueViz.backend.image.tag,
+  kueueViz.fontend.image.repository and kueueViz.frontend.image.tag parameters. (#5514, @mbobrovskyi)
+
+## Changes by Kind
+
+### Feature
+
+- Allow setting the controller-manager's Pod `PriorityClassName` from the Helm chart (#5649, @kaisoz)
+
+### Bug or Regression
+
+- Add Cohort Go client library (#5603, @tenzen-y)
+- Fix the bug that Job deleted on the manager cluster didn't trigger deletion of pods on the worker cluster. (#5607, @ichekrygin)
+- Fix the bug that Kueue, upon startup, would incorrectly admit and then immediately deactivate
+  already deactivated Workloads.
+
+  This bug also prevented the ObjectRetentionPolicies feature from deleting Workloads
+  that were deactivated by Kueue before the feature was enabled. (#5629, @mbobrovskyi)
+- Fix the bug that the webhook certificate setting under `controllerManager.webhook.certDir` was ignored by the internal cert manager, effectively always defaulting to /tmp/k8s-webhook-server/serving-certs. (#5491, @ichekrygin)
+- Fixed bug that doesn't allow Kueue to admit Workload after queue-name label set. (#5714, @mbobrovskyi)
+- MultiKueue: Fix a bug that batch/v1 Job final state is not synced from Workload cluster to Management cluster when disabling the `MultiKueueBatchJobWithManagedBy` feature gate. (#5706, @ichekrygin)
+- TAS: fix the bug which would trigger unnecessary second pass scheduling for nodeToReplace
+  in the following scenarios:
+  1. Finished workload
+  2. Evicted workload
+  3. node to replace is not present in the workload's TopologyAssignment domains (#5591, @mimowo)
+- TAS: fix the scenario when deleted workload still lives in the cache. (#5605, @mimowo)
+- Use simulation of preemption for more accurate flavor assignment.
+  In particular, in certain scenarios when preemption while borrowing is enabled,
+  the previous heuristic would wrongly state that preemption was possible. (#5700, @gabesaba)
+- Use simulation of preemption for more accurate flavor assignment.
+  In particular, the previous heuristic would wrongly state that preemption
+  in a flavor was possible even if no preemption candidates could be found.
+
+  Additionally, in scenarios when preemption while borrowing is enabled,
+  the flavor in which reclaim is possible is preferred over flavor where
+  priority-based preemption is required. This is consistent with prioritizing
+  flavors when preemption without borrowing is used. (#5740, @gabesaba)
+
 ## v0.12.2
 
 Changes since `v0.12.1`:

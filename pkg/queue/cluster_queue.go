@@ -33,10 +33,12 @@ import (
 
 	config "sigs.k8s.io/kueue/apis/config/v1beta1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
-	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/hierarchy"
+	afs "sigs.k8s.io/kueue/pkg/util/admissionfairsharing"
 	"sigs.k8s.io/kueue/pkg/util/heap"
+	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
 	utilpriority "sigs.k8s.io/kueue/pkg/util/priority"
+	utilqueue "sigs.k8s.io/kueue/pkg/util/queue"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -82,6 +84,8 @@ type ClusterQueue struct {
 	rwm sync.RWMutex
 
 	clock clock.Clock
+
+	AdmissionScope *kueue.AdmissionScope
 }
 
 func (c *ClusterQueue) GetName() kueue.ClusterQueueReference {
@@ -92,9 +96,9 @@ func workloadKey(i *workload.Info) workload.Reference {
 	return workload.Key(i.Obj)
 }
 
-func newClusterQueue(ctx context.Context, client client.Client, cq *kueue.ClusterQueue, wo workload.Ordering, afsConfig *config.AdmissionFairSharing) (*ClusterQueue, error) {
-	enableAdmissionFs, fsResWeights := afsResourceWeights(cq, afsConfig)
-	cqImpl := newClusterQueueImpl(ctx, client, wo, realClock, fsResWeights, enableAdmissionFs)
+func newClusterQueue(ctx context.Context, client client.Client, cq *kueue.ClusterQueue, wo workload.Ordering, afsConfig *config.AdmissionFairSharing, afsEntryPenalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]) (*ClusterQueue, error) {
+	enableAdmissionFs, fsResWeights := afs.ResourceWeights(cq.Spec.AdmissionScope, afsConfig)
+	cqImpl := newClusterQueueImpl(ctx, client, wo, realClock, fsResWeights, enableAdmissionFs, afsEntryPenalties)
 	err := cqImpl.Update(cq)
 	if err != nil {
 		return nil, err
@@ -102,17 +106,8 @@ func newClusterQueue(ctx context.Context, client client.Client, cq *kueue.Cluste
 	return cqImpl, nil
 }
 
-func afsResourceWeights(cq *kueue.ClusterQueue, afsConfig *config.AdmissionFairSharing) (bool, map[corev1.ResourceName]float64) {
-	enableAdmissionFs, fsResWeights := false, make(map[corev1.ResourceName]float64)
-	if afsConfig != nil && cq.Spec.AdmissionScope != nil && cq.Spec.AdmissionScope.AdmissionMode == kueue.UsageBasedAdmissionFairSharing && features.Enabled(features.AdmissionFairSharing) {
-		enableAdmissionFs = true
-		fsResWeights = afsConfig.ResourceWeights
-	}
-	return enableAdmissionFs, fsResWeights
-}
-
-func newClusterQueueImpl(ctx context.Context, client client.Client, wo workload.Ordering, clock clock.Clock, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool) *ClusterQueue {
-	lessFunc := queueOrderingFunc(ctx, client, wo, fsResWeights, enableAdmissionFs)
+func newClusterQueueImpl(ctx context.Context, client client.Client, wo workload.Ordering, clock clock.Clock, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool, afsEntryPenalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]) *ClusterQueue {
+	lessFunc := queueOrderingFunc(ctx, client, wo, fsResWeights, enableAdmissionFs, afsEntryPenalties)
 	return &ClusterQueue{
 		heap:                   *heap.New(workloadKey, lessFunc),
 		inadmissibleWorkloads:  make(map[workload.Reference]*workload.Info),
@@ -184,7 +179,7 @@ func (c *ClusterQueue) PushOrUpdate(wInfo *workload.Info) {
 	c.heap.PushOrUpdate(wInfo)
 }
 
-func (c *ClusterQueue) Heapify(lqName string) {
+func (c *ClusterQueue) RebuildLocalQueue(lqName string) {
 	c.rwm.Lock()
 	defer c.rwm.Unlock()
 	for _, wl := range c.heap.List() {
@@ -433,12 +428,12 @@ func (c *ClusterQueue) RequeueIfNotPresent(wInfo *workload.Info, reason RequeueR
 // to sort workloads. The function sorts workloads based on their priority.
 // When priorities are equal, it uses the workload's creation or eviction
 // time.
-func queueOrderingFunc(ctx context.Context, c client.Client, wo workload.Ordering, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool) func(a, b *workload.Info) bool {
+func queueOrderingFunc(ctx context.Context, c client.Client, wo workload.Ordering, fsResWeights map[corev1.ResourceName]float64, enableAdmissionFs bool, afsEntryPenalties *utilmaps.SyncMap[utilqueue.LocalQueueReference, corev1.ResourceList]) func(a, b *workload.Info) bool {
 	log := ctrl.LoggerFrom(ctx)
 	return func(a, b *workload.Info) bool {
 		if enableAdmissionFs {
-			lqAUsage, errA := a.LocalQueueUsage(ctx, c, fsResWeights)
-			lqBUsage, errB := b.LocalQueueUsage(ctx, c, fsResWeights)
+			lqAUsage, errA := a.CalcLocalQueueFSUsage(ctx, c, fsResWeights, afsEntryPenalties)
+			lqBUsage, errB := b.CalcLocalQueueFSUsage(ctx, c, fsResWeights, afsEntryPenalties)
 			switch {
 			case errA != nil:
 				log.V(2).Error(errA, "Error determining LocalQueue usage")
@@ -462,5 +457,13 @@ func queueOrderingFunc(ctx context.Context, c client.Client, wo workload.Orderin
 		tA := wo.GetQueueOrderTimestamp(a.Obj)
 		tB := wo.GetQueueOrderTimestamp(b.Obj)
 		return !tB.Before(tA)
+	}
+}
+
+func (c *ClusterQueue) RebuildAll() {
+	c.rwm.Lock()
+	defer c.rwm.Unlock()
+	for _, wl := range c.heap.List() {
+		c.heap.PushOrUpdate(wl)
 	}
 }

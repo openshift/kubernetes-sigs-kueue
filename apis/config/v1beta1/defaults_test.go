@@ -98,6 +98,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 		GCInterval:        &metav1.Duration{Duration: DefaultMultiKueueGCInterval},
 		Origin:            ptr.To(DefaultMultiKueueOrigin),
 		WorkerLostTimeout: &metav1.Duration{Duration: DefaultMultiKueueWorkerLostTimeout},
+		DispatcherName:    ptr.To(MultiKueueDispatcherModeAllAtOnce),
 	}
 
 	podsReadyTimeout := metav1.Duration{Duration: defaultPodsReadyTimeout}
@@ -124,6 +125,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"defaulting ControllerManager": {
@@ -167,6 +169,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"should not default ControllerManager": {
@@ -227,6 +230,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"should not set LeaderElectionID": {
@@ -270,6 +274,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"defaulting InternalCertManagement": {
@@ -289,6 +294,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"should not default InternalCertManagement": {
@@ -309,6 +315,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"should not default values in custom ClientConnection": {
@@ -336,6 +343,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"should default empty custom ClientConnection": {
@@ -357,6 +365,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"defaulting waitForPodsReady values": {
@@ -403,14 +412,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 			},
 			want: &Configuration{
 				WaitForPodsReady: &WaitForPodsReady{
-					Enable:         false,
-					BlockAdmission: ptr.To(false),
-					Timeout:        &podsReadyTimeout,
-					RequeuingStrategy: &RequeuingStrategy{
-						Timestamp:          ptr.To(EvictionTimestamp),
-						BackoffBaseSeconds: ptr.To[int32](DefaultRequeuingBackoffBaseSeconds),
-						BackoffMaxSeconds:  ptr.To[int32](DefaultRequeuingBackoffMaxSeconds),
-					},
+					Enable: false,
 				},
 				Namespace:         ptr.To(DefaultNamespace),
 				ControllerManager: defaultCtrlManagerConfigurationSpec,
@@ -486,6 +488,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				QueueVisibility:              defaultQueueVisibility,
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"queue visibility": {
@@ -516,6 +519,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				},
 				MultiKueue:                   defaultMultiKueue,
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"multiKueue": {
@@ -527,6 +531,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					GCInterval:        &metav1.Duration{Duration: time.Second},
 					Origin:            ptr.To("multikueue-manager1"),
 					WorkerLostTimeout: &metav1.Duration{Duration: time.Minute},
+					DispatcherName:    ptr.To[string](MultiKueueDispatcherModeIncremental),
 				},
 			},
 			want: &Configuration{
@@ -542,8 +547,10 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					GCInterval:        &metav1.Duration{Duration: time.Second},
 					Origin:            ptr.To("multikueue-manager1"),
 					WorkerLostTimeout: &metav1.Duration{Duration: time.Minute},
+					DispatcherName:    ptr.To[string](MultiKueueDispatcherModeIncremental),
 				},
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"multiKueue origin is an empty value": {
@@ -555,6 +562,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					GCInterval:        &metav1.Duration{Duration: time.Second},
 					Origin:            ptr.To(""),
 					WorkerLostTimeout: &metav1.Duration{Duration: time.Minute},
+					DispatcherName:    defaultMultiKueue.DispatcherName,
 				},
 			},
 			want: &Configuration{
@@ -570,8 +578,10 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					GCInterval:        &metav1.Duration{Duration: time.Second},
 					Origin:            ptr.To(DefaultMultiKueueOrigin),
 					WorkerLostTimeout: &metav1.Duration{Duration: time.Minute},
+					DispatcherName:    defaultMultiKueue.DispatcherName,
 				},
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"multiKueue GCInterval 0": {
@@ -597,8 +607,10 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					GCInterval:        &metav1.Duration{},
 					Origin:            ptr.To("multikueue-manager1"),
 					WorkerLostTimeout: &metav1.Duration{Duration: 15 * time.Minute},
+					DispatcherName:    defaultMultiKueue.DispatcherName,
 				},
 				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				WaitForPodsReady:             &WaitForPodsReady{},
 			},
 		},
 		"add default fair sharing configuration when enabled": {
@@ -625,6 +637,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					Enable:               true,
 					PreemptionStrategies: []PreemptionStrategy{LessThanOrEqualToFinalShare, LessThanInitialShare},
 				},
+				WaitForPodsReady: &WaitForPodsReady{},
 			},
 		},
 		"set object retention policy for workloads": {
@@ -656,6 +669,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 						AfterDeactivatedByKueue: &metav1.Duration{Duration: 30 * time.Minute},
 					},
 				},
+				WaitForPodsReady: &WaitForPodsReady{},
 			},
 		},
 		"resources.transformations strategy": {
@@ -689,6 +703,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 						{Input: corev1.ResourceEphemeralStorage, Strategy: ptr.To(DefaultResourceTransformationStrategy)},
 					},
 				},
+				WaitForPodsReady: &WaitForPodsReady{},
 			},
 		},
 	}
