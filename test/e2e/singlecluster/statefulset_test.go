@@ -457,7 +457,7 @@ var _ = ginkgo.Describe("StatefulSet integration", func() {
 		ginkgo.It("should preempt low-priority StatefulSet", func() {
 			lowPrioritySTS := statefulsettesting.MakeStatefulSet("low-priority", ns.Name).
 				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
-				RequestAndLimit(corev1.ResourceCPU, "1").
+				RequestAndLimit(corev1.ResourceCPU, "200m").
 				TerminationGracePeriod(1).
 				Replicas(3).
 				Queue(lq.Name).
@@ -473,7 +473,7 @@ var _ = ginkgo.Describe("StatefulSet integration", func() {
 					createdLowPrioritySTS := &appsv1.StatefulSet{}
 					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(lowPrioritySTS), createdLowPrioritySTS)).To(gomega.Succeed())
 					g.Expect(createdLowPrioritySTS.Status.ReadyReplicas).To(gomega.Equal(int32(3)))
-				}, util.VeryLongTimeout, util.Interval).Should(gomega.Succeed())
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
 			})
 
 			createdLowPriorityWl := &kueue.Workload{}
@@ -492,7 +492,7 @@ var _ = ginkgo.Describe("StatefulSet integration", func() {
 
 			highPrioritySTS := statefulsettesting.MakeStatefulSet("high-priority", ns.Name).
 				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
-				RequestAndLimit(corev1.ResourceCPU, "1").
+				RequestAndLimit(corev1.ResourceCPU, "200m").
 				TerminationGracePeriod(1).
 				Replicas(3).
 				Queue(lq.Name).
