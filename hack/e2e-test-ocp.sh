@@ -152,7 +152,7 @@ function deploy_cert_manager {
 }
 
 trap collect_logs EXIT
-GINKGO_SKIP_PATTERN="(AppWrapper|PyTorch|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
+GINKGO_SKIP_PATTERN="(AppWrapper|PyTorch|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods)"
 if [ "$SKIP_DEPLOY" != "true" ]; then
     deploy_cert_manager
     sleep 2m
