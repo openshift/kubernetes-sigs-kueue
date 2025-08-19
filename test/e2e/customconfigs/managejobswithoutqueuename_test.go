@@ -61,11 +61,13 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		clusterQueue *kueue.ClusterQueue
 	)
 
-	ginkgo.BeforeAll(func() {
-		util.UpdateKueueConfiguration(ctx, k8sClient, defaultKueueCfg, kindClusterName, func(cfg *config.Configuration) {
-			cfg.ManageJobsWithoutQueueName = true
+	if !util.IsOperatorRunning() {
+		ginkgo.BeforeAll(func() {
+			util.UpdateKueueConfiguration(ctx, k8sClient, defaultKueueCfg, kindClusterName, func(cfg *config.Configuration) {
+				cfg.ManageJobsWithoutQueueName = true
+			})
 		})
-	})
+	}
 
 	ginkgo.BeforeEach(func() {
 		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-")
@@ -89,6 +91,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 
 	ginkgo.When("manageJobsWithoutQueueName=true and LocalQueueDefaulting=false", func() {
 		ginkgo.It("should suspend a job", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("Modifying feature gate is not supported")
+			}
 			var testJob, createdJob *batchv1.Job
 			var jobLookupKey types.NamespacedName
 
@@ -229,6 +234,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should not suspend child jobs of admitted jobs", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("AppWrapper is not supported")
+			}
 			numPods := 2
 			aw := awtesting.MakeAppWrapper("aw-child", ns.Name).
 				Component(awtesting.Component{
@@ -283,6 +291,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should not suspend grandchildren jobs of admitted jobs", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("AppWrapper  and JobSet is not supported")
+			}
 			aw := awtesting.MakeAppWrapper("aw-grandchild", ns.Name).
 				Component(awtesting.Component{
 					Template: testingjobset.MakeJobSet("job-set", ns.Name).
@@ -344,6 +355,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should not admit child jobs and jobset even if the child job and jobset has a queue-name label", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("AppWrapper is not supported")
+			}
 			jobSetKey := client.ObjectKey{Name: "job-set", Namespace: ns.Name}
 
 			aw := awtesting.MakeAppWrapper("aw", ns.Name).
@@ -417,6 +431,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should not admit child jobs even if the child job has a queue-name label", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("JobSet is not supported")
+			}
 			jobSet := testingjobset.MakeJobSet("job-set", ns.Name).
 				ReplicatedJobs(
 					testingjobset.ReplicatedJobRequirements{
@@ -706,6 +723,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("Should suspend Pods of a created Deployment in the test namespace", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("AppWrapper is not supported")
+			}
 			deploymentKey := types.NamespacedName{Name: "deployment", Namespace: ns.Name}
 			replicas := int32(3)
 
@@ -782,6 +802,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should not suspend the pods created by a LeaderWorkerSet in the test namespace with queue-name label", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("LeaderWorkerSet is not supported")
+			}
 			lws := leaderworkersettesting.MakeLeaderWorkerSet("lws", ns.Name).
 				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				Size(3).
@@ -844,6 +867,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName", ginkgo.Ordered, func() {
 		})
 
 		ginkgo.It("should suspend the pods created by a LeaderWorkerSet in the test namespace without queue-name label", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("LeaderWorkerSet is not supported")
+			}
 			lws := leaderworkersettesting.MakeLeaderWorkerSet("lws", ns.Name).
 				Image(util.GetAgnHostImage(), util.BehaviorWaitForDeletion).
 				Size(3).
@@ -913,15 +939,17 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName without JobSet integration",
 		localQueue   *kueue.LocalQueue
 		clusterQueue *kueue.ClusterQueue
 	)
+	if !util.IsOperatorRunning() {
+		ginkgo.BeforeAll(func() {
 
-	ginkgo.BeforeAll(func() {
-		util.UpdateKueueConfiguration(ctx, k8sClient, defaultKueueCfg, kindClusterName, func(cfg *config.Configuration) {
-			cfg.ManageJobsWithoutQueueName = true
-			cfg.Integrations.Frameworks = slices.Filter(nil, cfg.Integrations.Frameworks, func(framework string) bool {
-				return framework != jobset.FrameworkName
+			util.UpdateKueueConfiguration(ctx, k8sClient, defaultKueueCfg, kindClusterName, func(cfg *config.Configuration) {
+				cfg.ManageJobsWithoutQueueName = true
+				cfg.Integrations.Frameworks = slices.Filter(nil, cfg.Integrations.Frameworks, func(framework string) bool {
+					return framework != jobset.FrameworkName
+				})
 			})
 		})
-	})
+	}
 
 	ginkgo.BeforeEach(func() {
 		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-")
@@ -946,6 +974,9 @@ var _ = ginkgo.Describe("ManageJobsWithoutQueueName without JobSet integration",
 
 	ginkgo.When("manageJobsWithoutQueueName=true", func() {
 		ginkgo.It("should create only one workload for parent job", func() {
+			if util.IsOperatorRunning() {
+				ginkgo.Skip("AppWrapper and JobSet are not supported")
+			}
 			jobSetKey := client.ObjectKey{Name: "job-set", Namespace: ns.Name}
 
 			aw := awtesting.MakeAppWrapper("aw", ns.Name).
