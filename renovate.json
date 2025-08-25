@@ -12,7 +12,7 @@
   "rebaseWhen": "behind-base-branch",
   "recreateWhen": "always",
   "commitMessageSuffix": "{{baseBranch}}",
-  "ignorePaths": ["**/dep-crds/**", "**/cmd/**", "**/hack/internal/**", "**/vendor/**", "hack/cypress/Dockerfile", "hack/debugpod/Dockerfile", "hack/shellcheck/Dockerfile"],
+  "ignorePaths": ["**/dep-crds/**", "**/cmd/**", "**/hack/internal/**", "**/vendor/**", "hack/cypress/Dockerfile", "hack/debugpod/Dockerfile", "hack/shellcheck/Dockerfile", "Dockerfile"],
   "tekton": {
     "enabled": true,
     "packageRules": [
