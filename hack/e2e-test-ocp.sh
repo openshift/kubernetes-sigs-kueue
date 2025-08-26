@@ -152,7 +152,42 @@ function deploy_cert_manager {
 }
 
 trap collect_logs EXIT
-GINKGO_SKIP_PATTERN="(AppWrapper|PyTorch|JobSet|LeaderWorkerSet|JAX|Kuberay|Metrics|Fair Sharing|TopologyAwareScheduling|Kueue visibility server|Failed Pod can be replaced in group|should allow to schedule a group of diverse pods|StatefulSet created with WorkloadPriorityClass)"
+skips=(
+        # do not deploy AppWrapper in OCP
+        AppWrapper
+        # do not deploy PyTorch in OCP
+        PyTorch
+        # do not deploy JobSet in OCP
+        JobSet
+        # do not deploy LWS in OCP
+        LeaderWorkerSet
+        # do not deploy Jax in OCP
+        JAX
+        # do not deploy KubeRay in OCP
+        Kuberay
+        # metrics setup is different than our OCP setup
+        Metrics
+        # ring -> we do not enable Fair sharing by default in our operator
+        Fair
+        # we do not enable this feature in our operator
+        TopologyAwareScheduling
+        # we do not enable VisibilityOnDemand in our operator
+        "Kueue visibility server"
+        # relies on particular CPU setup to force pods to not schedule
+        "Failed Pod can be replaced in group"
+        # relies on particular CPU setup
+        "should allow to schedule a group of diverse pods"
+        # relies on particular CPU setup.
+        "StatefulSet created with WorkloadPriorityClass"
+        # For tests that rely on CPU setup, we need to fix upstream to get cpu allocatables from node
+        # rather than hardcoding CPU limits.
+)
+skipsRegex=$(
+        IFS="|"
+        printf "%s" "${skips[*]}"
+)
+
+GINKGO_SKIP_PATTERN="($skipsRegex)"
 if [ "$SKIP_DEPLOY" != "true" ]; then
     deploy_cert_manager
     sleep 2m
