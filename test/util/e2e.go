@@ -446,6 +446,14 @@ func WaitForPodRunning(ctx context.Context, k8sClient client.Client, pod *corev1
 	}, LongTimeout, Interval).Should(gomega.Succeed())
 }
 
+func IsOperatorRunning() bool {
+	value, found := os.LookupEnv("OPERATOR_RUNNING")
+	if found {
+		return value == "true"
+	}
+	return false
+}
+
 func UpdateKueueConfiguration(ctx context.Context, k8sClient client.Client, config *configapi.Configuration, kindClusterName string, applyChanges func(cfg *configapi.Configuration)) {
 	configurationUpdate := time.Now()
 	config = config.DeepCopy()
