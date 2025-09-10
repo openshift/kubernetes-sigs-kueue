@@ -76,6 +76,7 @@ type RayCluster rayv1.RayCluster
 
 var _ jobframework.GenericJob = (*RayCluster)(nil)
 var _ jobframework.JobWithManagedBy = (*RayCluster)(nil)
+var _ jobframework.TopLevelJob = (*RayCluster)(nil)
 
 func (j *RayCluster) Object() client.Object {
 	return (*rayv1.RayCluster)(j)
@@ -226,4 +227,8 @@ func (j *RayCluster) ManagedBy() *string {
 
 func (j *RayCluster) SetManagedBy(managedBy *string) {
 	j.Spec.ManagedBy = managedBy
+}
+
+func (j *RayCluster) IsTopLevel() bool {
+	return !jobframework.IsOwnerManagedByKueueForObject(j.Object())
 }
