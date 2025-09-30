@@ -28,17 +28,15 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"sigs.k8s.io/kueue/apis/config/v1beta1"
 	"sigs.k8s.io/kueue/test/util"
 )
 
 var (
-	k8sClient       client.WithWatch
-	ctx             context.Context
-	defaultKueueCfg *v1beta1.Configuration
-	cfg             *rest.Config
-	restClient      *rest.RESTClient
-	kueueNS         = util.GetKueueNamespace()
+	k8sClient  client.WithWatch
+	ctx        context.Context
+	cfg        *rest.Config
+	restClient *rest.RESTClient
+	kueueNS    = util.GetKueueNamespace()
 )
 
 func TestAPIs(t *testing.T) {
