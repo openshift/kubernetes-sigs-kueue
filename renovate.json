@@ -44,6 +44,9 @@
   "gomod": {
     "enabled": false
   },
+  "npm": {
+    "enabled": false
+  },
   "vulnerabilityAlerts": {
     "enabled": true
   }
