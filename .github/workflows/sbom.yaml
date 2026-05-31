@@ -21,7 +21,7 @@ jobs:
         run: |
           TAG=${{ github.event.inputs.tag }}
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+      - uses: actions/setup-go@78961f6f84d799cd858575bb931c3e51d3b13290
         with:
           go-version-file: go.mod
           check-latest: true
